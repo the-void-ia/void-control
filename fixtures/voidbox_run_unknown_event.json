@@ -1,0 +1,20 @@
+{
+  "id": "run-3000",
+  "status": "Running",
+  "error": null,
+  "events": [
+    {
+      "ts_ms": 1700000000000,
+      "event_type": "run.started",
+      "run_id": "run-3000",
+      "seq": 1
+    },
+    {
+      "ts_ms": 1700000001000,
+      "event_type": "workflow.planned",
+      "run_id": "run-3000",
+      "seq": 2
+    }
+  ]
+}
+
