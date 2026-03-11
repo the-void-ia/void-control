@@ -23,9 +23,10 @@ function groupIndex(groupId: string): number {
 }
 
 function stageColor(status: string): string {
-  if (status === 'running') return '#60a5fa';
+  if (status === 'running') return '#38bdf8';
   if (status === 'succeeded') return '#22c55e';
   if (status === 'failed') return '#ef4444';
+  if (status === 'queued') return '#94a3b8';
   if (status === 'skipped') return '#64748b';
   return '#94a3b8';
 }
@@ -43,6 +44,83 @@ function drawRoundedRect(ctx: CanvasRenderingContext2D, x: number, y: number, w:
   ctx.lineTo(x, y + radius);
   ctx.quadraticCurveTo(x, y, x + radius, y);
   ctx.closePath();
+}
+
+function drawGemAnchor(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  radius: number,
+  nodeColor: string,
+  selected: boolean
+) {
+  const r = Math.max(6.3, radius * 1.2);
+  const outer = r + (selected ? 2.3 : 1.3);
+  const inner = r * 0.62;
+
+  ctx.save();
+  ctx.translate(x, y);
+
+  // glow halo
+  ctx.save();
+  ctx.shadowColor = '#22d3ee';
+  ctx.shadowBlur = selected ? 36 : 22;
+  ctx.fillStyle = selected ? '#22d3ee' : blendHex(nodeColor, 0.26);
+  ctx.beginPath();
+  ctx.moveTo(0, -outer);
+  ctx.lineTo(outer, 0);
+  ctx.lineTo(0, outer);
+  ctx.lineTo(-outer, 0);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+
+  // outer crystal shell
+  const shellGrad = ctx.createLinearGradient(-outer, -outer, outer, outer);
+  shellGrad.addColorStop(0, blendHex(nodeColor, 0.55));
+  shellGrad.addColorStop(0.48, blendHex(nodeColor, 0.22));
+  shellGrad.addColorStop(1, '#93c5fd');
+  ctx.fillStyle = shellGrad;
+  ctx.strokeStyle = selected ? '#a5f3fc' : '#7dd3fc';
+  ctx.lineWidth = selected ? 1.9 : 1.45;
+  ctx.beginPath();
+  ctx.moveTo(0, -outer);
+  ctx.lineTo(outer, 0);
+  ctx.lineTo(0, outer);
+  ctx.lineTo(-outer, 0);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  // inner core
+  const coreGrad = ctx.createLinearGradient(-inner, -inner, inner, inner);
+  coreGrad.addColorStop(0, '#ecfeff');
+  coreGrad.addColorStop(1, blendHex(nodeColor, 0.05));
+  ctx.fillStyle = coreGrad;
+  ctx.beginPath();
+  ctx.moveTo(0, -inner);
+  ctx.lineTo(inner, 0);
+  ctx.lineTo(0, inner);
+  ctx.lineTo(-inner, 0);
+  ctx.closePath();
+  ctx.fill();
+
+  // facet highlight (top-left shard)
+  ctx.fillStyle = 'rgba(236, 254, 255, 0.36)';
+  ctx.beginPath();
+  ctx.moveTo(-inner * 0.05, -inner * 0.88);
+  ctx.lineTo(inner * 0.38, -inner * 0.14);
+  ctx.lineTo(-inner * 0.22, inner * 0.02);
+  ctx.closePath();
+  ctx.fill();
+
+  // subtle center glint
+  ctx.fillStyle = 'rgba(236, 254, 255, 0.72)';
+  ctx.beginPath();
+  ctx.arc(0, 0, Math.max(0.9, r * 0.12), 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.restore();
 }
 
 function drawNodeCardLabel(ctx: CanvasRenderingContext2D, data: Record<string, unknown>) {
@@ -113,21 +191,24 @@ function drawNodeCardLabel(ctx: CanvasRenderingContext2D, data: Record<string, u
   ctx.stroke();
   ctx.globalAlpha = 1;
 
-  // anchor orb
-  ctx.save();
-  ctx.shadowColor = nodeColor;
-  ctx.shadowBlur = selected ? 20 : 10;
-  ctx.fillStyle = nodeColor;
-  ctx.beginPath();
-  ctx.arc(x, y, pointRadius, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
+  if (kind === 'stage') {
+    drawGemAnchor(ctx, x, y, pointRadius, nodeColor, selected);
+  } else {
+    // run/event keep circular anchor
+    ctx.save();
+    ctx.shadowColor = nodeColor;
+    ctx.shadowBlur = selected ? 20 : 10;
+    ctx.fillStyle = nodeColor;
+    ctx.beginPath();
+    ctx.arc(x, y, pointRadius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
 
-  // tiny center core
-  ctx.fillStyle = '#f8fafc';
-  ctx.beginPath();
-  ctx.arc(x, y, Math.max(1.6, pointRadius * 0.36), 0, Math.PI * 2);
-  ctx.fill();
+    ctx.fillStyle = '#f8fafc';
+    ctx.beginPath();
+    ctx.arc(x, y, Math.max(1.6, pointRadius * 0.36), 0, Math.PI * 2);
+    ctx.fill();
+  }
 
   ctx.font = '600 11px Space Grotesk, sans-serif';
   ctx.fillStyle = titleColor;

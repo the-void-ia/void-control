@@ -25,6 +25,44 @@ Use Cargo for local development and validation:
 - `cargo run --example normalize_void_box_run`: Run the typed normalization example.
 - `cargo run --bin normalize_fixture -- fixtures/sample.vbrun`: Normalize from local fixture format.
 
+### Void-Box Production Image (for UI/real Claude runs)
+
+When validating real pipeline execution from `void-control` UI, use the production
+void-box rootfs from the sibling repository:
+
+```bash
+cd /home/diego/github/agent-infra/void-box
+TMPDIR=$PWD/target/tmp scripts/build_claude_rootfs.sh
+```
+
+Start daemon with production kernel/initramfs:
+
+```bash
+cd /home/diego/github/agent-infra/void-box
+export ANTHROPIC_API_KEY=sk-ant-...
+export VOID_BOX_KERNEL=/boot/vmlinuz-$(uname -r)
+export VOID_BOX_INITRAMFS=$PWD/target/void-box-rootfs.cpio.gz
+cargo run --bin voidbox -- serve --listen 127.0.0.1:43100
+```
+
+Start bridge (required for Launch modal spec upload/content mode):
+
+```bash
+cd /home/diego/github/void-control
+cargo run --features serde --bin voidctl -- serve
+```
+
+Start UI:
+
+```bash
+cd /home/diego/github/void-control/web/void-control-ux
+npm run dev -- --host 127.0.0.1 --port 3000
+```
+
+Important:
+- Do not use `/tmp/void-box-test-rootfs.cpio.gz` for production/runtime UI validation.
+- `target/void-box-rootfs.cpio.gz` is the expected production image path.
+
 ## Coding Style & Naming Conventions
 For documentation and future code contributions:
 

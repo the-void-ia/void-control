@@ -3,8 +3,9 @@ import type { RunEvent, StageView, TelemetrySample } from '../lib/types';
 import {
   filterEventsForStage,
   indexTelemetryByStage,
-  latestTelemetryByStage,
   parseNodeId,
+  rollingEventsPerSec,
+  rollingEventsPerSecSeries,
   resolveSelectedStage,
   type SelectedNodeType
 } from '../lib/selectors';
@@ -59,6 +60,26 @@ function hasGuestMetrics(sample: TelemetrySample | null | undefined): boolean {
   );
 }
 
+function hasHostMetrics(sample: TelemetrySample | null | undefined): boolean {
+  if (!sample?.host) return false;
+  return typeof sample.host.cpu_percent === 'number' || typeof sample.host.rss_bytes === 'number';
+}
+
+function buildSparklinePoints(series: number[], width: number, height: number): string {
+  const values = series.length > 1 ? series : [0, ...(series.length === 1 ? [series[0]] : [0])];
+  const maxValue = Math.max(0.1, ...values);
+  const innerWidth = Math.max(1, width - 2);
+  const innerHeight = Math.max(1, height - 4);
+
+  return values
+    .map((value, idx) => {
+      const x = 1 + (idx / Math.max(1, values.length - 1)) * innerWidth;
+      const y = 2 + (1 - value / maxValue) * innerHeight;
+      return `${x.toFixed(2)},${y.toFixed(2)}`;
+    })
+    .join(' ');
+}
+
 export function NodeInspector({
   runId,
   selectedNodeId,
@@ -74,14 +95,44 @@ export function NodeInspector({
   const selectedStage = resolveSelectedStage(selectedNodeId, stages);
 
   const telemetryByStage = useMemo(() => indexTelemetryByStage(telemetry), [telemetry]);
-  const latestByStage = useMemo(() => latestTelemetryByStage(telemetry), [telemetry]);
 
   const stageTelemetry = selectedStage ? (telemetryByStage.get(selectedStage.stage_name) ?? []) : [];
-  const latestSample = selectedStage ? latestByStage.get(selectedStage.stage_name) : null;
+  const unlabeledGuestTelemetry = useMemo(
+    () =>
+      telemetry.filter((s) => hasGuestMetrics(s) && (!s.stage_name || s.stage_name === 'unknown')),
+    [telemetry]
+  );
+  const stageGuestTelemetry = useMemo(
+    () => stageTelemetry.filter((s) => hasGuestMetrics(s)),
+    [stageTelemetry]
+  );
+  const unlabeledHostTelemetry = useMemo(
+    () => telemetry.filter((s) => hasHostMetrics(s) && (!s.stage_name || s.stage_name === 'unknown')),
+    [telemetry]
+  );
+  const stageHostTelemetry = useMemo(
+    () => stageTelemetry.filter((s) => hasHostMetrics(s)),
+    [stageTelemetry]
+  );
+  const selectedGuestTelemetry = useMemo(
+    () => (stageGuestTelemetry.length > 0 ? stageGuestTelemetry : unlabeledGuestTelemetry),
+    [stageGuestTelemetry, unlabeledGuestTelemetry]
+  );
+  const selectedHostTelemetry = useMemo(
+    () => (stageHostTelemetry.length > 0 ? stageHostTelemetry : unlabeledHostTelemetry),
+    [stageHostTelemetry, unlabeledHostTelemetry]
+  );
   const latestGuestStageSample = selectedStage
-    ? [...stageTelemetry].reverse().find((s) => hasGuestMetrics(s)) ?? null
+    ? [...selectedGuestTelemetry].reverse()[0] ?? null
+    : null;
+  const latestHostStageSample = selectedStage
+    ? [...selectedHostTelemetry].reverse()[0] ?? null
     : null;
   const stageEvents = useMemo(() => filterEventsForStage(events, selectedStage), [events, selectedStage]);
+  const stageEventsPerSec = useMemo(() => rollingEventsPerSec(stageEvents), [stageEvents]);
+  const runEventsPerSec = useMemo(() => rollingEventsPerSec(events), [events]);
+  const stageEventsSeries = useMemo(() => rollingEventsPerSecSeries(stageEvents), [stageEvents]);
+  const runEventsSeries = useMemo(() => rollingEventsPerSecSeries(events), [events]);
 
   const eventRef = parsed?.type === 'event' ? parsed.eventRef : null;
   const selectedEvent =
@@ -107,14 +158,15 @@ export function NodeInspector({
     return 'unknown';
   })();
 
-  const tinySeries = stageTelemetry
-    .filter((s) => typeof s.guest?.cpu_percent === 'number')
-    .slice(-20);
-  const maxCpu = Math.max(1, ...tinySeries.map((s) => s.guest?.cpu_percent ?? 0));
-  const latestTelemetry = telemetry.length > 0 ? telemetry[telemetry.length - 1] : null;
   const latestGuestRunSample = [...telemetry].reverse().find((s) => hasGuestMetrics(s)) ?? null;
+  const latestHostRunSample = [...telemetry].reverse().find((s) => hasHostMetrics(s)) ?? null;
   const firstEventTs = events.length > 0 ? events[0]?.timestamp : null;
   const lastEventTs = events.length > 0 ? events[events.length - 1]?.timestamp : null;
+  const contextEventsSeries = parsed?.type === 'stage' ? stageEventsSeries : runEventsSeries;
+  const contextEventsPoints = useMemo(
+    () => buildSparklinePoints(contextEventsSeries, 220, 26),
+    [contextEventsSeries]
+  );
 
   return (
     <aside className="inspector-panel">
@@ -172,23 +224,26 @@ export function NodeInspector({
             ) : (
               <div className="inspector-note">No guest telemetry samples for this node yet.</div>
             )}
-            {tinySeries.length > 0 && (
-              <div className="sparkline">
-                {tinySeries.map((s) => {
-                  const h = Math.max(4, Math.round(((s.guest?.cpu_percent ?? 0) / maxCpu) * 46));
-                  return <span key={s.seq} style={{ height: `${h}px` }} />;
-                })}
-              </div>
-            )}
-            {latestSample && !latestGuestStageSample && (
+            {latestHostStageSample && !latestGuestStageSample && (
               <div className="inspector-note">Daemon host telemetry is available, but guest metrics were not reported for this stage.</div>
             )}
-            {latestSample?.host && (
-              <div className="metrics-subgrid">
-                <div className="metric-subbox"><span>Host CPU</span><strong>{(latestSample.host.cpu_percent ?? 0).toFixed(1)}%</strong></div>
-                <div className="metric-subbox"><span>Host RSS</span><strong>{fmtMb(latestSample.host.rss_bytes)}</strong></div>
-              </div>
+            {latestGuestStageSample && stageGuestTelemetry.length === 0 && unlabeledGuestTelemetry.length > 0 && (
+              <div className="inspector-note">Guest telemetry is present but not stage-labeled by daemon; showing run-level guest metrics.</div>
             )}
+            <div className="metrics-grid metrics-grid-three">
+              <div className="metric-box" title="Events/s (rolling 30s)">
+                <span>Events/s</span>
+                <strong>{stageEventsPerSec.toFixed(1)}</strong>
+              </div>
+              <div className="metric-box"><span>Host CPU</span><strong>{typeof latestHostStageSample?.host?.cpu_percent === 'number' ? `${latestHostStageSample.host.cpu_percent.toFixed(1)}%` : '-'}</strong></div>
+              <div className="metric-box"><span>Host RSS</span><strong>{fmtMb(latestHostStageSample?.host?.rss_bytes)}</strong></div>
+            </div>
+            <div className="metric-mini-sparkline" title="Events/s trend (rolling 30s)">
+              <svg viewBox="0 0 220 26" preserveAspectRatio="none" aria-hidden="true">
+                <polyline className="metric-mini-sparkline-glow" points={contextEventsPoints} />
+                <polyline className="metric-mini-sparkline-line" points={contextEventsPoints} />
+              </svg>
+            </div>
           </section>
 
           <section className="inspector-section">
@@ -211,6 +266,7 @@ export function NodeInspector({
           <div className="inspector-section-title">Event Details</div>
           <div className="kv"><span>Seq</span><strong>#{selectedEvent.seq}</strong></div>
           <div className="kv"><span>Timestamp</span><strong>{fmtTime(selectedEvent.timestamp)}</strong></div>
+          <div className="kv" title="Events/s (rolling 30s)"><span>Events/s</span><strong>{runEventsPerSec.toFixed(1)}</strong></div>
           <div className="inspector-note">{selectedEvent.message ?? 'No message'}</div>
         </section>
       )}
@@ -237,15 +293,23 @@ export function NodeInspector({
             ) : (
               <div className="inspector-note">No guest telemetry samples for this run yet.</div>
             )}
-            {latestTelemetry && !latestGuestRunSample && (
+            {latestHostRunSample && !latestGuestRunSample && (
               <div className="inspector-note">Daemon host telemetry is available, but guest metrics were not reported.</div>
             )}
-            {latestTelemetry?.host && (
-              <div className="metrics-subgrid">
-                <div className="metric-subbox"><span>Host CPU</span><strong>{(latestTelemetry.host.cpu_percent ?? 0).toFixed(1)}%</strong></div>
-                <div className="metric-subbox"><span>Host RSS</span><strong>{fmtMb(latestTelemetry.host.rss_bytes)}</strong></div>
+            <div className="metrics-grid metrics-grid-three">
+              <div className="metric-box" title="Events/s (rolling 30s)">
+                <span>Events/s</span>
+                <strong>{runEventsPerSec.toFixed(1)}</strong>
               </div>
-            )}
+              <div className="metric-box"><span>Host CPU</span><strong>{typeof latestHostRunSample?.host?.cpu_percent === 'number' ? `${latestHostRunSample.host.cpu_percent.toFixed(1)}%` : '-'}</strong></div>
+              <div className="metric-box"><span>Host RSS</span><strong>{fmtMb(latestHostRunSample?.host?.rss_bytes)}</strong></div>
+            </div>
+            <div className="metric-mini-sparkline" title="Events/s trend (rolling 30s)">
+              <svg viewBox="0 0 220 26" preserveAspectRatio="none" aria-hidden="true">
+                <polyline className="metric-mini-sparkline-glow" points={contextEventsPoints} />
+                <polyline className="metric-mini-sparkline-line" points={contextEventsPoints} />
+              </svg>
+            </div>
           </section>
 
           <section className="inspector-section">

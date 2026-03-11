@@ -95,3 +95,54 @@ export function filterEventsForStage(events: RunEvent[], stage: StageView | null
     return payloadStage === stage.stage_name || (Boolean(stage.box_name) && payloadBox === stage.box_name);
   });
 }
+
+export function rollingEventsPerSec(events: RunEvent[], windowMs = 30_000): number {
+  if (events.length === 0 || windowMs <= 0) return 0;
+
+  let latestTs = Number.NEGATIVE_INFINITY;
+  const times: number[] = [];
+
+  for (const event of events) {
+    const ts = Date.parse(event.timestamp ?? '');
+    if (!Number.isFinite(ts)) continue;
+    latestTs = Math.max(latestTs, ts);
+    times.push(ts);
+  }
+
+  if (!Number.isFinite(latestTs) || times.length === 0) return 0;
+
+  const floor = latestTs - windowMs;
+  const inWindow = times.filter((ts) => ts >= floor && ts <= latestTs).length;
+  return Number((inWindow / (windowMs / 1000)).toFixed(1));
+}
+
+export function rollingEventsPerSecSeries(
+  events: RunEvent[],
+  windowMs = 30_000,
+  buckets = 18
+): number[] {
+  if (windowMs <= 0 || buckets <= 0) return [];
+
+  const times: number[] = [];
+  let latestTs = Number.NEGATIVE_INFINITY;
+  for (const event of events) {
+    const ts = Date.parse(event.timestamp ?? '');
+    if (!Number.isFinite(ts)) continue;
+    latestTs = Math.max(latestTs, ts);
+    times.push(ts);
+  }
+  if (!Number.isFinite(latestTs)) return Array.from({ length: buckets }, () => 0);
+
+  const start = latestTs - windowMs;
+  const bucketMs = windowMs / buckets;
+  const counts = Array.from({ length: buckets }, () => 0);
+
+  for (const ts of times) {
+    if (ts < start || ts > latestTs) continue;
+    const raw = Math.floor((ts - start) / bucketMs);
+    const idx = Math.max(0, Math.min(buckets - 1, raw));
+    counts[idx] += 1;
+  }
+
+  return counts.map((v) => Number((v / (bucketMs / 1000)).toFixed(2)));
+}

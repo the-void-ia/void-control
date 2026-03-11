@@ -1,6 +1,7 @@
 import ReactECharts from 'echarts-for-react';
 import type { EChartsOption } from 'echarts';
 import type { RunEvent, TelemetrySample } from '../lib/types';
+import { rollingEventsPerSec } from '../lib/selectors';
 
 interface EventTimelineProps {
   events: RunEvent[];
@@ -43,14 +44,23 @@ export function EventTimeline({
   const latestHostRssMb = (latest?.host?.rss_bytes ?? 0) / (1024 * 1024);
   const latestGuestCpu = latest?.guest?.cpu_percent ?? 0;
   const latestGuestMemMb = (latest?.guest?.memory_used_bytes ?? 0) / (1024 * 1024);
+  const eventsPerSec = rollingEventsPerSec(events);
 
   const hasTelemetry = telemetry.length > 0;
+  const samples = telemetry.slice(-32);
+  const fallbackLen = Math.max(10, Math.min(24, events.length || 12));
+  const chartLabels = hasTelemetry
+    ? samples.map((s) => `#${s.seq}`)
+    : Array.from({ length: fallbackLen }, (_, i) => `#${i + 1}`);
+  const chartData = hasTelemetry
+    ? samples.map((s) => Number((s.host?.cpu_percent ?? 0).toFixed(2)))
+    : Array.from({ length: fallbackLen }, () => 0);
 
   const telemetryOption: EChartsOption = {
     ...chartBase(),
     xAxis: {
       ...(chartBase().xAxis as object),
-      data: telemetry.slice(-32).map((s) => `#${s.seq}`)
+      data: chartLabels
     },
     yAxis: {
       ...(chartBase().yAxis as object),
@@ -62,42 +72,19 @@ export function EventTimeline({
         type: 'line',
         smooth: true,
         showSymbol: false,
-        lineStyle: { width: 2, color: '#22d3ee' },
-        areaStyle: {
-          color: {
-            type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
-            colorStops: [
-              { offset: 0, color: 'rgba(34, 211, 238, 0.35)' },
-              { offset: 1, color: 'rgba(34, 211, 238, 0.03)' }
-            ]
-          }
-        },
-        data: telemetry.slice(-32).map((s) => Number((s.host?.cpu_percent ?? 0).toFixed(2)))
-      }
-    ]
-  };
-
-  const recent = events.slice(-25);
-  const eventGapData = recent.map((e, idx) => {
-    const currentTs = Date.parse(e.timestamp ?? '');
-    const prevTs = idx > 0 ? Date.parse(recent[idx - 1]?.timestamp ?? '') : NaN;
-    return Number.isFinite(currentTs) && Number.isFinite(prevTs)
-      ? Math.max(0, currentTs - prevTs)
-      : 0;
-  });
-
-  const eventsOption: EChartsOption = {
-    ...chartBase(),
-    xAxis: {
-      ...(chartBase().xAxis as object),
-      data: recent.map((e) => `#${e.seq}`)
-    },
-    series: [
-      {
-        name: 'event gap ms',
-        type: 'bar',
-        itemStyle: { color: '#22d3ee', borderRadius: [3, 3, 0, 0] },
-        data: eventGapData
+        lineStyle: { width: 2, color: hasTelemetry ? '#22d3ee' : '#334155', type: hasTelemetry ? 'solid' : 'dashed' },
+        areaStyle: hasTelemetry
+          ? {
+              color: {
+                type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
+                colorStops: [
+                  { offset: 0, color: 'rgba(34, 211, 238, 0.35)' },
+                  { offset: 1, color: 'rgba(34, 211, 238, 0.03)' }
+                ]
+              }
+            }
+          : undefined,
+        data: chartData
       }
     ]
   };
@@ -126,6 +113,10 @@ export function EventTimeline({
         <div className="telemetry-card"><span>host rss</span><strong>{latestHostRssMb.toFixed(1)} MB</strong></div>
         <div className="telemetry-card"><span>guest cpu</span><strong>{latestGuestCpu.toFixed(1)}%</strong></div>
         <div className="telemetry-card"><span>guest mem</span><strong>{latestGuestMemMb.toFixed(1)} MB</strong></div>
+        <div className="telemetry-card" title="Events/s (rolling 30s)">
+          <span>events/s</span>
+          <strong>{eventsPerSec.toFixed(1)}</strong>
+        </div>
       </div>
 
       {stageCpu.length > 0 && (
@@ -139,23 +130,9 @@ export function EventTimeline({
       {!hasTelemetry && <div className="telemetry-empty">No telemetry samples yet for this run.</div>}
 
       <div className="timeline-chart">
-        <ReactECharts option={hasTelemetry ? telemetryOption : eventsOption} style={{ height: 220, width: '100%' }} notMerge lazyUpdate />
+        <ReactECharts option={telemetryOption} style={{ height: 170, width: '100%' }} notMerge lazyUpdate />
       </div>
 
-      <div className="event-list">
-        {events.slice(-12).reverse().map((event, idx) => (
-          <button
-            key={(event.event_id && event.event_id.length > 0) ? event.event_id : `${event.seq}-${idx}`}
-            className={`event-row ${(selectedEventRef && (event.event_id === selectedEventRef || `${event.seq}` === selectedEventRef)) ? 'event-row-selected' : ''}`}
-            style={{ animationDelay: `${Math.min(idx * 40, 320)}ms` }}
-            onClick={() => onSelectEvent?.(event)}
-          >
-            <span className="event-seq">#{event.seq}</span>
-            <span className="event-type">{event.event_type_v2 ?? event.event_type}</span>
-            <span className="event-msg">{event.message ?? ''}</span>
-          </button>
-        ))}
-      </div>
     </div>
   );
 }

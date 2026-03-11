@@ -3,7 +3,7 @@ use std::net::TcpStream;
 
 use crate::contract::{
     from_void_box_run_and_events_json, from_void_box_run_json, ContractError, ContractErrorCode,
-    ConvertedRunView, EventEnvelope, EventType, RunState, RuntimeInspection, StartRequest,
+    map_void_box_status, ConvertedRunView, EventEnvelope, EventType, RunState, RuntimeInspection, StartRequest,
     StartResult, StopRequest, StopResult, SubscribeEventsRequest,
 };
 
@@ -160,6 +160,100 @@ impl VoidBoxRuntimeClient {
 
         let converted = from_void_box_run_json(&run_resp.body)?;
         Ok(converted.inspection)
+    }
+
+    pub fn list_runs(&self, state: Option<&str>) -> Result<Vec<RuntimeInspection>, ContractError> {
+        let path = if let Some(filter) = state.filter(|s| !s.trim().is_empty()) {
+            format!("/v1/runs?state={}", filter.trim())
+        } else {
+            "/v1/runs".to_string()
+        };
+        let response = self.http_get(&path)?;
+
+        if response.status >= 400 {
+            return Err(ContractError::new(
+                ContractErrorCode::InternalError,
+                format!("list runs failed: HTTP {}", response.status),
+                response.status >= 500,
+            ));
+        }
+
+        let body: serde_json::Value = serde_json::from_str(&response.body).map_err(|e| {
+            ContractError::new(
+                ContractErrorCode::InvalidSpec,
+                format!("invalid runs response JSON: {e}"),
+                false,
+            )
+        })?;
+        let runs = body
+            .get("runs")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| {
+                ContractError::new(
+                    ContractErrorCode::InvalidSpec,
+                    "missing runs array in list response",
+                    false,
+                )
+            })?;
+
+        let inspections = runs
+            .iter()
+            .filter_map(|run| {
+                let run_id = run
+                    .get("id")
+                    .or_else(|| run.get("run_id"))
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string)?;
+                let status_raw = run
+                    .get("status")
+                    .or_else(|| run.get("state"))
+                    .and_then(serde_json::Value::as_str)?;
+                let state = map_void_box_status(status_raw)?;
+                let attempt_id = run
+                    .get("attempt_id")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(1) as u32;
+                let active_stage_count = run
+                    .get("active_stage_count")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0) as u32;
+                let active_microvm_count = run
+                    .get("active_microvm_count")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0) as u32;
+                let started_at = run
+                    .get("started_at")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                let updated_at = run
+                    .get("updated_at")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                let terminal_reason = run
+                    .get("terminal_reason")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string);
+                let exit_code = run
+                    .get("exit_code")
+                    .and_then(serde_json::Value::as_i64)
+                    .map(|v| v as i32);
+                Some(RuntimeInspection {
+                    run_id,
+                    attempt_id,
+                    state,
+                    active_stage_count,
+                    active_microvm_count,
+                    started_at,
+                    updated_at,
+                    terminal_reason,
+                    exit_code,
+                })
+            })
+            .collect();
+
+        Ok(inspections)
     }
 
     pub fn subscribe_events(

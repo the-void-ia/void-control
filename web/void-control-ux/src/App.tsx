@@ -4,7 +4,6 @@ import { RunsList } from './components/RunsList';
 import { RunGraph } from './components/RunGraph';
 import { NodeInspector } from './components/NodeInspector';
 import { RunLogs } from './components/RunLogs';
-import { EventTimeline } from './components/EventTimeline';
 import { LaunchRunModal } from './components/LaunchRunModal';
 import { baseUrl, cancelRun, getRun, getRunEvents, getRunStages, getRunTelemetrySamples, getRuns, launchRunFromSpecText, startRun } from './lib/api';
 import { useUiStore } from './store/ui';
@@ -194,14 +193,29 @@ export function App() {
     setLaunchError(null);
     setLaunchPending(true);
     try {
-      const result = params.specText && params.specText.trim().length > 0
-        ? await launchRunFromSpecText({
-            specText: params.specText,
+      let result: { run_id?: string; runId?: string; attempt_id?: number; state?: string };
+      const hasSpecText = Boolean(params.specText && params.specText.trim().length > 0);
+      if (hasSpecText) {
+        try {
+          result = await launchRunFromSpecText({
+            specText: params.specText as string,
             runId: params.runId,
             file: params.file,
-            specFormat: params.specText.trimStart().startsWith('{') ? 'json' : 'yaml'
-          })
-        : await launchMutation.mutateAsync({ file: params.file, runId: params.runId });
+            specFormat: (params.specText as string).trimStart().startsWith('{') ? 'json' : 'yaml'
+          });
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error);
+          const bridgeUnavailable =
+            msg.includes('Failed to fetch') ||
+            msg.includes('ECONNREFUSED') ||
+            msg.includes('HTTP 404') ||
+            msg.includes('HTTP 405');
+          if (!bridgeUnavailable) throw error;
+          result = await launchMutation.mutateAsync({ file: params.file, runId: params.runId });
+        }
+      } else {
+        result = await launchMutation.mutateAsync({ file: params.file, runId: params.runId });
+      }
       const createdRunId = result.run_id ?? ('runId' in result ? result.runId : undefined) ?? params.runId;
       await Promise.all([activeRuns.refetch(), terminalRuns.refetch()]);
       if (createdRunId) {
@@ -293,12 +307,6 @@ export function App() {
                     onSelectNode={setSelectedNode}
                   />
                 )}
-                <EventTimeline
-                  events={scopedEvents}
-                  telemetry={telemetry.data ?? []}
-                  selectedEventRef={selectedEventRef}
-                  onSelectEvent={onSelectEvent}
-                />
                 <RunLogs
                   events={scopedEvents}
                   selectedEventRef={selectedEventRef}

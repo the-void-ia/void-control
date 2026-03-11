@@ -44,7 +44,20 @@ export async function getRun(runId: string): Promise<RunInspection> {
 
 export async function getRunEvents(runId: string, fromEventId?: string): Promise<RunEvent[]> {
   const query = fromEventId ? `?from_event_id=${encodeURIComponent(fromEventId)}` : '';
-  return requestJson<RunEvent[]>(`/v1/runs/${encodeURIComponent(runId)}/events${query}`);
+  const events = await requestJson<RunEvent[]>(`/v1/runs/${encodeURIComponent(runId)}/events${query}`);
+  return events.map((event) => {
+    const payloadData = (event.payload as { data?: unknown } | null | undefined)?.data;
+    const normalizedPayloadText = typeof payloadData === 'string' ? payloadData.trim() : '';
+    const type = event.event_type_v2 ?? event.event_type ?? '';
+    if (
+      type === 'LogChunk' &&
+      normalizedPayloadText.length > 0 &&
+      (event.message ?? '').toLowerCase() === 'stream chunk'
+    ) {
+      return { ...event, message: normalizedPayloadText };
+    }
+    return event;
+  });
 }
 
 export async function getRunStages(runId: string): Promise<StageView[]> {
