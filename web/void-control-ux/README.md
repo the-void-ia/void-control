@@ -14,12 +14,22 @@ Graph-first operator dashboard for `void-control` and `void-box`.
 ```bash
 cd web/void-control-ux
 npm install
-VITE_VOID_BOX_BASE_URL=http://127.0.0.1:43100 npm run dev
+npm run dev -- --host 127.0.0.1 --port 3000
 ```
 
-Open: `http://127.0.0.1:5174`
+Open: `http://127.0.0.1:3000`
 
-If `VITE_VOID_BOX_BASE_URL` is not set, the app uses `/api` (Vite proxy mode).
+Default local env behavior:
+
+- If `VITE_VOID_BOX_BASE_URL` is not set, the app uses `/api` (Vite proxy mode).
+- If `VITE_VOID_CONTROL_BASE_URL` is not set, launch/upload uses `http://127.0.0.1:43210`.
+
+Example `.env`:
+
+```bash
+VITE_VOID_BOX_BASE_URL=http://127.0.0.1:43100
+VITE_VOID_CONTROL_BASE_URL=http://127.0.0.1:43210
+```
 
 ## Launch Bridge (for YAML editor/upload)
 
@@ -36,7 +46,7 @@ Run UI pointing to bridge:
 ```bash
 VITE_VOID_BOX_BASE_URL=http://127.0.0.1:43100 \
 VITE_VOID_CONTROL_BASE_URL=http://127.0.0.1:43210 \
-npm run dev
+npm run dev -- --host 127.0.0.1 --port 3000
 ```
 
 ## Requirements

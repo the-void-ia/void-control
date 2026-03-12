@@ -7,3 +7,9 @@ node_modules
 .claude
 .idea
 .local-utils
+
+# Frontend build output and local env files
+web/void-control-ux/dist/
+web/void-control-ux/.env
+web/void-control-ux/.env.local
+web/void-control-ux/.env.*.local

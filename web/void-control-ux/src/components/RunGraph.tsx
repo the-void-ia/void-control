@@ -46,7 +46,7 @@ function drawRoundedRect(ctx: CanvasRenderingContext2D, x: number, y: number, w:
   ctx.closePath();
 }
 
-function drawGemAnchor(
+function drawAgentBoxAnchor(
   ctx: CanvasRenderingContext2D,
   x: number,
   y: number,
@@ -54,70 +54,61 @@ function drawGemAnchor(
   nodeColor: string,
   selected: boolean
 ) {
-  const r = Math.max(6.3, radius * 1.2);
-  const outer = r + (selected ? 2.3 : 1.3);
-  const inner = r * 0.62;
+  const box = Math.max(10.5, radius * 1.7);
+  const outer = box + (selected ? 3.2 : 1.8);
+  const inner = box * 0.58;
 
   ctx.save();
   ctx.translate(x, y);
 
-  // glow halo
   ctx.save();
   ctx.shadowColor = '#22d3ee';
-  ctx.shadowBlur = selected ? 36 : 22;
+  ctx.shadowBlur = selected ? 34 : 20;
   ctx.fillStyle = selected ? '#22d3ee' : blendHex(nodeColor, 0.26);
-  ctx.beginPath();
-  ctx.moveTo(0, -outer);
-  ctx.lineTo(outer, 0);
-  ctx.lineTo(0, outer);
-  ctx.lineTo(-outer, 0);
-  ctx.closePath();
+  drawRoundedRect(ctx, -outer, -outer, outer * 2, outer * 2, outer * 0.34);
+  ctx.globalAlpha = 0.14;
   ctx.fill();
   ctx.restore();
 
-  // outer crystal shell
   const shellGrad = ctx.createLinearGradient(-outer, -outer, outer, outer);
   shellGrad.addColorStop(0, blendHex(nodeColor, 0.55));
-  shellGrad.addColorStop(0.48, blendHex(nodeColor, 0.22));
+  shellGrad.addColorStop(0.5, '#0c1930');
   shellGrad.addColorStop(1, '#93c5fd');
   ctx.fillStyle = shellGrad;
   ctx.strokeStyle = selected ? '#a5f3fc' : '#7dd3fc';
-  ctx.lineWidth = selected ? 1.9 : 1.45;
-  ctx.beginPath();
-  ctx.moveTo(0, -outer);
-  ctx.lineTo(outer, 0);
-  ctx.lineTo(0, outer);
-  ctx.lineTo(-outer, 0);
-  ctx.closePath();
+  ctx.lineWidth = selected ? 2 : 1.3;
+  drawRoundedRect(ctx, -outer, -outer, outer * 2, outer * 2, outer * 0.34);
   ctx.fill();
   ctx.stroke();
 
-  // inner core
   const coreGrad = ctx.createLinearGradient(-inner, -inner, inner, inner);
-  coreGrad.addColorStop(0, '#ecfeff');
-  coreGrad.addColorStop(1, blendHex(nodeColor, 0.05));
+  coreGrad.addColorStop(0, '#e0fbff');
+  coreGrad.addColorStop(0.55, blendHex(nodeColor, 0.18));
+  coreGrad.addColorStop(1, '#061428');
   ctx.fillStyle = coreGrad;
   ctx.beginPath();
-  ctx.moveTo(0, -inner);
-  ctx.lineTo(inner, 0);
-  ctx.lineTo(0, inner);
-  ctx.lineTo(-inner, 0);
+  ctx.moveTo(-inner * 0.1, -inner);
+  ctx.lineTo(inner * 0.86, -inner * 0.16);
+  ctx.lineTo(inner * 0.46, inner);
+  ctx.lineTo(-inner * 0.72, inner * 0.58);
+  ctx.lineTo(-inner, -inner * 0.28);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(217, 249, 255, 0.5)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  ctx.fillStyle = 'rgba(236, 254, 255, 0.42)';
+  ctx.beginPath();
+  ctx.moveTo(-inner * 0.16, -inner * 0.9);
+  ctx.lineTo(inner * 0.56, -inner * 0.08);
+  ctx.lineTo(-inner * 0.06, inner * 0.08);
   ctx.closePath();
   ctx.fill();
 
-  // facet highlight (top-left shard)
-  ctx.fillStyle = 'rgba(236, 254, 255, 0.36)';
+  ctx.fillStyle = 'rgba(236, 254, 255, 0.78)';
   ctx.beginPath();
-  ctx.moveTo(-inner * 0.05, -inner * 0.88);
-  ctx.lineTo(inner * 0.38, -inner * 0.14);
-  ctx.lineTo(-inner * 0.22, inner * 0.02);
-  ctx.closePath();
-  ctx.fill();
-
-  // subtle center glint
-  ctx.fillStyle = 'rgba(236, 254, 255, 0.72)';
-  ctx.beginPath();
-  ctx.arc(0, 0, Math.max(0.9, r * 0.12), 0, Math.PI * 2);
+  ctx.arc(inner * 0.1, inner * 0.02, Math.max(1.2, box * 0.13), 0, Math.PI * 2);
   ctx.fill();
 
   ctx.restore();
@@ -145,28 +136,28 @@ function drawNodeCardLabel(ctx: CanvasRenderingContext2D, data: Record<string, u
         : '#94a3b8';
 
   const isRun = kind === 'run';
-  const pointRadius = isRun ? 11.5 : 7.2;
-  const cardHeight = sub ? 28 : 22;
+  const pointRadius = isRun ? 11.5 : 10.2;
+  const runCardHeight = sub ? 28 : 22;
 
   ctx.save();
   ctx.font = '600 11px Space Grotesk, sans-serif';
   const titleWidth = ctx.measureText(title).width;
   ctx.font = '700 10px Space Grotesk, sans-serif';
   const subWidth = sub ? ctx.measureText(sub).width : 0;
-  const width = Math.max(titleWidth, subWidth) + (isRun ? 30 : 26);
-  const left = x - width / 2;
-  const top = y - pointRadius - cardHeight - 10;
+  const width = Math.max(titleWidth, subWidth) + 30;
+  const left = isRun ? x + 8 : x - width / 2;
+  const top = isRun ? y - pointRadius - runCardHeight - 10 : y - 38;
 
   const innerFill = selected
     ? 'rgba(9, 20, 38, 0.97)'
     : 'rgba(8, 18, 34, 0.93)';
   const stroke = selected ? blendHex(nodeColor, 0.3) : nodeColor;
 
-  if (selected) {
+  if (isRun) {
     ctx.save();
     ctx.shadowColor = nodeColor;
-    ctx.shadowBlur = isRun ? 34 : 24;
-    drawRoundedRect(ctx, left - 2.5, top - 2.5, width + 5, cardHeight + 5, 10);
+    ctx.shadowBlur = 34;
+    drawRoundedRect(ctx, left - 2.5, top - 2.5, width + 5, runCardHeight + 5, 10);
     ctx.strokeStyle = stroke;
     ctx.lineWidth = 1.5;
     ctx.globalAlpha = 0.85;
@@ -174,27 +165,51 @@ function drawNodeCardLabel(ctx: CanvasRenderingContext2D, data: Record<string, u
     ctx.restore();
   }
 
-  // connector from anchor to card (top aligned)
-  ctx.strokeStyle = 'rgba(148,163,184,0.62)';
-  ctx.lineWidth = 1.2;
-  ctx.beginPath();
-  ctx.moveTo(x, y - pointRadius);
-  ctx.lineTo(x, top + cardHeight);
-  ctx.stroke();
-
-  drawRoundedRect(ctx, left, top, width, cardHeight, 8);
-  ctx.fillStyle = innerFill;
-  ctx.fill();
-  ctx.strokeStyle = stroke;
-  ctx.lineWidth = selected ? 1.35 : 1.1;
-  ctx.globalAlpha = selected ? 0.95 : 0.78;
-  ctx.stroke();
-  ctx.globalAlpha = 1;
-
   if (kind === 'stage') {
-    drawGemAnchor(ctx, x, y, pointRadius, nodeColor, selected);
+    drawAgentBoxAnchor(ctx, x, y, pointRadius, nodeColor, selected);
+    ctx.font = '600 11px Space Grotesk, sans-serif';
+    ctx.fillStyle = titleColor;
+    const titleTextWidth = ctx.measureText(title).width;
+    const titleLeft = x - titleTextWidth / 2;
+    drawRoundedRect(ctx, titleLeft - 8, y - 54, titleTextWidth + 16, 22, 8);
+    ctx.fillStyle = 'rgba(8, 18, 34, 0.9)';
+    ctx.fill();
+    ctx.strokeStyle = selected ? blendHex(nodeColor, 0.22) : 'rgba(125, 211, 252, 0.38)';
+    ctx.lineWidth = 1;
+    ctx.globalAlpha = 0.88;
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+    ctx.save();
+    ctx.shadowColor = selected ? nodeColor : 'rgba(125, 211, 252, 0.42)';
+    ctx.shadowBlur = selected ? 14 : 8;
+    ctx.fillStyle = titleColor;
+    ctx.fillText(title, titleLeft, y - 40);
+    ctx.restore();
+
+    if (sub) {
+      ctx.font = '700 10px Space Grotesk, sans-serif';
+      ctx.fillStyle = subColor;
+      const subTextWidth = ctx.measureText(sub).width;
+      ctx.fillText(sub, x - subTextWidth / 2, y + 36);
+    }
   } else {
     // run/event keep circular anchor
+    drawRoundedRect(ctx, left, top, width, runCardHeight, 8);
+    ctx.fillStyle = innerFill;
+    ctx.fill();
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = selected ? 1.35 : 1.1;
+    ctx.globalAlpha = selected ? 0.95 : 0.78;
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+
+    ctx.strokeStyle = 'rgba(148,163,184,0.62)';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(x, y - pointRadius);
+    ctx.lineTo(x, top + runCardHeight);
+    ctx.stroke();
+
     ctx.save();
     ctx.shadowColor = nodeColor;
     ctx.shadowBlur = selected ? 20 : 10;
@@ -208,16 +223,15 @@ function drawNodeCardLabel(ctx: CanvasRenderingContext2D, data: Record<string, u
     ctx.beginPath();
     ctx.arc(x, y, Math.max(1.6, pointRadius * 0.36), 0, Math.PI * 2);
     ctx.fill();
-  }
+    ctx.font = '600 11px Space Grotesk, sans-serif';
+    ctx.fillStyle = titleColor;
+    ctx.fillText(title, left + 10, top + (sub ? 12 : 14));
 
-  ctx.font = '600 11px Space Grotesk, sans-serif';
-  ctx.fillStyle = titleColor;
-  ctx.fillText(title, left + 10, top + (sub ? 12 : 14));
-
-  if (sub) {
-    ctx.font = '700 10px Space Grotesk, sans-serif';
-    ctx.fillStyle = subColor;
-    ctx.fillText(sub, left + 10, top + 23);
+    if (sub) {
+      ctx.font = '700 10px Space Grotesk, sans-serif';
+      ctx.fillStyle = subColor;
+      ctx.fillText(sub, left + 10, top + 23);
+    }
   }
   ctx.restore();
 }
@@ -255,7 +269,7 @@ function buildGraph(runId: string, events: RunEvent[], stages: StageView[], sele
   const runIdNode = runNodeId(runId);
   graph.addNode(runIdNode, {
     label: `Run ${runId}`,
-    x: 0,
+    x: 1.8,
     y: 0,
     size: 24,
     color: '#0ea5e9',
@@ -280,7 +294,7 @@ function buildGraph(runId: string, events: RunEvent[], stages: StageView[], sele
 
     for (const [groupId, groupStages] of groupEntries) {
       const gi = groupIndex(groupId);
-      const x = 2.2 + gi * 2.7;
+      const x = 4 + gi * 2.7;
       groupStages.forEach((stage, idx) => {
         const center = 0;
         const spread = 1.75;
@@ -295,7 +309,7 @@ function buildGraph(runId: string, events: RunEvent[], stages: StageView[], sele
         label: `${stage.stage_name}\n${stage.status}`,
         x,
         y,
-        size: isSelected ? 14 : 8.5,
+        size: isSelected ? 16 : 11,
         color: stageColor(stage.status),
         kind: 'stage',
         stageName: stage.stage_name,
@@ -352,7 +366,7 @@ function buildGraph(runId: string, events: RunEvent[], stages: StageView[], sele
       usedIds.add(id);
       nodes.push(id);
 
-      const x = 2 + index * 1.45;
+      const x = 3 + index * 1.45;
       const y = Math.sin(index * 0.7) * 0.32;
 
       graph.addNode(id, {

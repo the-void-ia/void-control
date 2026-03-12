@@ -241,11 +241,13 @@ export function App() {
       <header className="topbar">
         <div className="brand">
           <span className="logo" aria-label="Void Control logo">
-            <span className="logo-v">V</span>
-            <span className="logo-seven">7</span>
+            <svg viewBox="0 0 52 30" className="logo-mark" aria-hidden="true">
+              <path d="M4 4h8.5l8.4 19.5L33.2 4H48L28.2 26H16.7z" />
+              <path d="M32.6 4h8.8L26.7 26h-8.5z" className="logo-mark-accent" />
+            </svg>
           </span>
           <div>
-            <div className="brand-name">void-control</div>
+            <div className="brand-name">Void Control</div>
             <div className="brand-sub">orchestration explorer</div>
           </div>
         </div>

@@ -63,6 +63,36 @@ Important:
 - Do not use `/tmp/void-box-test-rootfs.cpio.gz` for production/runtime UI validation.
 - `target/void-box-rootfs.cpio.gz` is the expected production image path.
 
+### UI Debugging Requirement
+
+For UI work in `web/void-control-ux`, browser automation/inspection is required.
+Do not rely on screenshot-only iteration when layout, DOM state, resize behavior,
+or graph rendering need verification.
+
+Preferred order:
+
+- Use configured browser MCP first.
+- If browser MCP is unavailable, install and use Playwright locally.
+- Screenshots are a fallback only, not the primary workflow.
+
+Current local browser MCP:
+
+- `chrome-devtools` is already configured in `~/.codex/config.toml`.
+- This should be the default tool for DOM inspection, layout debugging, console
+  errors, network checks, and viewport validation.
+
+Playwright install fallback:
+
+```bash
+cd /home/diego/github/void-control/web/void-control-ux
+npm install -D playwright
+npx playwright install chromium
+```
+
+If Playwright MCP is later added, prefer that over manual screenshots for UI
+inspection. No dedicated local skill currently exists in this repo for
+Playwright setup; use browser MCP or direct Playwright commands.
+
 ## Coding Style & Naming Conventions
 For documentation and future code contributions:
 
