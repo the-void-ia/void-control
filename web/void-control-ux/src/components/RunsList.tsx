@@ -9,6 +9,8 @@ interface RunsListProps {
   onLaunch: () => void;
   hideTestRuns: boolean;
   onToggleHideTestRuns: () => void;
+  stateFilter: 'all' | 'running' | 'failed' | 'succeeded' | 'cancelled';
+  onStateFilterChange: (state: 'all' | 'running' | 'failed' | 'succeeded' | 'cancelled') => void;
 }
 
 function stateOf(run: RunInspection): string {
@@ -22,9 +24,18 @@ export function RunsList({
   onSelect,
   onLaunch,
   hideTestRuns,
-  onToggleHideTestRuns
+  onToggleHideTestRuns,
+  stateFilter,
+  onStateFilterChange
 }: RunsListProps) {
   const all = [...activeRuns, ...terminalRuns];
+  const statePills: Array<{ value: 'all' | 'running' | 'failed' | 'succeeded' | 'cancelled'; label: string }> = [
+    { value: 'all', label: 'All' },
+    { value: 'running', label: 'Running' },
+    { value: 'failed', label: 'Failed' },
+    { value: 'succeeded', label: 'Succeeded' },
+    { value: 'cancelled', label: 'Cancelled' }
+  ];
   return (
     <aside className="runs-panel">
       <div className="runs-head">
@@ -34,6 +45,19 @@ export function RunsList({
         </button>
       </div>
       <button className="launch-box-btn" type="button" onClick={onLaunch}>+ Launch Box</button>
+      <div className="runs-state-pills" role="tablist" aria-label="Filter runs by state">
+        {statePills.map((pill) => (
+          <button
+            key={pill.value}
+            type="button"
+            className={`runs-state-pill ${stateFilter === pill.value ? 'active' : ''}`}
+            aria-pressed={stateFilter === pill.value}
+            onClick={() => onStateFilterChange(pill.value)}
+          >
+            {pill.label}
+          </button>
+        ))}
+      </div>
       <div className="runs-meta">active {activeRuns.length} | terminal {terminalRuns.length}</div>
       <ul className="run-list">
         {all.map((run) => {

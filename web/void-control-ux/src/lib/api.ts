@@ -1,4 +1,13 @@
-import type { RunEvent, RunInspection, RunStagesResponse, RunsListResponse, RunTelemetryResponse, StageView, TelemetrySample } from './types';
+import type {
+  RunEvent,
+  RunInspection,
+  RunStagesResponse,
+  RunsListResponse,
+  RunTelemetryResponse,
+  StageOutputFile,
+  StageView,
+  TelemetrySample
+} from './types';
 
 const runtimeBaseUrl = (import.meta.env.VITE_VOID_BOX_BASE_URL as string | undefined) ?? '/api';
 const controlBaseUrl =
@@ -26,6 +35,26 @@ async function requestJsonAt<T>(base: string, path: string, init?: RequestInit):
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   return requestJsonAt(runtimeBaseUrl, path, init);
+}
+
+async function requestText(path: string, init?: RequestInit): Promise<StageOutputFile> {
+  const res = await fetch(`${runtimeBaseUrl}${path}`, init);
+
+  if (!res.ok) {
+    let body = '';
+    try {
+      body = await res.text();
+    } catch {
+      body = '<no-body>';
+    }
+    throw new Error(`HTTP ${res.status} ${res.statusText}: ${body}`);
+  }
+
+  return {
+    content: await res.text(),
+    contentType: res.headers.get('content-type') ?? 'text/plain',
+    sizeBytes: Number(res.headers.get('content-length') ?? 0)
+  };
 }
 
 export async function getRuns(state?: 'active' | 'terminal'): Promise<RunInspection[]> {
@@ -72,6 +101,12 @@ export async function getRunTelemetry(runId: string, fromSeq = 0): Promise<RunTe
 export async function getRunTelemetrySamples(runId: string): Promise<TelemetrySample[]> {
   const body = await getRunTelemetry(runId, 0);
   return body.samples ?? [];
+}
+
+export async function getStageOutputFile(runId: string, stageName: string): Promise<StageOutputFile> {
+  return requestText(
+    `/v1/runs/${encodeURIComponent(runId)}/stages/${encodeURIComponent(stageName)}/output-file`
+  );
 }
 
 export async function cancelRun(runId: string, reason: string): Promise<{ run_id: string; state: string; terminal_event_id?: string }> {

@@ -92,3 +92,9 @@ export interface RunTelemetryResponse {
   next_seq: number;
   samples: TelemetrySample[];
 }
+
+export interface StageOutputFile {
+  content: string;
+  contentType: string;
+  sizeBytes: number;
+}

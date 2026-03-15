@@ -1,4 +1,5 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { getStageOutputFile } from '../lib/api';
 import type { RunEvent, StageView, TelemetrySample } from '../lib/types';
 import {
   filterEventsForStage,
@@ -37,6 +38,13 @@ function fmtMs(v?: number | null): string {
 function fmtMb(v?: number): string {
   if (typeof v !== 'number') return '-';
   return `${(v / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function fmtBytes(v?: number | null): string {
+  if (typeof v !== 'number' || Number.isNaN(v) || v < 0) return '-';
+  if (v < 1024) return `${v} B`;
+  if (v < 1024 * 1024) return `${(v / 1024).toFixed(1)} KB`;
+  return `${(v / (1024 * 1024)).toFixed(2)} MB`;
 }
 
 function fmtGuestMemUsed(sample: TelemetrySample | null | undefined): string {
@@ -80,6 +88,155 @@ function buildSparklinePoints(series: number[], width: number, height: number): 
     .join(' ');
 }
 
+function detectAbsolutePath(message: string): string | null {
+  const match = message.match(/(?:^|[\s(`"'[])(((?:\/[\w.\-]+)+\/?[\w.\-]*))(?=$|[\s)`"',.:;\]])/);
+  return match?.[1] ?? null;
+}
+
+function resolveEventStageName(event: RunEvent | null, allEvents: RunEvent[]): string | null {
+  if (!event) return null;
+  if (typeof event.stage_name === 'string' && event.stage_name.trim().length > 0) return event.stage_name;
+
+  const payload = event.payload as Record<string, unknown> | null | undefined;
+  const payloadStageName = payload?.stage_name;
+  if (typeof payloadStageName === 'string' && payloadStageName.trim().length > 0) return payloadStageName;
+
+  const index = allEvents.findIndex((candidate, i) => {
+    if (event.event_id && candidate.event_id === event.event_id) return true;
+    return `${candidate.seq}-${i}` === `${event.seq}-${i}`;
+  });
+  if (index === -1) return null;
+
+  for (let i = index - 1; i >= 0; i -= 1) {
+    const stageName = allEvents[i]?.stage_name;
+    if (typeof stageName === 'string' && stageName.trim().length > 0) return stageName;
+  }
+
+  for (let i = index + 1; i < allEvents.length; i += 1) {
+    const stageName = allEvents[i]?.stage_name;
+    if (typeof stageName === 'string' && stageName.trim().length > 0) return stageName;
+  }
+
+  return null;
+}
+
+function candidateStageNames(event: RunEvent | null, allEvents: RunEvent[]): string[] {
+  if (!event) return [];
+  const names: string[] = [];
+
+  const push = (value: string | null | undefined) => {
+    if (!value || !value.trim().length || names.includes(value)) return;
+    names.push(value);
+  };
+
+  push(event.stage_name);
+
+  const payload = event.payload as Record<string, unknown> | null | undefined;
+  if (typeof payload?.stage_name === 'string') push(payload.stage_name);
+
+  const index = allEvents.findIndex((candidate, i) => {
+    if (event.event_id && candidate.event_id === event.event_id) return true;
+    return `${candidate.seq}-${i}` === `${event.seq}-${i}`;
+  });
+
+  if (index !== -1) {
+    for (let i = index - 1; i >= 0; i -= 1) push(allEvents[i]?.stage_name);
+    for (let i = index + 1; i < allEvents.length; i += 1) push(allEvents[i]?.stage_name);
+  }
+
+  return names;
+}
+
+function formatOutputContent(content: string, contentType: string): string {
+  if (!content.trim().length) return content;
+  if (!contentType.toLowerCase().includes('json')) return content;
+  try {
+    return `${JSON.stringify(JSON.parse(content), null, 2)}\n`;
+  } catch {
+    return content;
+  }
+}
+
+function triggerDownload(filename: string, content: string, contentType: string) {
+  const blob = new Blob([content], { type: contentType || 'application/octet-stream' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function fileNameFromPath(path: string): string {
+  const parts = path.split('/').filter(Boolean);
+  return parts[parts.length - 1] ?? 'output.json';
+}
+
+function EventMessageNote({
+  message,
+  eventRef,
+  compact = false
+}: {
+  message: string;
+  eventRef: string;
+  compact?: boolean;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [isOverflowing, setIsOverflowing] = useState(false);
+  const [copied, setCopied] = useState<'message' | null>(null);
+  const messageRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    setExpanded(false);
+    setCopied(null);
+  }, [eventRef]);
+
+  useEffect(() => {
+    const node = messageRef.current;
+    if (!node) return;
+    const nextOverflowing = node.scrollHeight > node.clientHeight + 2;
+    setIsOverflowing(nextOverflowing);
+  }, [message, expanded]);
+
+  useEffect(() => {
+    if (!copied) return;
+    const timer = window.setTimeout(() => setCopied(null), 1400);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
+
+  async function copyText(value: string) {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied('message');
+    } catch {
+      setCopied(null);
+    }
+  }
+
+  return (
+    <div className="inspector-message-block">
+      <div
+        ref={messageRef}
+        className={`inspector-note inspector-message-note ${expanded ? 'expanded' : 'clamped'}`}
+      >
+        {message}
+      </div>
+      <div className="inspector-message-actions">
+        {isOverflowing && !compact && (
+          <button type="button" className="inspector-inline-btn" onClick={() => setExpanded((v) => !v)}>
+            {expanded ? 'Collapse' : 'Expand'}
+          </button>
+        )}
+        <button type="button" className="inspector-inline-btn" onClick={() => copyText(message)}>
+          {copied === 'message' ? 'Copied' : 'Copy'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function NodeInspector({
   runId,
   selectedNodeId,
@@ -91,6 +248,20 @@ export function NodeInspector({
   onClearSelection,
   onTogglePinned
 }: NodeInspectorProps) {
+  const [outputPreview, setOutputPreview] = useState<{
+    stageName: string;
+    path: string;
+    fileName: string;
+    content: string;
+    contentType: string;
+    sizeBytes: number;
+  } | null>(null);
+  const [outputLoading, setOutputLoading] = useState(false);
+  const [outputError, setOutputError] = useState<string | null>(null);
+  const [outputCopied, setOutputCopied] = useState(false);
+  const [resolvedOutputStageName, setResolvedOutputStageName] = useState<string | null>(null);
+  const [resolvedOutputContent, setResolvedOutputContent] = useState<{ content: string; contentType: string; sizeBytes: number } | null>(null);
+  const [outputAvailabilityState, setOutputAvailabilityState] = useState<'idle' | 'checking' | 'available' | 'missing'>('idle');
   const parsed = parseNodeId(selectedNodeId);
   const selectedStage = resolveSelectedStage(selectedNodeId, stages);
 
@@ -167,6 +338,98 @@ export function NodeInspector({
     () => buildSparklinePoints(contextEventsSeries, 220, 26),
     [contextEventsSeries]
   );
+  const selectedEventMessage = selectedEvent?.message ?? 'No message';
+  const selectedEventPath = useMemo(
+    () => (selectedEvent ? detectAbsolutePath(selectedEventMessage) : null),
+    [selectedEvent, selectedEventMessage]
+  );
+  const outputStageCandidates = useMemo(
+    () => candidateStageNames(selectedEvent, events),
+    [selectedEvent, events]
+  );
+  const canProbeOutputFile = selectedEventPath === '/workspace/output.json';
+  const canOpenOutputFile = outputAvailabilityState === 'available' && Boolean(resolvedOutputStageName);
+
+  useEffect(() => {
+    setOutputPreview(null);
+    setOutputLoading(false);
+    setOutputError(null);
+    setOutputCopied(false);
+    setResolvedOutputStageName(null);
+    setResolvedOutputContent(null);
+    setOutputAvailabilityState('idle');
+  }, [selectedEvent?.event_id, selectedEvent?.seq]);
+
+  useEffect(() => {
+    if (!outputCopied) return;
+    const timer = window.setTimeout(() => setOutputCopied(false), 1400);
+    return () => window.clearTimeout(timer);
+  }, [outputCopied]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function checkOutputAvailability() {
+      if (!canProbeOutputFile) return;
+      setOutputAvailabilityState('checking');
+      setOutputError(null);
+
+      for (const stageName of outputStageCandidates) {
+        try {
+          const result = await getStageOutputFile(runId, stageName);
+          if (cancelled) return;
+          setResolvedOutputStageName(stageName);
+          setResolvedOutputContent(result);
+          setOutputAvailabilityState('available');
+          return;
+        } catch {
+          // try next candidate
+        }
+      }
+
+      if (!cancelled) {
+        setResolvedOutputStageName(null);
+        setResolvedOutputContent(null);
+        setOutputAvailabilityState('missing');
+      }
+    }
+
+    void checkOutputAvailability();
+    return () => {
+      cancelled = true;
+    };
+  }, [canProbeOutputFile, outputStageCandidates, runId]);
+
+  async function openOutputPreview() {
+    if (!resolvedOutputStageName || !resolvedOutputContent) return;
+    setOutputLoading(true);
+    setOutputError(null);
+    try {
+      setOutputPreview({
+        stageName: resolvedOutputStageName,
+        path: '/workspace/output.json',
+        fileName: fileNameFromPath('/workspace/output.json'),
+        content: formatOutputContent(resolvedOutputContent.content, resolvedOutputContent.contentType),
+        contentType: resolvedOutputContent.contentType,
+        sizeBytes:
+          resolvedOutputContent.sizeBytes > 0
+            ? resolvedOutputContent.sizeBytes
+            : new Blob([resolvedOutputContent.content]).size
+      });
+    } finally {
+      setOutputLoading(false);
+    }
+  }
+
+  async function copyOutputContent() {
+    if (!outputPreview) return;
+    try {
+      await navigator.clipboard.writeText(outputPreview.content);
+      setOutputCopied(true);
+    } catch {
+      setOutputCopied(false);
+    }
+  }
 
   return (
     <aside className="inspector-panel">
@@ -267,7 +530,29 @@ export function NodeInspector({
           <div className="kv"><span>Seq</span><strong>#{selectedEvent.seq}</strong></div>
           <div className="kv"><span>Timestamp</span><strong>{fmtTime(selectedEvent.timestamp)}</strong></div>
           <div className="kv" title="Events/s (rolling 30s)"><span>Events/s</span><strong>{runEventsPerSec.toFixed(1)}</strong></div>
-          <div className="inspector-note">{selectedEvent.message ?? 'No message'}</div>
+          <EventMessageNote
+            eventRef={selectedEvent.event_id ?? `${selectedEvent.seq}`}
+            message={selectedEventMessage}
+            compact={canProbeOutputFile}
+          />
+          <div className="inspector-message-actions">
+            {canOpenOutputFile && (
+              <button
+                type="button"
+                className="inspector-inline-btn"
+                onClick={openOutputPreview}
+                disabled={outputLoading}
+              >
+                {outputLoading ? 'Loading...' : 'Open output.json'}
+              </button>
+            )}
+          </div>
+          {canProbeOutputFile && outputAvailabilityState === 'missing' && (
+            <div className="inspector-note">
+              This log references <code>/workspace/output.json</code>, but the daemon did not publish a retrievable output artifact for this run.
+            </div>
+          )}
+          {outputError && <div className="inspector-note inspector-note-error">{outputError}</div>}
         </section>
       )}
 
@@ -325,6 +610,46 @@ export function NodeInspector({
             </div>
           </section>
         </>
+      )}
+
+      {outputPreview && (
+        <div className="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="output-preview-title">
+          <div className="output-preview-modal">
+            <div className="launch-modal-head">
+              <div>
+                <h3 id="output-preview-title">{outputPreview.fileName}</h3>
+                <div className="output-preview-path">
+                  {outputPreview.stageName} - {outputPreview.path}
+                </div>
+              </div>
+              <button className="inspector-btn" onClick={() => setOutputPreview(null)}>Close</button>
+            </div>
+            <div className="output-preview-meta">
+              <span className="output-preview-chip">{outputPreview.contentType}</span>
+              <span className="output-preview-chip">{fmtBytes(outputPreview.sizeBytes)}</span>
+            </div>
+            <div className="output-preview-body">
+              <pre className="output-preview-pre">{outputPreview.content}</pre>
+            </div>
+            <div className="output-preview-actions">
+              <button className="inspector-btn" onClick={copyOutputContent}>
+                {outputCopied ? 'Copied' : 'Copy'}
+              </button>
+              <button
+                className="launch-primary-btn"
+                onClick={() =>
+                  triggerDownload(
+                    outputPreview.fileName,
+                    outputPreview.content,
+                    outputPreview.contentType
+                  )
+                }
+              >
+                Download
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </aside>
   );

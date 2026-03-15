@@ -31,6 +31,14 @@ function stageColor(status: string): string {
   return '#94a3b8';
 }
 
+function deriveRunStatus(stages: StageView[]): string {
+  if (stages.some((stage) => stage.status === 'failed')) return 'failed';
+  if (stages.some((stage) => stage.status === 'running')) return 'running';
+  if (stages.length > 0 && stages.every((stage) => stage.status === 'succeeded')) return 'succeeded';
+  if (stages.some((stage) => stage.status === 'queued')) return 'queued';
+  return 'running';
+}
+
 function drawRoundedRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
   const radius = Math.min(r, w / 2, h / 2);
   ctx.beginPath();
@@ -109,6 +117,84 @@ function drawAgentBoxAnchor(
   ctx.fillStyle = 'rgba(236, 254, 255, 0.78)';
   ctx.beginPath();
   ctx.arc(inner * 0.1, inner * 0.02, Math.max(1.2, box * 0.13), 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.restore();
+}
+
+function drawRunCoreAnchor(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  radius: number,
+  status: string,
+  selected: boolean
+) {
+  const stateColor =
+    status === 'failed'
+      ? '#ef4444'
+      : status === 'succeeded'
+        ? '#22c55e'
+        : status === 'queued'
+          ? '#94a3b8'
+          : '#38bdf8';
+  const outer = Math.max(12.5, radius * 1.2);
+  const inner = outer * 0.62;
+
+  ctx.save();
+  ctx.translate(x, y);
+
+  ctx.save();
+  ctx.shadowColor = stateColor;
+  ctx.shadowBlur = selected ? 28 : 18;
+  ctx.fillStyle = blendHex(stateColor, 0.1);
+  ctx.beginPath();
+  ctx.arc(0, 0, outer + 2, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  const shellGrad = ctx.createRadialGradient(-outer * 0.2, -outer * 0.4, outer * 0.2, 0, 0, outer);
+  shellGrad.addColorStop(0, '#dff7ff');
+  shellGrad.addColorStop(0.48, '#66cdfb');
+  shellGrad.addColorStop(1, '#0f2f56');
+  ctx.fillStyle = shellGrad;
+  ctx.beginPath();
+  ctx.arc(0, 0, outer, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.strokeStyle = selected ? '#d7fbff' : '#90e0ff';
+  ctx.lineWidth = selected ? 1.9 : 1.2;
+  ctx.stroke();
+
+  const crystalGrad = ctx.createLinearGradient(-inner, -inner, inner, inner);
+  crystalGrad.addColorStop(0, '#eefcff');
+  crystalGrad.addColorStop(0.55, status === 'failed' ? '#fca5a5' : status === 'succeeded' ? '#86efac' : '#93c5fd');
+  crystalGrad.addColorStop(1, '#163f68');
+  ctx.fillStyle = crystalGrad;
+  ctx.beginPath();
+  ctx.moveTo(-inner * 0.3, -inner);
+  ctx.lineTo(inner * 0.78, -inner * 0.22);
+  ctx.lineTo(inner * 0.38, inner);
+  ctx.lineTo(-inner * 0.84, inner * 0.54);
+  ctx.lineTo(-inner, -inner * 0.24);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.strokeStyle = 'rgba(236,254,255,0.65)';
+  ctx.lineWidth = 0.8;
+  ctx.stroke();
+
+  ctx.fillStyle = 'rgba(255,255,255,0.24)';
+  ctx.beginPath();
+  ctx.moveTo(-inner * 0.18, -inner * 0.92);
+  ctx.lineTo(inner * 0.52, -inner * 0.08);
+  ctx.lineTo(-inner * 0.04, inner * 0.04);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.fillStyle = '#f8feff';
+  ctx.beginPath();
+  ctx.arc(inner * 0.08, inner * 0.03, Math.max(1.4, outer * 0.1), 0, Math.PI * 2);
   ctx.fill();
 
   ctx.restore();
@@ -193,7 +279,7 @@ function drawNodeCardLabel(ctx: CanvasRenderingContext2D, data: Record<string, u
       ctx.fillText(sub, x - subTextWidth / 2, y + 36);
     }
   } else {
-    // run/event keep circular anchor
+    // run/event keep dedicated anchor treatment
     drawRoundedRect(ctx, left, top, width, runCardHeight, 8);
     ctx.fillStyle = innerFill;
     ctx.fill();
@@ -210,19 +296,23 @@ function drawNodeCardLabel(ctx: CanvasRenderingContext2D, data: Record<string, u
     ctx.lineTo(x, top + runCardHeight);
     ctx.stroke();
 
-    ctx.save();
-    ctx.shadowColor = nodeColor;
-    ctx.shadowBlur = selected ? 20 : 10;
-    ctx.fillStyle = nodeColor;
-    ctx.beginPath();
-    ctx.arc(x, y, pointRadius, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
+    if (isRun) {
+      drawRunCoreAnchor(ctx, x, y, pointRadius, status, selected);
+    } else {
+      ctx.save();
+      ctx.shadowColor = nodeColor;
+      ctx.shadowBlur = selected ? 20 : 10;
+      ctx.fillStyle = nodeColor;
+      ctx.beginPath();
+      ctx.arc(x, y, pointRadius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
 
-    ctx.fillStyle = '#f8fafc';
-    ctx.beginPath();
-    ctx.arc(x, y, Math.max(1.6, pointRadius * 0.36), 0, Math.PI * 2);
-    ctx.fill();
+      ctx.fillStyle = '#f8fafc';
+      ctx.beginPath();
+      ctx.arc(x, y, Math.max(1.6, pointRadius * 0.36), 0, Math.PI * 2);
+      ctx.fill();
+    }
     ctx.font = '600 11px Space Grotesk, sans-serif';
     ctx.fillStyle = titleColor;
     ctx.fillText(title, left + 10, top + (sub ? 12 : 14));
@@ -234,6 +324,10 @@ function drawNodeCardLabel(ctx: CanvasRenderingContext2D, data: Record<string, u
     }
   }
   ctx.restore();
+}
+
+function drawNoopNodeHover() {
+  // We render our own labels/tooltip and do not want Sigma's default white hover card.
 }
 
 function blendHex(base: string, boost: number): string {
@@ -253,6 +347,7 @@ function buildGraph(runId: string, events: RunEvent[], stages: StageView[], sele
   const graph = new Graph();
   const parsed = parseNodeId(selectedNodeId);
   const selectedStageName = parsed?.type === 'stage' ? parsed.stageName : null;
+  const runStatus = deriveRunStatus(stages);
 
   const dependencies = new Set<string>();
   if (selectedStageName) {
@@ -273,7 +368,9 @@ function buildGraph(runId: string, events: RunEvent[], stages: StageView[], sele
     y: 0,
     size: 24,
     color: '#0ea5e9',
-    kind: 'run'
+    kind: 'run',
+    status: runStatus,
+    selected: runIdNode === selectedNodeId
   });
 
   if (stages.length > 0) {
@@ -439,6 +536,7 @@ export function RunGraph({ runId, events, stages = [], selectedNodeId = null, on
       labelColor: { color: '#dbeafe' },
       labelSize: 13,
       defaultDrawNodeLabel: drawNodeCardLabel,
+      defaultDrawNodeHover: drawNoopNodeHover,
       defaultEdgeType: 'line',
       nodeReducer: (node, attrs) => {
         const out = { ...attrs } as Record<string, unknown>;
@@ -596,6 +694,45 @@ export function RunGraph({ runId, events, stages = [], selectedNodeId = null, on
         ctx.arc(x, y, r, 0, Math.PI * 2);
         ctx.fill();
       });
+
+      const runNode = graphObj.hasNode(runNodeId(runId)) ? runNodeId(runId) : null;
+      if (runNode) {
+        const runAttrs = graphObj.getNodeAttributes(runNode) as Record<string, unknown>;
+        const runPoint = (renderer as unknown as { graphToViewport: (p: { x: number; y: number }) => { x: number; y: number } })
+          .graphToViewport({ x: Number(runAttrs.x), y: Number(runAttrs.y) });
+        const runStatus = typeof runAttrs.status === 'string' ? runAttrs.status : 'running';
+        const runColor =
+          runStatus === 'failed'
+            ? '239,68,68'
+            : runStatus === 'succeeded'
+              ? '34,197,94'
+              : runStatus === 'queued'
+                ? '148,163,184'
+                : '56,189,248';
+        const pulse = runStatus === 'running' ? 0.7 + Math.sin(t * 2.4) * 0.16 : 0.52;
+        const ringRadius = 18 + pulse * 4;
+
+        ctx.save();
+        ctx.strokeStyle = `rgba(${runColor},${runStatus === 'running' ? 0.42 : 0.28})`;
+        ctx.lineWidth = 1.8;
+        ctx.shadowColor = `rgba(${runColor},0.55)`;
+        ctx.shadowBlur = runStatus === 'running' ? 18 : 10;
+        ctx.beginPath();
+        ctx.arc(runPoint.x, runPoint.y, ringRadius, t * 0.5, t * 0.5 + Math.PI * 1.45);
+        ctx.stroke();
+        ctx.restore();
+
+        ctx.save();
+        const halo = ctx.createRadialGradient(runPoint.x, runPoint.y, 4, runPoint.x, runPoint.y, ringRadius + 10);
+        halo.addColorStop(0, `rgba(${runColor},0.14)`);
+        halo.addColorStop(0.45, `rgba(${runColor},${runStatus === 'running' ? 0.12 : 0.08})`);
+        halo.addColorStop(1, `rgba(${runColor},0)`);
+        ctx.fillStyle = halo;
+        ctx.beginPath();
+        ctx.arc(runPoint.x, runPoint.y, ringRadius + 10, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
 
       paths.forEach((path, pathIndex) => {
         const fromAttrs = graphObj.getNodeAttributes(path.from);

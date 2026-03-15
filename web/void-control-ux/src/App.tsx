@@ -24,8 +24,14 @@ function normalizeStageStatuses(stages: StageView[], runStateRaw?: string): Stag
   });
 }
 
+function isHiddenTestRun(runIdRaw: string): boolean {
+  const id = runIdRaw.toLowerCase();
+  return id.startsWith('contract-') || id.includes('void_box_contract');
+}
+
 export function App() {
   const [hideTestRuns, setHideTestRuns] = useState(true);
+  const [runStateFilter, setRunStateFilter] = useState<'all' | 'running' | 'failed' | 'succeeded' | 'cancelled'>('all');
   const [isLaunchOpen, setIsLaunchOpen] = useState(false);
   const [launchError, setLaunchError] = useState<string | null>(null);
   const [launchPending, setLaunchPending] = useState(false);
@@ -92,8 +98,8 @@ export function App() {
     () =>
       (activeRuns.data ?? []).filter((run) => {
         if (!hideTestRuns) return true;
-        const id = (run.id ?? run.run_id ?? '').toLowerCase();
-        return !id.startsWith('contract-') && !id.startsWith('run-') && !id.includes('void_box_contract');
+        const id = (run.id ?? run.run_id ?? '').trim();
+        return !isHiddenTestRun(id);
       }),
     [activeRuns.data, hideTestRuns]
   );
@@ -102,18 +108,38 @@ export function App() {
     () =>
       (terminalRuns.data ?? []).filter((run) => {
         if (!hideTestRuns) return true;
-        const id = (run.id ?? run.run_id ?? '').toLowerCase();
-        return !id.startsWith('contract-') && !id.startsWith('run-') && !id.includes('void_box_contract');
+        const id = (run.id ?? run.run_id ?? '').trim();
+        return !isHiddenTestRun(id);
       }),
     [terminalRuns.data, hideTestRuns]
   );
 
+  const visibleActiveRuns = useMemo(
+    () =>
+      filteredActiveRuns.filter((run) => {
+        if (runStateFilter === 'all') return true;
+        const state = (run.status ?? run.state ?? 'unknown').toString().toLowerCase();
+        return state === runStateFilter;
+      }),
+    [filteredActiveRuns, runStateFilter]
+  );
+
+  const visibleTerminalRuns = useMemo(
+    () =>
+      filteredTerminalRuns.filter((run) => {
+        if (runStateFilter === 'all') return true;
+        const state = (run.status ?? run.state ?? 'unknown').toString().toLowerCase();
+        return state === runStateFilter;
+      }),
+    [filteredTerminalRuns, runStateFilter]
+  );
+
   const resolvedRunId = useMemo(() => {
     if (selectedRunId) return selectedRunId;
-    const firstActive = filteredActiveRuns[0];
-    const firstTerminal = filteredTerminalRuns[0];
+    const firstActive = visibleActiveRuns[0];
+    const firstTerminal = visibleTerminalRuns[0];
     return (firstActive?.id ?? firstActive?.run_id ?? firstTerminal?.id ?? firstTerminal?.run_id ?? null) as string | null;
-  }, [selectedRunId, filteredActiveRuns, filteredTerminalRuns]);
+  }, [selectedRunId, visibleActiveRuns, visibleTerminalRuns]);
 
   const eventList = events.data ?? [];
   const listError = (activeRuns.error as Error | null)?.message ?? (terminalRuns.error as Error | null)?.message;
@@ -241,9 +267,34 @@ export function App() {
       <header className="topbar">
         <div className="brand">
           <span className="logo" aria-label="Void Control logo">
-            <svg viewBox="0 0 52 30" className="logo-mark" aria-hidden="true">
-              <path d="M4 4h8.5l8.4 19.5L33.2 4H48L28.2 26H16.7z" />
-              <path d="M32.6 4h8.8L26.7 26h-8.5z" className="logo-mark-accent" />
+            <svg viewBox="0 0 36 36" className="logo-mark" aria-hidden="true">
+              <defs>
+                <linearGradient id="void-logo-shell" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stopColor="#dff7ff" />
+                  <stop offset="48%" stopColor="#6fd8ff" />
+                  <stop offset="100%" stopColor="#143761" />
+                </linearGradient>
+                <linearGradient id="void-logo-core" x1="18%" y1="8%" x2="82%" y2="88%">
+                  <stop offset="0%" stopColor="#f1fdff" />
+                  <stop offset="58%" stopColor="#7ed7a6" />
+                  <stop offset="100%" stopColor="#1a4d7e" />
+                </linearGradient>
+              </defs>
+              <rect x="5" y="5" width="26" height="26" rx="7" fill="#081327" stroke="#8fe8ff" strokeWidth="1.4" />
+              <rect x="4" y="4" width="28" height="28" rx="8" fill="none" stroke="rgba(34,211,238,0.28)" strokeWidth="1" />
+              <path
+                d="M10 18.2 17.2 9.8 29 14.3 25 27 12.4 25.1Z"
+                fill="url(#void-logo-shell)"
+                stroke="#dff7ff"
+                strokeWidth="0.8"
+              />
+              <path
+                d="M15.3 13.3 23.1 15.7 20.3 23 12.9 20.7Z"
+                fill="url(#void-logo-core)"
+                className="logo-mark-accent"
+              />
+              <path d="M17.2 9.8 18.6 18.2 29 14.3" fill="rgba(255,255,255,0.18)" />
+              <circle cx="18.5" cy="18.1" r="1.8" fill="#f4feff" />
             </svg>
           </span>
           <div>
@@ -256,8 +307,8 @@ export function App() {
 
       <main className="layout">
         <RunsList
-          activeRuns={filteredActiveRuns}
-          terminalRuns={filteredTerminalRuns}
+          activeRuns={visibleActiveRuns}
+          terminalRuns={visibleTerminalRuns}
           selectedRunId={resolvedRunId}
           onSelect={setSelectedRunId}
           onLaunch={() => {
@@ -266,6 +317,8 @@ export function App() {
           }}
           hideTestRuns={hideTestRuns}
           onToggleHideTestRuns={() => setHideTestRuns((v) => !v)}
+          stateFilter={runStateFilter}
+          onStateFilterChange={setRunStateFilter}
         />
 
         <section className="detail-panel">
