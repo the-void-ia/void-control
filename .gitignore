@@ -13,3 +13,6 @@ web/void-control-ux/dist/
 web/void-control-ux/.env
 web/void-control-ux/.env.local
 web/void-control-ux/.env.*.local
+web/void-control-ux/tmp_*.mjs
+
+.github-release-notes.md

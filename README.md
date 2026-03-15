@@ -4,6 +4,19 @@ Orchestration layer for `void-box` runtime execution.
 
 ![void-control hero](docs/assets/void-control-hero.png)
 
+## Demo
+
+<video src="docs/assets/void-control-demo.mp4" controls muted playsinline width="100%"></video>
+
+If the embedded player does not render in your Markdown viewer, use the direct file link: [void-control demo video](docs/assets/void-control-demo.mp4).
+
+## Release
+
+- First public release target: `v0.0.1`
+- Release artifacts are published through GitHub Releases
+- Supported `void-box` baseline for `v0.0.1`: `void-box` `v0.1.1` or an equivalent validated production build
+- Release process and compatibility gate details: [docs/release-process.md](docs/release-process.md)
+
 ## What It Is
 
 `void-control` is the control-plane side of the stack:

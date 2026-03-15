@@ -1,0 +1,33 @@
+name: Void Box Compatibility
+
+on:
+  workflow_dispatch:
+    inputs:
+      void_box_base_url:
+        description: 'Reachable void-box daemon URL'
+        required: true
+        default: 'http://127.0.0.1:43100'
+      supported_void_box_version:
+        description: 'Validated void-box version/build label'
+        required: true
+        default: 'v0.1.1'
+
+jobs:
+  compatibility:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Report compatibility target
+        run: |
+          echo "Validating against void-box baseline: ${{ inputs.supported_void_box_version }}"
+          echo "Daemon URL: ${{ inputs.void_box_base_url }}"
+
+      - name: Run compatibility gate
+        run: scripts/release/check_void_box_compat.sh "${{ inputs.void_box_base_url }}"
