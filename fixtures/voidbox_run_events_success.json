@@ -1,0 +1,23 @@
+[
+  {
+    "ts_ms": 1700000000000,
+    "level": "info",
+    "event_type": "run.started",
+    "message": "run started",
+    "run_id": "run-2000",
+    "seq": 1,
+    "payload": {
+      "message": "run created"
+    }
+  },
+  {
+    "ts_ms": 1700000004000,
+    "level": "info",
+    "event_type": "run.finished",
+    "message": "run finished",
+    "run_id": "run-2000",
+    "seq": 2,
+    "payload": null
+  }
+]
+

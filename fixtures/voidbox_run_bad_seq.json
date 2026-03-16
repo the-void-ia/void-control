@@ -1,0 +1,20 @@
+{
+  "id": "run-4000",
+  "status": "Running",
+  "error": null,
+  "events": [
+    {
+      "ts_ms": 1700000000000,
+      "event_type": "run.started",
+      "run_id": "run-4000",
+      "seq": 2
+    },
+    {
+      "ts_ms": 1700000001000,
+      "event_type": "run.finished",
+      "run_id": "run-4000",
+      "seq": 1
+    }
+  ]
+}
+

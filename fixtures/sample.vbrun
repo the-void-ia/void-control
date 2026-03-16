@@ -1,0 +1,13 @@
+# Simple fixture format for src/bin/normalize_fixture.rs
+# Keys:
+#   id=<run_id>
+#   status=<Running|Completed|Failed|Cancelled>
+#   error=<optional>
+#   event|ts_ms=<u64>|event_type=<type>|run_id=<id>|seq=<u64>|payload=<k:v,k2:v2>
+
+id=run-1700000000
+status=Completed
+error=
+event|ts_ms=1700000000000|event_type=run.started|run_id=run-1700000000|seq=1|payload=message:run_created
+event|ts_ms=1700000004500|event_type=run.finished|run_id=run-1700000000|seq=2
+

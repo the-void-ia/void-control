@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run Rust tests
+        run: cargo test
+
+      - name: Run Rust serde tests
+        run: cargo test --features serde
+
+  ui:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web/void-control-ux
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/void-control-ux/package-lock.json
+
+      - name: Install UI dependencies
+        run: npm ci
+
+      - name: Build UI
+        run: npm run build
