@@ -18,4 +18,5 @@ web/void-control-ux/tmp_*.mjs
 .github-release-notes.md
 
 # Keep the UI lockfile tracked for CI/npm ci
+!web/void-control-ux/package.json
 !web/void-control-ux/package-lock.json
