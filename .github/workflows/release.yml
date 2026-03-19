@@ -21,19 +21,19 @@ jobs:
         run: |
           TAG="${GITHUB_REF_NAME#v}"
           CARGO_VERSION=$(python3 - <<'PY'
-from pathlib import Path
-for line in Path("Cargo.toml").read_text().splitlines():
-    if line.startswith("version = "):
-        print(line.split('"')[1])
-        break
-PY
-)
+          from pathlib import Path
+          for line in Path("Cargo.toml").read_text().splitlines():
+              if line.startswith("version = "):
+                  print(line.split('"')[1])
+                  break
+          PY
+          )
           UI_VERSION=$(python3 - <<'PY'
-import json
-from pathlib import Path
-print(json.loads(Path("web/void-control-ux/package.json").read_text())["version"])
-PY
-)
+          import json
+          from pathlib import Path
+          print(json.loads(Path("web/void-control-ux/package.json").read_text())["version"])
+          PY
+          )
           test "${TAG}" = "${CARGO_VERSION}"
           test "${TAG}" = "${UI_VERSION}"
           echo "version=${TAG}" >> "$GITHUB_OUTPUT"
