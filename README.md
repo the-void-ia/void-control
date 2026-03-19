@@ -6,9 +6,9 @@ Orchestration layer for `void-box` runtime execution.
 
 ## Demo
 
-<video src="docs/assets/void-control-demo.mp4" controls muted playsinline width="100%"></video>
+[![void-control demo](docs/assets/void-control-demo.gif)](docs/assets/void-control-demo.mp4)
 
-If the embedded player does not render in your Markdown viewer, use the direct file link: [void-control demo video](docs/assets/void-control-demo.mp4).
+Click the preview above for the full-quality MP4, or use the direct file link: [void-control demo video](docs/assets/void-control-demo.mp4).
 
 ## Release
 
