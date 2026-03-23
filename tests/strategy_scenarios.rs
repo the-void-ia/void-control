@@ -402,6 +402,83 @@ fn search_pipeline_optimization_refines_known_bottleneck_config() {
     assert_eq!(snapshot.accumulator.search_phase.as_deref(), Some("refine"));
 }
 
+#[test]
+fn search_message_stats_can_preserve_a_small_exploration_quota() {
+    let store_dir = temp_store_dir("search-signal-reactive");
+    let mut runtime = MockRuntime::new();
+    runtime.seed_success(
+        "exec-run-candidate-1",
+        metrics_output_with_intents(
+            "candidate-1",
+            95.0,
+            0.06,
+            0.95,
+            vec![scenario_signal_intent(
+                "intent-search-signal",
+                CommunicationIntentAudience::Broadcast,
+                "multiple candidates saw the same bottleneck",
+            )],
+        ),
+    );
+    runtime.seed_success(
+        "exec-run-candidate-2",
+        metrics_output("candidate-2", 80.0, 0.05, 0.99),
+    );
+    runtime.seed_success(
+        "exec-run-candidate-3",
+        metrics_output("candidate-3", 84.0, 0.05, 0.98),
+    );
+    runtime.seed_success(
+        "exec-run-candidate-4",
+        metrics_output("candidate-4", 76.0, 0.05, 0.99),
+    );
+    runtime.seed_success(
+        "exec-run-candidate-5",
+        metrics_output("candidate-5", 78.0, 0.05, 0.99),
+    );
+
+    let store = FsExecutionStore::new(store_dir.clone());
+    ExecutionService::<MockRuntime>::submit_execution(
+        &store,
+        "exec-search-signal-reactive",
+        &search_signal_reactive_spec(),
+    )
+    .expect("submit");
+
+    let mut service = ExecutionService::new(
+        GlobalConfig {
+            max_concurrent_child_runs: 2,
+        },
+        runtime,
+        store,
+    );
+    service
+        .plan_execution("exec-search-signal-reactive")
+        .expect("plan execution");
+
+    for _ in 0..6 {
+        let execution = service
+            .dispatch_execution_once("exec-search-signal-reactive")
+            .expect("dispatch");
+        if execution.status == ExecutionStatus::Completed {
+            break;
+        }
+    }
+
+    let snapshot = FsExecutionStore::new(store_dir)
+        .load_execution("exec-search-signal-reactive")
+        .expect("load execution");
+    let iter1_prompts: Vec<_> = snapshot
+        .candidates
+        .iter()
+        .filter(|candidate| candidate.iteration == 1)
+        .map(|candidate| candidate.overrides["agent.prompt"].clone())
+        .collect();
+
+    assert_eq!(snapshot.execution.status, ExecutionStatus::Completed);
+    assert_eq!(iter1_prompts, vec!["v2".to_string(), "v4".to_string()]);
+}
+
 fn swarm_incident_spec() -> ExecutionSpec {
     ExecutionSpec {
         mode: "swarm".to_string(),
@@ -491,6 +568,27 @@ fn search_pipeline_spec() -> ExecutionSpec {
                 proposal(&[("transform.config", "batch256_parallel4")]),
                 proposal(&[("transform.config", "batch512_parallel4_streaming")]),
                 proposal(&[("transform.config", "batch1024_parallel2")]),
+            ],
+        ),
+        swarm: true,
+    }
+}
+
+fn search_signal_reactive_spec() -> ExecutionSpec {
+    ExecutionSpec {
+        mode: "search".to_string(),
+        goal: "react to message stats without leaving incumbent-centered search".to_string(),
+        workflow: workflow(),
+        policy: search_policy(2),
+        evaluation: infra_evaluation(),
+        variation: VariationConfig::explicit(
+            2,
+            vec![
+                proposal(&[("agent.prompt", "baseline")]),
+                proposal(&[("agent.prompt", "v1")]),
+                proposal(&[("agent.prompt", "v2")]),
+                proposal(&[("agent.prompt", "v3")]),
+                proposal(&[("agent.prompt", "v4")]),
             ],
         ),
         swarm: true,
@@ -648,6 +746,18 @@ fn scenario_intent(
         ttl_iterations: 1,
         caused_by: caused_by.map(str::to_string),
         context: None,
+    }
+}
+
+#[cfg(feature = "serde")]
+fn scenario_signal_intent(
+    intent_id: &str,
+    audience: CommunicationIntentAudience,
+    summary_text: &str,
+) -> CommunicationIntent {
+    CommunicationIntent {
+        kind: CommunicationIntentKind::Signal,
+        ..scenario_intent(intent_id, audience, summary_text, None)
     }
 }
 

@@ -113,6 +113,26 @@ pub struct FailureCounts {
     pub total_candidate_failures: u32,
 }
 
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct MessageStats {
+    pub iteration: u32,
+    pub total_messages: usize,
+    pub leader_messages: usize,
+    pub broadcast_messages: usize,
+    pub proposal_count: usize,
+    pub signal_count: usize,
+    pub evaluation_count: usize,
+    pub high_priority_count: usize,
+    pub normal_priority_count: usize,
+    pub low_priority_count: usize,
+    pub delivered_count: usize,
+    pub dropped_count: usize,
+    pub expired_count: usize,
+    pub unique_sources: usize,
+    pub unique_intent_count: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CandidateInbox {
     pub candidate_id: String,

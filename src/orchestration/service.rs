@@ -12,7 +12,7 @@ use super::store::FsExecutionStore;
 use super::strategy::{IterationEvaluation, SearchStrategy, StopReason, SwarmStrategy};
 use super::types::{
     CandidateOutput, CandidateSpec, CandidateStatus, Execution, ExecutionAccumulator,
-    ExecutionCandidate, ExecutionStatus,
+    ExecutionCandidate, ExecutionStatus, MessageStats,
 };
 
 #[cfg(feature = "serde")]
@@ -85,10 +85,11 @@ impl SelectedStrategy {
         &self,
         accumulator: &ExecutionAccumulator,
         inboxes: &[super::types::CandidateInbox],
+        message_stats: Option<&MessageStats>,
     ) -> Vec<super::types::CandidateSpec> {
         match self {
-            Self::Swarm(strategy) => strategy.plan_candidates(accumulator, inboxes),
-            Self::Search(strategy) => strategy.plan_candidates(accumulator, inboxes),
+            Self::Swarm(strategy) => strategy.plan_candidates(accumulator, inboxes, message_stats),
+            Self::Search(strategy) => strategy.plan_candidates(accumulator, inboxes, message_stats),
         }
     }
 
@@ -106,11 +107,12 @@ impl SelectedStrategy {
     fn reduce(
         &self,
         accumulator: ExecutionAccumulator,
+        planned_candidates: &[CandidateSpec],
         evaluation: IterationEvaluation,
     ) -> ExecutionAccumulator {
         match self {
             Self::Swarm(strategy) => strategy.reduce(accumulator, evaluation),
-            Self::Search(strategy) => strategy.reduce(accumulator, evaluation),
+            Self::Search(strategy) => strategy.reduce(accumulator, planned_candidates, evaluation),
         }
     }
 
@@ -595,7 +597,11 @@ where
             .collect::<Vec<_>>();
         #[cfg(feature = "serde")]
         self.materialize_iteration_inboxes(&execution.execution_id, iteration, &inboxes)?;
-        let candidates = strategy.plan_candidates(accumulator, &inboxes);
+        #[cfg(feature = "serde")]
+        let message_stats = Some(self.load_message_stats(&execution.execution_id, iteration)?);
+        #[cfg(not(feature = "serde"))]
+        let message_stats: Option<MessageStats> = None;
+        let candidates = strategy.plan_candidates(accumulator, &inboxes, message_stats.as_ref());
         for candidate in &candidates {
             let candidate_seq = self.next_candidate_id;
             self.save_candidate_state(
@@ -613,6 +619,17 @@ where
             self.next_candidate_id += 1;
         }
         Ok(candidates)
+    }
+
+    #[cfg(feature = "serde")]
+    fn load_message_stats(
+        &self,
+        execution_id: &str,
+        iteration: u32,
+    ) -> io::Result<MessageStats> {
+        let intents = self.store.load_intents(execution_id)?;
+        let messages = self.store.load_routed_messages(execution_id)?;
+        Ok(message_box::extract_message_stats(&intents, &messages, iteration))
     }
 
     fn load_or_plan_iteration_candidates(
@@ -909,7 +926,7 @@ where
             let candidates =
                 self.load_or_plan_iteration_candidates(execution, spec, &accumulator, iteration)?;
 
-            for candidate in candidates {
+            for candidate in &candidates {
                 let candidate_record = self
                     .store
                     .load_candidates(&execution.execution_id)?
@@ -1008,7 +1025,7 @@ where
                 .count() as u32;
             let evaluation = strategy.evaluate(&accumulator, &outputs);
             self.append_event(&execution.execution_id, ControlEventType::CandidateScored)?;
-            accumulator = strategy.reduce(accumulator, evaluation.clone());
+            accumulator = strategy.reduce(accumulator, &candidates, evaluation.clone());
             accumulator.failure_counts.total_candidate_failures = accumulator
                 .failure_counts
                 .total_candidate_failures

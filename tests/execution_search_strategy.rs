@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
 
 use void_control::orchestration::{
-    CandidateInbox, CandidateOutput, ConvergencePolicy, ExecutionAccumulator, IterationEvaluation,
-    MetricDirection, SearchStrategy, ScoringConfig, StopReason, VariationConfig,
-    VariationProposal, VariationSelection, WeightedMetric,
+    CandidateInbox, CandidateOutput, CandidateSpec, ConvergencePolicy, ExecutionAccumulator,
+    IterationEvaluation, MessageStats, MetricDirection, SearchStrategy, ScoringConfig,
+    StopReason, VariationConfig, VariationProposal, VariationSelection, WeightedMetric,
 };
 
 #[test]
@@ -29,6 +29,7 @@ fn search_bootstraps_when_no_seed_exists() {
             CandidateInbox::new("candidate-3"),
             CandidateInbox::new("candidate-4"),
         ],
+        None,
     );
 
     assert!(!candidates.is_empty());
@@ -58,6 +59,7 @@ fn search_refines_around_explicit_incumbent() {
     let candidates = strategy.plan_candidates(
         &accumulator,
         &[CandidateInbox::new("candidate-1"), CandidateInbox::new("candidate-2")],
+        None,
     );
 
     assert_eq!(candidates.len(), 2);
@@ -89,6 +91,7 @@ fn search_avoids_explored_signatures() {
     let candidates = strategy.plan_candidates(
         &accumulator,
         &[CandidateInbox::new("candidate-1"), CandidateInbox::new("candidate-2")],
+        None,
     );
 
     assert_eq!(candidates.len(), 1);
@@ -109,8 +112,20 @@ fn search_reduce_updates_incumbent_phase_and_signatures() {
         ConvergencePolicy::default(),
     );
 
+    let planned_candidates = vec![
+        CandidateSpec {
+            candidate_id: "candidate-1".to_string(),
+            overrides: BTreeMap::from([("agent.prompt".to_string(), "baseline".to_string())]),
+        },
+        CandidateSpec {
+            candidate_id: "candidate-2".to_string(),
+            overrides: BTreeMap::from([("agent.prompt".to_string(), "v1".to_string())]),
+        },
+    ];
+
     let next = strategy.reduce(
         ExecutionAccumulator::default(),
+        &planned_candidates,
         IterationEvaluation {
             ranked_candidates: void_control::orchestration::score_iteration(
                 &scoring_config(),
@@ -161,6 +176,128 @@ fn search_stops_when_no_new_neighbors_remain() {
     );
 
     assert_eq!(stop, Some(StopReason::ConvergencePlateau));
+}
+
+#[test]
+fn search_falls_back_to_incumbent_centered_planning_without_meaningful_stats() {
+    let strategy = SearchStrategy::new(
+        VariationConfig::explicit(
+            2,
+            vec![
+                proposal(&[("agent.prompt", "baseline")]),
+                proposal(&[("agent.prompt", "v1")]),
+                proposal(&[("agent.prompt", "v2")]),
+                proposal(&[("agent.prompt", "v3")]),
+            ],
+        ),
+        scoring_config(),
+        ConvergencePolicy::default(),
+    );
+    let mut accumulator = ExecutionAccumulator::default();
+    accumulator.best_candidate_overrides =
+        BTreeMap::from([("agent.prompt".to_string(), "v1".to_string())]);
+
+    let candidates = strategy.plan_candidates(
+        &accumulator,
+        &[CandidateInbox::new("candidate-1"), CandidateInbox::new("candidate-2")],
+        Some(&MessageStats::default()),
+    );
+
+    assert_eq!(candidates.len(), 2);
+    assert_eq!(candidates[0].overrides["agent.prompt"], "baseline");
+    assert_eq!(candidates[1].overrides["agent.prompt"], "v2");
+}
+
+#[test]
+fn search_keeps_a_small_exploration_quota_when_signal_pressure_is_high() {
+    let strategy = SearchStrategy::new(
+        VariationConfig::explicit(
+            2,
+            vec![
+                proposal(&[("agent.prompt", "baseline")]),
+                proposal(&[("agent.prompt", "v1")]),
+                proposal(&[("agent.prompt", "v2")]),
+                proposal(&[("agent.prompt", "v3")]),
+            ],
+        ),
+        scoring_config(),
+        ConvergencePolicy::default(),
+    );
+    let mut accumulator = ExecutionAccumulator::default();
+    accumulator.best_candidate_overrides =
+        BTreeMap::from([("agent.prompt".to_string(), "v1".to_string())]);
+
+    let candidates = strategy.plan_candidates(
+        &accumulator,
+        &[CandidateInbox::new("candidate-1"), CandidateInbox::new("candidate-2")],
+        Some(&MessageStats {
+            iteration: 1,
+            total_messages: 4,
+            leader_messages: 0,
+            broadcast_messages: 2,
+            proposal_count: 0,
+            signal_count: 3,
+            evaluation_count: 1,
+            high_priority_count: 1,
+            normal_priority_count: 3,
+            low_priority_count: 0,
+            delivered_count: 3,
+            dropped_count: 1,
+            expired_count: 0,
+            unique_sources: 2,
+            unique_intent_count: 4,
+        }),
+    );
+
+    assert_eq!(candidates.len(), 2);
+    assert_eq!(candidates[0].overrides["agent.prompt"], "baseline");
+    assert_eq!(candidates[1].overrides["agent.prompt"], "v3");
+}
+
+#[test]
+fn search_reduce_uses_the_actual_planned_candidates() {
+    let strategy = SearchStrategy::new(
+        VariationConfig::explicit(
+            2,
+            vec![
+                proposal(&[("agent.prompt", "baseline")]),
+                proposal(&[("agent.prompt", "v1")]),
+                proposal(&[("agent.prompt", "v2")]),
+            ],
+        ),
+        scoring_config(),
+        ConvergencePolicy::default(),
+    );
+    let accumulator = ExecutionAccumulator::default();
+    let planned_candidates = vec![
+        CandidateSpec {
+            candidate_id: "candidate-1".to_string(),
+            overrides: BTreeMap::from([("agent.prompt".to_string(), "v2".to_string())]),
+        },
+        CandidateSpec {
+            candidate_id: "candidate-2".to_string(),
+            overrides: BTreeMap::from([("agent.prompt".to_string(), "baseline".to_string())]),
+        },
+    ];
+
+    let next = strategy.reduce(
+        accumulator,
+        &planned_candidates,
+        IterationEvaluation {
+            ranked_candidates: void_control::orchestration::score_iteration(
+                &scoring_config(),
+                &[
+                    candidate_output("candidate-1", true, &[("latency_p99_ms", 60.0)]),
+                    candidate_output("candidate-2", true, &[("latency_p99_ms", 80.0)]),
+                ],
+            ),
+        },
+    );
+
+    assert_eq!(
+        next.best_candidate_overrides.get("agent.prompt").map(String::as_str),
+        Some("v2")
+    );
 }
 
 fn scoring_config() -> ScoringConfig {

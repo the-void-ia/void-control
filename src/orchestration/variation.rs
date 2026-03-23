@@ -63,6 +63,16 @@ impl VariationConfig {
         }
     }
 
+    pub fn signal_reactive(candidates_per_iteration: u32) -> Self {
+        Self {
+            source: "signal_reactive".to_string(),
+            candidates_per_iteration,
+            selection: None,
+            parameter_space: BTreeMap::new(),
+            explicit: Vec::new(),
+        }
+    }
+
     pub fn generate(&self, accumulator: &ExecutionAccumulator) -> Vec<VariationProposal> {
         match self.source.as_str() {
             "parameter_space" => self.generate_parameter_space(),
@@ -74,6 +84,21 @@ impl VariationConfig {
                 .take(self.candidates_per_iteration as usize)
                 .cloned()
                 .collect(),
+            "signal_reactive" => {
+                if !self.explicit.is_empty() {
+                    self.generate_explicit(accumulator)
+                } else if !self.parameter_space.is_empty() {
+                    self.generate_parameter_space()
+                } else {
+                    accumulator
+                        .leader_proposals
+                        .iter()
+                        .filter(|proposal| !proposal.overrides.is_empty())
+                        .take(self.candidates_per_iteration as usize)
+                        .cloned()
+                        .collect()
+                }
+            }
             _ => Vec::new(),
         }
     }

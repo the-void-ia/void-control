@@ -1113,6 +1113,24 @@ impl ExecutionSpecRequest {
                     })
                     .collect(),
             ),
+            "signal_reactive" => VariationConfig {
+                source: "signal_reactive".to_string(),
+                candidates_per_iteration: self.variation.candidates_per_iteration,
+                selection: match self.variation.selection.as_deref() {
+                    Some("random") => Some(VariationSelection::Random),
+                    Some("sequential") | None => Some(VariationSelection::Sequential),
+                    Some(_) => Some(VariationSelection::Sequential),
+                },
+                parameter_space: self.variation.parameter_space.unwrap_or_default(),
+                explicit: self.variation
+                    .explicit
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|proposal| VariationProposal {
+                        overrides: proposal.overrides,
+                    })
+                    .collect(),
+            },
             "leader_directed" => {
                 VariationConfig::leader_directed(self.variation.candidates_per_iteration)
             }

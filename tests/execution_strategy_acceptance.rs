@@ -3,8 +3,9 @@
 use std::collections::BTreeMap;
 
 use void_control::orchestration::{
-    CandidateOutput, CandidateStatus, ControlEventType, ExecutionService, ExecutionSpec,
-    ExecutionStatus, FsExecutionStore, GlobalConfig, OrchestrationPolicy, VariationConfig, VariationProposal,
+    CandidateInbox, CandidateOutput, CandidateStatus, ControlEventType, ExecutionCandidate,
+    ExecutionService, ExecutionSpec, ExecutionStatus, FsExecutionStore, GlobalConfig,
+    OrchestrationPolicy, VariationConfig, VariationProposal,
 };
 #[cfg(feature = "serde")]
 use void_control::orchestration::{
@@ -346,6 +347,201 @@ fn search_strategy_persists_lineage_and_delivers_parent_intent_to_refinement_ite
         .any(|entry| entry.intent_id == "intent-search-parent"));
 }
 
+#[cfg(feature = "serde")]
+#[test]
+fn signal_reactive_search_runs_end_to_end() {
+    let store_dir = temp_store_dir("search-signal-reactive-acceptance");
+    let store = FsExecutionStore::new(store_dir.clone());
+    let mut runtime = MockRuntime::new();
+    let signal_output = output_with_intents(
+        "candidate-1",
+        &[("latency_p99_ms", 95.0), ("cost_usd", 0.05)],
+        vec![signal_intent(
+            "intent-search-signal",
+            CommunicationIntentAudience::Broadcast,
+            "multiple candidates saw the same bottleneck",
+        )],
+    );
+    runtime.seed_success(
+        "exec-run-candidate-1",
+        signal_output.clone(),
+    );
+    runtime.seed_success(
+        "exec-run-candidate-2",
+        output("candidate-2", &[("latency_p99_ms", 80.0), ("cost_usd", 0.03)]),
+    );
+    runtime.seed_success(
+        "exec-run-candidate-3",
+        output("candidate-3", &[("latency_p99_ms", 70.0), ("cost_usd", 0.02)]),
+    );
+    runtime.seed_success(
+        "exec-run-candidate-4",
+        output("candidate-4", &[("latency_p99_ms", 72.0), ("cost_usd", 0.025)]),
+    );
+
+    let execution_id = "exec-search-signal-reactive";
+    ExecutionService::<MockRuntime>::submit_execution(
+        &store,
+        execution_id,
+        &signal_reactive_strategy_spec("search"),
+    )
+    .expect("submit execution");
+    seed_planner_authored_candidates(
+        &store,
+        execution_id,
+        &[
+            (1, 0, "candidate-1", "baseline"),
+            (2, 0, "candidate-2", "v1"),
+            (3, 1, "candidate-3", "v2"),
+            (4, 1, "candidate-4", "v4"),
+        ],
+    );
+    seed_iteration_inboxes(
+        &store,
+        execution_id,
+        1,
+        &["candidate-3", "candidate-4"],
+        &void_control::orchestration::message_box::normalize_intents(
+            "candidate-1",
+            0,
+            &signal_output.intents,
+        )
+        .0,
+    );
+
+    let mut service = ExecutionService::new(
+        GlobalConfig {
+            max_concurrent_child_runs: 2,
+        },
+        runtime,
+        store,
+    );
+    let execution = service
+        .process_execution(execution_id)
+        .expect("process execution");
+
+    let read_store = FsExecutionStore::new(store_dir);
+    let snapshot = read_store
+        .load_execution(execution_id)
+        .expect("load execution snapshot");
+    let intents = read_store.load_intents(execution_id).expect("load intents");
+    let messages = read_store
+        .load_routed_messages(execution_id)
+        .expect("load routed messages");
+    let inbox_one = read_store
+        .load_inbox_snapshot(execution_id, 1, "candidate-3")
+        .expect("load candidate-3 inbox");
+    let inbox_two = read_store
+        .load_inbox_snapshot(execution_id, 1, "candidate-4")
+        .expect("load candidate-4 inbox");
+    let mut refinement_prompts: Vec<_> = snapshot
+        .candidates
+        .iter()
+        .filter(|candidate| candidate.iteration == 1)
+        .map(|candidate| candidate.overrides["agent.prompt"].clone())
+        .collect();
+    refinement_prompts.sort();
+
+    assert_eq!(execution.status, ExecutionStatus::Completed);
+    assert_eq!(snapshot.execution.status, ExecutionStatus::Completed);
+    assert_eq!(snapshot.execution.mode, "search");
+    assert_eq!(refinement_prompts, vec!["v2".to_string(), "v4".to_string()]);
+    assert_eq!(snapshot.candidates.len(), 4);
+    assert_eq!(intents.len(), 1);
+    assert_eq!(
+        messages
+            .iter()
+            .filter(|message| message.status == void_control::orchestration::RoutedMessageStatus::Routed)
+            .count(),
+        1
+    );
+    assert_eq!(
+        messages
+            .iter()
+            .filter(|message| message.status == void_control::orchestration::RoutedMessageStatus::Delivered)
+            .count(),
+        2
+    );
+    assert_eq!(inbox_one.entries.len(), 1);
+    assert_eq!(inbox_two.entries.len(), 1);
+}
+
+#[cfg(feature = "serde")]
+#[test]
+fn legacy_leader_directed_uses_persisted_planner_proposals() {
+    let store_dir = temp_store_dir("leader-directed-legacy-acceptance");
+    let store = FsExecutionStore::new(store_dir.clone());
+    let spec = legacy_leader_directed_strategy_spec();
+    let mut runtime = MockRuntime::new();
+    runtime.seed_success(
+        "exec-run-candidate-1",
+        output("candidate-1", &[("latency_p99_ms", 95.0), ("cost_usd", 0.05)]),
+    );
+    runtime.seed_success(
+        "exec-run-candidate-2",
+        output("candidate-2", &[("latency_p99_ms", 80.0), ("cost_usd", 0.03)]),
+    );
+    runtime.seed_success(
+        "exec-run-candidate-3",
+        output("candidate-3", &[("latency_p99_ms", 70.0), ("cost_usd", 0.02)]),
+    );
+    runtime.seed_success(
+        "exec-run-candidate-4",
+        output("candidate-4", &[("latency_p99_ms", 72.0), ("cost_usd", 0.025)]),
+    );
+
+    ExecutionService::<MockRuntime>::submit_execution(&store, "exec-legacy-leader", &spec)
+        .expect("submit execution");
+    seed_planner_authored_candidates(
+        &store,
+        "exec-legacy-leader",
+        &[
+            (1, 0, "candidate-1", "legacy-a"),
+            (2, 0, "candidate-2", "legacy-b"),
+            (3, 1, "candidate-3", "legacy-c"),
+            (4, 1, "candidate-4", "legacy-d"),
+        ],
+    );
+
+    let mut service = ExecutionService::new(
+        GlobalConfig {
+            max_concurrent_child_runs: 2,
+        },
+        runtime,
+        store,
+    );
+    let execution = service
+        .process_execution("exec-legacy-leader")
+        .expect("process execution");
+
+    let candidates = FsExecutionStore::new(store_dir.clone())
+        .load_candidates("exec-legacy-leader")
+        .expect("load candidates");
+    let prompts: Vec<_> = candidates
+        .iter()
+        .map(|candidate| candidate.overrides["agent.prompt"].clone())
+        .collect();
+
+    assert_eq!(execution.status, ExecutionStatus::Completed);
+    assert_eq!(
+        prompts,
+        vec![
+            "legacy-a".to_string(),
+            "legacy-b".to_string(),
+            "legacy-c".to_string(),
+            "legacy-d".to_string(),
+        ]
+    );
+    assert_eq!(
+        FsExecutionStore::new(store_dir)
+            .load_spec("exec-legacy-leader")
+            .expect("load spec")
+            .variation
+            .source,
+        "leader_directed"
+    );
+}
+
 fn run_mode_to_completion(
     mode: &str,
     store_dir: std::path::PathBuf,
@@ -479,10 +675,93 @@ fn strategy_spec(mode: &str) -> ExecutionSpec {
     }
 }
 
+fn signal_reactive_strategy_spec(mode: &str) -> ExecutionSpec {
+    let mut spec = strategy_spec(mode);
+    spec.variation = VariationConfig {
+        source: "signal_reactive".to_string(),
+        candidates_per_iteration: 2,
+        selection: None,
+        parameter_space: BTreeMap::new(),
+        explicit: vec![
+            VariationProposal {
+                overrides: BTreeMap::from([("agent.prompt".to_string(), "baseline".to_string())]),
+            },
+            VariationProposal {
+                overrides: BTreeMap::from([("agent.prompt".to_string(), "v1".to_string())]),
+            },
+            VariationProposal {
+                overrides: BTreeMap::from([("agent.prompt".to_string(), "v2".to_string())]),
+            },
+            VariationProposal {
+                overrides: BTreeMap::from([("agent.prompt".to_string(), "v3".to_string())]),
+            },
+            VariationProposal {
+                overrides: BTreeMap::from([("agent.prompt".to_string(), "v4".to_string())]),
+            },
+        ],
+    };
+    spec
+}
+
+fn legacy_leader_directed_strategy_spec() -> ExecutionSpec {
+    let mut spec = strategy_spec("swarm");
+    spec.policy.budget.max_iterations = Some(2);
+    spec.variation = VariationConfig::leader_directed(2);
+    spec
+}
+
 fn failing_strategy_spec(mode: &str) -> ExecutionSpec {
     let mut spec = strategy_spec(mode);
     spec.policy.budget.max_iterations = Some(1);
     spec
+}
+
+fn seed_planner_authored_candidates(
+    store: &FsExecutionStore,
+    execution_id: &str,
+    candidates: &[(u64, u32, &str, &str)],
+) {
+    for (created_seq, iteration, candidate_id, prompt) in candidates {
+        let mut candidate = ExecutionCandidate::new(
+            execution_id,
+            candidate_id,
+            *created_seq,
+            *iteration,
+            CandidateStatus::Queued,
+        );
+        candidate
+            .overrides
+            .insert("agent.prompt".to_string(), (*prompt).to_string());
+        store.save_candidate(&candidate).expect("save candidate");
+    }
+}
+
+fn seed_iteration_inboxes(
+    store: &FsExecutionStore,
+    execution_id: &str,
+    iteration: u32,
+    candidate_ids: &[&str],
+    intents: &[CommunicationIntent],
+) {
+    let inboxes = candidate_ids
+        .iter()
+        .map(|candidate_id| CandidateInbox::new(candidate_id))
+        .collect::<Vec<_>>();
+    let routed = void_control::orchestration::message_box::route_intents(intents);
+    for (snapshot, delivered) in void_control::orchestration::message_box::materialize_inbox_snapshots(
+        execution_id,
+        iteration,
+        &inboxes,
+        intents,
+        &routed,
+    ) {
+        store.save_inbox_snapshot(&snapshot).expect("save inbox snapshot");
+        for delivered in delivered {
+            store
+                .append_routed_message(execution_id, &delivered)
+                .expect("append delivered message");
+        }
+    }
 }
 
 fn assert_event_counts(
@@ -537,6 +816,18 @@ fn proposal_intent(
         ttl_iterations: 1,
         caused_by: caused_by.map(str::to_string),
         context: None,
+    }
+}
+
+#[cfg(feature = "serde")]
+fn signal_intent(
+    intent_id: &str,
+    audience: CommunicationIntentAudience,
+    summary_text: &str,
+) -> CommunicationIntent {
+    CommunicationIntent {
+        kind: CommunicationIntentKind::Signal,
+        ..proposal_intent(intent_id, audience, summary_text, None)
     }
 }
 

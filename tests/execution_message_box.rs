@@ -14,8 +14,9 @@ use void_control::contract::{
 use void_control::orchestration::{
     CandidateOutput, CandidateSpec, CandidateStatus, CommunicationIntent, CommunicationIntentAudience,
     CommunicationIntentKind, CommunicationIntentPriority, ExecutionCandidate, ExecutionService, ExecutionSpec,
-    FsExecutionStore, GlobalConfig, InboxEntry, InboxSnapshot, OrchestrationPolicy, RoutedMessage, RoutedMessageStatus,
-    StructuredOutputResult, VariationConfig, VariationProposal, WorkflowTemplateRef,
+    FsExecutionStore, GlobalConfig, InboxEntry, InboxSnapshot, MessageStats, OrchestrationPolicy, RoutedMessage,
+    RoutedMessageStatus, StructuredOutputResult, VariationConfig, VariationProposal, WorkflowTemplateRef,
+    extract_message_stats,
 };
 use void_control::orchestration::service::ExecutionRuntime;
 use void_control::runtime::MockRuntime;
@@ -96,6 +97,105 @@ fn fs_store_round_trips_message_box_logs() {
     let message_log = fs::read_to_string(root.join("exec-message-box").join("messages.log"))
         .expect("read messages log");
     assert_eq!(message_log.lines().count(), 2);
+}
+
+#[test]
+fn extract_message_stats_joins_intents_by_id_for_routed_messages() {
+    let intents = vec![
+        CommunicationIntent {
+            intent_id: "intent-2".to_string(),
+            from_candidate_id: "candidate-2".to_string(),
+            iteration: 0,
+            kind: CommunicationIntentKind::Evaluation,
+            audience: CommunicationIntentAudience::Broadcast,
+            payload: json_payload("summary-two", "hint-two"),
+            priority: CommunicationIntentPriority::Low,
+            ttl_iterations: 2,
+            caused_by: None,
+            context: None,
+        },
+        CommunicationIntent {
+            intent_id: "intent-1".to_string(),
+            from_candidate_id: "candidate-1".to_string(),
+            iteration: 0,
+            kind: CommunicationIntentKind::Proposal,
+            audience: CommunicationIntentAudience::Leader,
+            payload: json_payload("summary-one", "hint-one"),
+            priority: CommunicationIntentPriority::High,
+            ttl_iterations: 1,
+            caused_by: None,
+            context: None,
+        },
+        CommunicationIntent {
+            intent_id: "intent-3".to_string(),
+            from_candidate_id: "candidate-3".to_string(),
+            iteration: 1,
+            kind: CommunicationIntentKind::Signal,
+            audience: CommunicationIntentAudience::Broadcast,
+            payload: json_payload("summary-three", "hint-three"),
+            priority: CommunicationIntentPriority::Normal,
+            ttl_iterations: 1,
+            caused_by: Some("intent-1".to_string()),
+            context: None,
+        },
+    ];
+    let routed_messages = vec![
+        RoutedMessage {
+            message_id: "message-1".to_string(),
+            intent_id: "intent-1".to_string(),
+            to: "leader".to_string(),
+            delivery_iteration: 2,
+            routing_reason: "leader_feedback_channel".to_string(),
+            status: RoutedMessageStatus::Delivered,
+        },
+        RoutedMessage {
+            message_id: "message-2".to_string(),
+            intent_id: "intent-2".to_string(),
+            to: "broadcast".to_string(),
+            delivery_iteration: 2,
+            routing_reason: "broadcast_fanout".to_string(),
+            status: RoutedMessageStatus::Dropped,
+        },
+        RoutedMessage {
+            message_id: "message-3".to_string(),
+            intent_id: "intent-3".to_string(),
+            to: "broadcast".to_string(),
+            delivery_iteration: 2,
+            routing_reason: "broadcast_fanout".to_string(),
+            status: RoutedMessageStatus::Expired,
+        },
+        RoutedMessage {
+            message_id: "message-4".to_string(),
+            intent_id: "intent-3".to_string(),
+            to: "broadcast".to_string(),
+            delivery_iteration: 3,
+            routing_reason: "broadcast_fanout".to_string(),
+            status: RoutedMessageStatus::Routed,
+        },
+    ];
+
+    let stats = extract_message_stats(&intents, &routed_messages, 2);
+
+    assert_eq!(
+        stats,
+        MessageStats {
+            iteration: 2,
+            total_messages: 3,
+            leader_messages: 1,
+            broadcast_messages: 2,
+            proposal_count: 1,
+            signal_count: 1,
+            evaluation_count: 1,
+            high_priority_count: 1,
+            normal_priority_count: 1,
+            low_priority_count: 1,
+            delivered_count: 1,
+            dropped_count: 1,
+            expired_count: 1,
+            unique_sources: 3,
+            unique_intent_count: 3,
+        }
+    );
 }
 
 #[test]

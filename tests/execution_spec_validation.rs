@@ -87,6 +87,74 @@ fn accepts_search_mode() {
         .expect("expected search mode to validate");
 }
 
+#[test]
+fn rejects_unknown_variation_source() {
+    let mut spec = base_spec();
+    spec.variation.source = "unsupported_mode".to_string();
+
+    let err = spec
+        .validate(&global_config())
+        .expect_err("expected invalid variation source to fail");
+
+    assert!(err.to_string().contains("unsupported_mode"));
+}
+
+#[cfg(feature = "serde")]
+#[test]
+fn bridge_accepts_signal_reactive_and_legacy_leader_directed_variations() {
+    use serde_json::json;
+
+    for source in ["signal_reactive", "leader_directed"] {
+        let body = json!({
+            "mode": "swarm",
+            "goal": "optimize latency",
+            "workflow": { "template": "fixtures/sample.vbrun" },
+            "policy": {
+                "budget": {
+                    "max_iterations": 3,
+                    "max_wall_clock_secs": 60
+                },
+                "concurrency": {
+                    "max_concurrent_candidates": 2
+                },
+                "convergence": {
+                    "strategy": "exhaustive"
+                },
+                "max_candidate_failures_per_iteration": 10,
+                "missing_output_policy": "mark_failed",
+                "iteration_failure_policy": "fail_execution"
+            },
+            "evaluation": {
+                "scoring_type": "weighted_metrics",
+                "weights": {
+                    "latency_p99_ms": -0.6,
+                    "cost_usd": -0.4
+                },
+                "pass_threshold": 0.7,
+                "ranking": "highest_score",
+                "tie_breaking": "cost_usd"
+            },
+            "variation": {
+                "source": source,
+                "candidates_per_iteration": 2
+            },
+            "swarm": true
+        })
+        .to_string();
+
+        let response = void_control::bridge::handle_bridge_request_for_test(
+            "POST",
+            "/v1/executions/dry-run",
+            Some(&body),
+        )
+        .expect("response");
+
+        assert_eq!(response.status, 200);
+        assert_eq!(response.json["valid"], true);
+        assert_eq!(response.json["plan"]["variation_source"], source);
+    }
+}
+
 fn global_config() -> GlobalConfig {
     GlobalConfig {
         max_concurrent_child_runs: 4,

@@ -78,6 +78,16 @@ impl ExecutionSpec {
             ));
         }
 
+        if !matches!(
+            self.variation.source.as_str(),
+            "parameter_space" | "explicit" | "leader_directed" | "signal_reactive"
+        ) {
+            return Err(SpecValidationError::new(format!(
+                "unknown variation source '{}'",
+                self.variation.source
+            )));
+        }
+
         if self.workflow.template.trim().is_empty() {
             return Err(SpecValidationError::new("workflow.template is required"));
         }

@@ -1,13 +1,14 @@
 #[cfg(feature = "serde")]
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 #[cfg(feature = "serde")]
 use serde_json::Value;
 
 #[cfg(feature = "serde")]
 use super::types::{
-    CandidateInbox, CommunicationIntent, CommunicationIntentAudience, InboxEntry, InboxSnapshot,
-    RoutedMessage, RoutedMessageStatus,
+    CandidateInbox, CommunicationIntent, CommunicationIntentAudience, CommunicationIntentKind,
+    CommunicationIntentPriority, InboxEntry, InboxSnapshot, MessageStats, RoutedMessage,
+    RoutedMessageStatus,
 };
 
 #[cfg(feature = "serde")]
@@ -73,6 +74,66 @@ pub fn route_intents(intents: &[CommunicationIntent]) -> Vec<RoutedMessage> {
             }
         })
         .collect()
+}
+
+#[cfg(feature = "serde")]
+pub fn extract_message_stats(
+    intents: &[CommunicationIntent],
+    routed_messages: &[RoutedMessage],
+    delivery_iteration: u32,
+) -> MessageStats {
+    let intents_by_id: BTreeMap<_, _> = intents
+        .iter()
+        .map(|intent| (intent.intent_id.clone(), intent))
+        .collect();
+    let mut stats = MessageStats {
+        iteration: delivery_iteration,
+        ..MessageStats::default()
+    };
+    let mut unique_sources = BTreeSet::new();
+    let mut unique_intents = BTreeSet::new();
+
+    for message in routed_messages
+        .iter()
+        .filter(|message| message.delivery_iteration == delivery_iteration)
+    {
+        let Some(intent) = intents_by_id.get(&message.intent_id) else {
+            continue;
+        };
+
+        stats.total_messages += 1;
+        unique_intents.insert(intent.intent_id.clone());
+        unique_sources.insert(intent.from_candidate_id.clone());
+
+        match message.to.as_str() {
+            "leader" => stats.leader_messages += 1,
+            "broadcast" => stats.broadcast_messages += 1,
+            _ => {}
+        }
+
+        match intent.kind {
+            CommunicationIntentKind::Proposal => stats.proposal_count += 1,
+            CommunicationIntentKind::Signal => stats.signal_count += 1,
+            CommunicationIntentKind::Evaluation => stats.evaluation_count += 1,
+        }
+
+        match intent.priority {
+            CommunicationIntentPriority::High => stats.high_priority_count += 1,
+            CommunicationIntentPriority::Normal => stats.normal_priority_count += 1,
+            CommunicationIntentPriority::Low => stats.low_priority_count += 1,
+        }
+
+        match message.status {
+            RoutedMessageStatus::Delivered => stats.delivered_count += 1,
+            RoutedMessageStatus::Dropped => stats.dropped_count += 1,
+            RoutedMessageStatus::Expired => stats.expired_count += 1,
+            RoutedMessageStatus::Routed => {}
+        }
+    }
+
+    stats.unique_sources = unique_sources.len();
+    stats.unique_intent_count = unique_intents.len();
+    stats
 }
 
 #[cfg(feature = "serde")]

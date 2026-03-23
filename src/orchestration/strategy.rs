@@ -1,6 +1,8 @@
 use super::policy::ConvergencePolicy;
 use super::scoring::{score_iteration, RankedCandidate, ScoringConfig};
-use super::types::{CandidateInbox, CandidateOutput, CandidateSpec, ExecutionAccumulator};
+use super::types::{
+    CandidateInbox, CandidateOutput, CandidateSpec, ExecutionAccumulator, MessageStats,
+};
 use super::variation::VariationConfig;
 use std::collections::BTreeMap;
 
@@ -60,8 +62,10 @@ impl SwarmStrategy {
         &self,
         accumulator: &ExecutionAccumulator,
         inboxes: &[CandidateInbox],
+        message_stats: Option<&MessageStats>,
     ) -> Vec<CandidateSpec> {
-        self.variation
+        let mut candidates: Vec<_> = self
+            .variation
             .generate(accumulator)
             .into_iter()
             .enumerate()
@@ -72,7 +76,21 @@ impl SwarmStrategy {
                     .unwrap_or_else(|| format!("candidate-{}", idx + 1)),
                 overrides: proposal.overrides,
             })
-            .collect()
+            .collect();
+
+        if let Some(stats) = advisory_message_stats(&self.variation, message_stats) {
+            let exploration_pressure = stats.proposal_count
+                + stats.signal_count
+                + stats.unique_sources
+                + stats.leader_messages;
+            let convergence_pressure =
+                stats.broadcast_messages + stats.dropped_count + stats.expired_count;
+            if convergence_pressure > exploration_pressure && candidates.len() > 1 {
+                candidates.truncate((candidates.len() + 1) / 2);
+            }
+        }
+
+        candidates
     }
 
     pub fn evaluate(
@@ -151,11 +169,12 @@ impl SearchStrategy {
         &self,
         accumulator: &ExecutionAccumulator,
         inboxes: &[CandidateInbox],
+        message_stats: Option<&MessageStats>,
     ) -> Vec<CandidateSpec> {
         let proposals = if accumulator.best_candidate_overrides.is_empty() {
             self.bootstrap_proposals(accumulator)
         } else {
-            self.refinement_proposals(accumulator)
+            self.refinement_proposals(accumulator, message_stats)
         };
 
         proposals
@@ -207,7 +226,7 @@ impl SearchStrategy {
         }
 
         if !accumulator.best_candidate_overrides.is_empty()
-            && self.refinement_proposals(accumulator).is_empty()
+            && self.refinement_proposals(accumulator, None).is_empty()
         {
             return Some(StopReason::ConvergencePlateau);
         }
@@ -217,14 +236,9 @@ impl SearchStrategy {
     pub fn reduce(
         &self,
         mut accumulator: ExecutionAccumulator,
+        planned_candidates: &[CandidateSpec],
         evaluation: IterationEvaluation,
     ) -> ExecutionAccumulator {
-        let candidate_slots = default_candidate_inboxes(self.variation.candidates_per_iteration as usize);
-        let planned_candidates = self.plan_candidates(
-            &accumulator,
-            &candidate_slots,
-        );
-
         accumulator.scoring_history_len += 1;
         accumulator.completed_iterations += 1;
         accumulator.failure_counts.total_candidate_failures += evaluation
@@ -245,7 +259,7 @@ impl SearchStrategy {
                 }
             }
         }
-        for candidate in &planned_candidates {
+        for candidate in planned_candidates {
             let signature = candidate_signature(&candidate.overrides);
             if !signature.is_empty() && !accumulator.explored_signatures.contains(&signature) {
                 accumulator.explored_signatures.push(signature);
@@ -276,19 +290,38 @@ impl SearchStrategy {
     fn refinement_proposals(
         &self,
         accumulator: &ExecutionAccumulator,
+        message_stats: Option<&MessageStats>,
     ) -> Vec<super::variation::VariationProposal> {
-        match self.variation.source.as_str() {
-            "explicit" => self.refine_explicit(accumulator),
-            "parameter_space" => self.refine_parameter_space(accumulator),
-            _ => Vec::new(),
+        let mut proposals: Vec<_> = match refinement_source(&self.variation) {
+            RefinementSource::Explicit => self.refine_explicit(accumulator),
+            RefinementSource::ParameterSpace => self.refine_parameter_space(accumulator),
+            RefinementSource::None => Vec::new(),
         }
         .into_iter()
         .filter(|proposal| {
             let signature = candidate_signature(&proposal.overrides);
             !accumulator.explored_signatures.contains(&signature)
         })
-        .take(self.variation.candidates_per_iteration as usize)
-        .collect()
+        .collect();
+
+        if let Some(stats) = advisory_message_stats(&self.variation, message_stats) {
+            let exploration_pressure = stats.signal_count + stats.dropped_count + stats.expired_count;
+            let refinement_pressure = stats.evaluation_count + stats.leader_messages;
+            if exploration_pressure > refinement_pressure && proposals.len() > 2 {
+                let first = proposals.remove(0);
+                if let Some(last) = proposals.pop() {
+                    proposals.insert(0, last);
+                    proposals.insert(0, first);
+                } else {
+                    proposals.insert(0, first);
+                }
+            }
+        }
+
+        proposals
+            .into_iter()
+            .take(self.variation.candidates_per_iteration as usize)
+            .collect()
     }
 
     fn refine_explicit(
@@ -349,17 +382,40 @@ impl SearchStrategy {
     }
 }
 
-fn default_candidate_inboxes(count: usize) -> Vec<CandidateInbox> {
-    let count = count.max(1);
-    (0..count)
-        .map(|idx| CandidateInbox::new(&format!("candidate-{}", idx + 1)))
-        .collect()
-}
-
 fn candidate_signature(overrides: &BTreeMap<String, String>) -> String {
     overrides
         .iter()
         .map(|(key, value)| format!("{key}={value}"))
         .collect::<Vec<_>>()
         .join("|")
+}
+
+fn advisory_message_stats<'a>(
+    variation: &VariationConfig,
+    message_stats: Option<&'a MessageStats>,
+) -> Option<&'a MessageStats> {
+    let stats = message_stats?;
+    if variation.source == "leader_directed" || stats.total_messages == 0 {
+        return None;
+    }
+    Some(stats)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RefinementSource {
+    Explicit,
+    ParameterSpace,
+    None,
+}
+
+fn refinement_source(variation: &VariationConfig) -> RefinementSource {
+    match variation.source.as_str() {
+        "explicit" => RefinementSource::Explicit,
+        "parameter_space" => RefinementSource::ParameterSpace,
+        "signal_reactive" if !variation.explicit.is_empty() => RefinementSource::Explicit,
+        "signal_reactive" if !variation.parameter_space.is_empty() => {
+            RefinementSource::ParameterSpace
+        }
+        _ => RefinementSource::None,
+    }
 }
