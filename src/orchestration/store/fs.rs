@@ -385,19 +385,16 @@ impl FsExecutionStore {
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err.to_string()))?;
         let explored_signatures = serde_json::to_string(&accumulator.explored_signatures)
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err.to_string()))?;
-        let message_backlog = serde_json::to_string(&accumulator.message_backlog)
-            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err.to_string()))?;
         fs::write(
             self.execution_dir(execution_id).join("accumulator.txt"),
             format!(
-                "{}\n{}\n{}\n{}\n{}\n{}\n{}",
+                "{}\n{}\n{}\n{}\n{}\n{}",
                 accumulator.scoring_history_len,
                 accumulator.completed_iterations,
                 accumulator.best_candidate_id.as_deref().unwrap_or(""),
                 best_candidate_overrides,
                 accumulator.search_phase.as_deref().unwrap_or(""),
                 explored_signatures,
-                message_backlog,
             ),
         )
     }
@@ -731,11 +728,7 @@ fn parse_accumulator(contents: &str) -> io::Result<ExecutionAccumulator> {
         .map(|value| serde_json::from_str(&value).map_err(invalid_data))
         .transpose()?
         .unwrap_or_default();
-    let message_backlog = optional_line(&mut lines)
-        .filter(|value| !value.is_empty())
-        .map(|value| serde_json::from_str(&value).map_err(invalid_data))
-        .transpose()?
-        .unwrap_or_default();
+    let _legacy_message_backlog = optional_line(&mut lines);
     Ok(ExecutionAccumulator {
         scoring_history_len,
         completed_iterations,
@@ -743,7 +736,6 @@ fn parse_accumulator(contents: &str) -> io::Result<ExecutionAccumulator> {
         best_candidate_overrides,
         search_phase,
         explored_signatures,
-        message_backlog,
         ..ExecutionAccumulator::default()
     })
 }

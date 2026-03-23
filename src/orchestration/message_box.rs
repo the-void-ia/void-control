@@ -175,6 +175,40 @@ pub fn materialize_inbox_snapshots(
 }
 
 #[cfg(feature = "serde")]
+pub fn build_candidate_inboxes(
+    delivery_iteration: u32,
+    candidate_count: usize,
+    intents: &[CommunicationIntent],
+    messages: &[RoutedMessage],
+) -> Vec<CandidateInbox> {
+    let mut inboxes: Vec<_> = (0..candidate_count)
+        .map(|idx| CandidateInbox::new(&format!("candidate-{}", idx + 1)))
+        .collect();
+    let pending = pending_delivery_messages(intents, messages, delivery_iteration);
+
+    for (intent, message) in pending {
+        let summary = summary_text(&intent.payload);
+        match message.to.as_str() {
+            "broadcast" => {
+                for inbox in &mut inboxes {
+                    inbox.messages.push(summary.clone());
+                }
+            }
+            _ => {
+                if let Some(first) = inboxes.first_mut() {
+                    first.messages.push(summary);
+                }
+            }
+        }
+    }
+
+    if inboxes.is_empty() {
+        return vec![CandidateInbox::new("candidate-1")];
+    }
+    inboxes
+}
+
+#[cfg(feature = "serde")]
 fn payload_has_summary_text(payload: &Value) -> bool {
     payload
         .get("summary_text")

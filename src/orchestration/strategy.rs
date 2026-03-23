@@ -56,25 +56,6 @@ impl SwarmStrategy {
         }
     }
 
-    pub fn materialize_inboxes(
-        &self,
-        accumulator: &ExecutionAccumulator,
-    ) -> Vec<CandidateInbox> {
-        if accumulator.message_backlog.is_empty() {
-            return vec![CandidateInbox::new("candidate-1")];
-        }
-
-        accumulator
-            .message_backlog
-            .iter()
-            .enumerate()
-            .map(|(idx, message)| CandidateInbox {
-                candidate_id: format!("candidate-{}", idx + 1),
-                messages: vec![message.clone()],
-            })
-            .collect()
-    }
-
     pub fn plan_candidates(
         &self,
         accumulator: &ExecutionAccumulator,
@@ -166,13 +147,6 @@ impl SearchStrategy {
         }
     }
 
-    pub fn materialize_inboxes(
-        &self,
-        accumulator: &ExecutionAccumulator,
-    ) -> Vec<CandidateInbox> {
-        SwarmStrategy::default().materialize_inboxes(accumulator)
-    }
-
     pub fn plan_candidates(
         &self,
         accumulator: &ExecutionAccumulator,
@@ -245,9 +219,10 @@ impl SearchStrategy {
         mut accumulator: ExecutionAccumulator,
         evaluation: IterationEvaluation,
     ) -> ExecutionAccumulator {
+        let candidate_slots = default_candidate_inboxes(self.variation.candidates_per_iteration as usize);
         let planned_candidates = self.plan_candidates(
             &accumulator,
-            &self.materialize_inboxes(&accumulator),
+            &candidate_slots,
         );
 
         accumulator.scoring_history_len += 1;
@@ -372,6 +347,13 @@ impl SearchStrategy {
         }
         proposals
     }
+}
+
+fn default_candidate_inboxes(count: usize) -> Vec<CandidateInbox> {
+    let count = count.max(1);
+    (0..count)
+        .map(|idx| CandidateInbox::new(&format!("candidate-{}", idx + 1)))
+        .collect()
 }
 
 fn candidate_signature(overrides: &BTreeMap<String, String>) -> String {

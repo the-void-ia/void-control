@@ -1,3 +1,5 @@
+#![cfg(feature = "serde")]
+
 use std::collections::BTreeMap;
 
 use void_control::orchestration::{
@@ -133,7 +135,7 @@ fn swarm_incident_mitigation_explores_distinct_hypotheses_and_finds_best_family(
             .iter()
             .filter(|message| message.status == RoutedMessageStatus::Delivered)
             .count(),
-        3
+        6
     );
     assert_eq!(inbox_one.entries.len(), 2);
     assert_eq!(inbox_two.entries.len(), 1);
@@ -146,7 +148,7 @@ fn swarm_incident_mitigation_explores_distinct_hypotheses_and_finds_best_family(
             (ControlEventType::CandidateScored, 2),
             (ControlEventType::CommunicationIntentEmitted, 2),
             (ControlEventType::MessageRouted, 2),
-            (ControlEventType::MessageDelivered, 3),
+            (ControlEventType::MessageDelivered, 6),
             (ControlEventType::ExecutionCompleted, 1),
         ],
     );

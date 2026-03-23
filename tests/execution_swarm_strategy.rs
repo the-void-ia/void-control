@@ -109,17 +109,6 @@ fn leader_directed_proposals_are_validated_before_use() {
 }
 
 #[test]
-fn swarm_materializes_inboxes_from_message_backlog() {
-    let mut accumulator = ExecutionAccumulator::default();
-    accumulator.message_backlog = vec!["hello".to_string(), "world".to_string()];
-
-    let inboxes = SwarmStrategy::default().materialize_inboxes(&accumulator);
-
-    assert_eq!(inboxes.len(), 2);
-    assert_eq!(inboxes[0].messages[0], "hello");
-}
-
-#[test]
 fn swarm_plans_candidates_from_variation_source() {
     let strategy = SwarmStrategy::new(
         VariationConfig::explicit(

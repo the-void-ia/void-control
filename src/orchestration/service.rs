@@ -81,16 +81,6 @@ impl SelectedStrategy {
         }
     }
 
-    fn materialize_inboxes(
-        &self,
-        accumulator: &ExecutionAccumulator,
-    ) -> Vec<super::types::CandidateInbox> {
-        match self {
-            Self::Swarm(strategy) => strategy.materialize_inboxes(accumulator),
-            Self::Search(strategy) => strategy.materialize_inboxes(accumulator),
-        }
-    }
-
     fn plan_candidates(
         &self,
         accumulator: &ExecutionAccumulator,
@@ -174,6 +164,7 @@ impl<R> ExecutionService<R>
 where
     R: ExecutionRuntime,
 {
+    #[cfg(feature = "serde")]
     fn with_claimed_execution<T>(
         &mut self,
         execution_id: &str,
@@ -588,24 +579,23 @@ where
         let strategy = SelectedStrategy::new(spec);
         self.append_event(&execution.execution_id, ControlEventType::IterationStarted)?;
         #[cfg(feature = "serde")]
-        let effective_accumulator = {
-            let mut effective = accumulator.clone();
+        let inboxes = {
             let intents = self.store.load_intents(&execution.execution_id)?;
             let messages = self.store.load_routed_messages(&execution.execution_id)?;
-            let message_backlog =
-                message_box::backlog_from_pending_messages(&intents, &messages, iteration);
-            if !message_backlog.is_empty() {
-                effective.message_backlog = message_backlog;
-            }
-            effective
+            message_box::build_candidate_inboxes(
+                iteration,
+                spec.variation.candidates_per_iteration as usize,
+                &intents,
+                &messages,
+            )
         };
         #[cfg(not(feature = "serde"))]
-        let effective_accumulator = accumulator.clone();
-
-        let inboxes = strategy.materialize_inboxes(&effective_accumulator);
+        let inboxes = (0..spec.variation.candidates_per_iteration.max(1) as usize)
+            .map(|idx| super::types::CandidateInbox::new(&format!("candidate-{}", idx + 1)))
+            .collect::<Vec<_>>();
         #[cfg(feature = "serde")]
         self.materialize_iteration_inboxes(&execution.execution_id, iteration, &inboxes)?;
-        let candidates = strategy.plan_candidates(&effective_accumulator, &inboxes);
+        let candidates = strategy.plan_candidates(accumulator, &inboxes);
         for candidate in &candidates {
             let candidate_seq = self.next_candidate_id;
             self.save_candidate_state(

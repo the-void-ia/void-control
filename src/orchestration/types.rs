@@ -90,7 +90,6 @@ impl ExecutionCandidate {
 pub struct ExecutionAccumulator {
     pub scoring_history_len: u32,
     pub completed_iterations: u32,
-    pub message_backlog: Vec<String>,
     pub leader_proposals: Vec<crate::orchestration::variation::VariationProposal>,
     pub iterations_without_improvement: u32,
     pub best_candidate_id: Option<String>,
