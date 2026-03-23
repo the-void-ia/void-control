@@ -9,8 +9,7 @@ use serde_json::json;
 
 use void_control::orchestration::{
     BudgetPolicy, ConcurrencyPolicy, ConvergencePolicy, EvaluationConfig, ExecutionSpec,
-    GlobalConfig, OrchestrationPolicy, VariationConfig, VariationProposal,
-    WorkflowTemplateRef,
+    GlobalConfig, OrchestrationPolicy, VariationConfig, VariationProposal, WorkflowTemplateRef,
 };
 use void_control::runtime::VoidBoxRuntimeClient;
 
@@ -38,8 +37,8 @@ fn bridge_submission_and_worker_loop_complete_execution_against_live_daemon() {
         .expect("execution_id")
         .to_string();
 
-    let base_url = std::env::var("VOID_BOX_BASE_URL")
-        .unwrap_or_else(|_| "http://127.0.0.1:43100".to_string());
+    let base_url =
+        std::env::var("VOID_BOX_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:43100".to_string());
 
     let mut attempts = 0;
     loop {
@@ -84,7 +83,9 @@ fn bridge_submission_and_worker_loop_complete_execution_against_live_daemon() {
             .expect("get execution events");
             assert_eq!(events.status, 200);
             let items = events.json["events"].as_array().expect("events array");
-            assert!(items.iter().any(|event| event["event_type"] == "ExecutionStarted"));
+            assert!(items
+                .iter()
+                .any(|event| event["event_type"] == "ExecutionStarted"));
             assert!(items
                 .iter()
                 .any(|event| event["event_type"] == "CandidateOutputCollected"));
@@ -107,8 +108,8 @@ fn bridge_multiple_executions_complete_against_live_daemon() {
     let execution_dir = root.join("executions");
     let spec = structured_output_spec();
     let body = execution_request_json(&spec);
-    let base_url = std::env::var("VOID_BOX_BASE_URL")
-        .unwrap_or_else(|_| "http://127.0.0.1:43100".to_string());
+    let base_url =
+        std::env::var("VOID_BOX_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:43100".to_string());
 
     let first = void_control::bridge::handle_bridge_request_with_dirs_for_test(
         "POST",
@@ -188,8 +189,8 @@ fn bridge_pause_resume_and_cancel_work_against_live_daemon() {
     let execution_dir = root.join("executions");
     let spec = long_running_spec();
     let body = execution_request_json(&spec);
-    let base_url = std::env::var("VOID_BOX_BASE_URL")
-        .unwrap_or_else(|_| "http://127.0.0.1:43100".to_string());
+    let base_url =
+        std::env::var("VOID_BOX_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:43100".to_string());
 
     let created = void_control::bridge::handle_bridge_request_with_dirs_for_test(
         "POST",
@@ -298,9 +299,15 @@ fn bridge_pause_resume_and_cancel_work_against_live_daemon() {
     )
     .expect("get events");
     let items = events.json["events"].as_array().expect("events array");
-    assert!(items.iter().any(|event| event["event_type"] == "ExecutionPaused"));
-    assert!(items.iter().any(|event| event["event_type"] == "ExecutionResumed"));
-    assert!(items.iter().any(|event| event["event_type"] == "ExecutionCanceled"));
+    assert!(items
+        .iter()
+        .any(|event| event["event_type"] == "ExecutionPaused"));
+    assert!(items
+        .iter()
+        .any(|event| event["event_type"] == "ExecutionResumed"));
+    assert!(items
+        .iter()
+        .any(|event| event["event_type"] == "ExecutionCanceled"));
 }
 
 fn structured_output_spec() -> ExecutionSpec {
@@ -493,7 +500,9 @@ fn fallback_structured_output_spec_path() -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .expect("clock")
         .as_nanos();
-    std::env::temp_dir().join(format!("void-control-bridge-live-structured-output-{nanos}.yaml"))
+    std::env::temp_dir().join(format!(
+        "void-control-bridge-live-structured-output-{nanos}.yaml"
+    ))
 }
 
 fn fallback_long_running_spec_path() -> PathBuf {
@@ -501,7 +510,9 @@ fn fallback_long_running_spec_path() -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .expect("clock")
         .as_nanos();
-    std::env::temp_dir().join(format!("void-control-bridge-live-long-running-{nanos}.yaml"))
+    std::env::temp_dir().join(format!(
+        "void-control-bridge-live-long-running-{nanos}.yaml"
+    ))
 }
 
 fn temp_root(label: &str) -> PathBuf {

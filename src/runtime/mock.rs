@@ -76,9 +76,10 @@ impl MockRuntime {
     }
 
     pub fn start(&mut self, request: StartRequest) -> Result<StartResult, ContractError> {
-        request.policy.validate().map_err(|msg| {
-            ContractError::new(ContractErrorCode::InvalidPolicy, msg, false)
-        })?;
+        request
+            .policy
+            .validate()
+            .map_err(|msg| ContractError::new(ContractErrorCode::InvalidPolicy, msg, false))?;
 
         if let Some(existing) = self.runs.iter_mut().find(|r| r.run_id == request.run_id) {
             if existing.state.is_terminal() {
@@ -172,8 +173,16 @@ impl MockRuntime {
             run_id: record.run_id.clone(),
             attempt_id: record.attempt_id,
             state: record.state,
-            active_stage_count: if record.state == RunState::Running { 1 } else { 0 },
-            active_microvm_count: if record.state == RunState::Running { 1 } else { 0 },
+            active_stage_count: if record.state == RunState::Running {
+                1
+            } else {
+                0
+            },
+            active_microvm_count: if record.state == RunState::Running {
+                1
+            } else {
+                0
+            },
             started_at: record.started_at.clone(),
             updated_at: record.updated_at.clone(),
             terminal_reason: record.terminal_reason.clone(),
@@ -229,11 +238,13 @@ impl MockRuntime {
     pub fn take_structured_output(&mut self, run_id: &str) -> StructuredOutputResult {
         match self.seeded.get(run_id) {
             Some(SeededOutcome::Success(output)) => StructuredOutputResult::Found(output.clone()),
-            Some(SeededOutcome::MalformedOutput) => StructuredOutputResult::Error(ContractError::new(
-                ContractErrorCode::StructuredOutputMalformed,
-                format!("run '{run_id}' emitted malformed structured output"),
-                false,
-            )),
+            Some(SeededOutcome::MalformedOutput) => {
+                StructuredOutputResult::Error(ContractError::new(
+                    ContractErrorCode::StructuredOutputMalformed,
+                    format!("run '{run_id}' emitted malformed structured output"),
+                    false,
+                ))
+            }
             _ => StructuredOutputResult::Missing,
         }
     }
@@ -373,6 +384,8 @@ mod tests {
             })
             .expect("subscribe");
         assert!(events.iter().any(|e| e.event_type == EventType::RunStarted));
-        assert!(events.iter().any(|e| e.event_type == EventType::RunCanceled));
+        assert!(events
+            .iter()
+            .any(|e| e.event_type == EventType::RunCanceled));
     }
 }

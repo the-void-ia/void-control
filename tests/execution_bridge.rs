@@ -140,7 +140,9 @@ fn create_list_and_get_execution_routes_round_trip() {
     .expect("list");
     assert_eq!(listed.status, 200);
     assert_eq!(
-        listed.json["executions"].as_array().map(|items| items.len()),
+        listed.json["executions"]
+            .as_array()
+            .map(|items| items.len()),
         Some(1)
     );
 
@@ -155,10 +157,19 @@ fn create_list_and_get_execution_routes_round_trip() {
     assert_eq!(fetched.status, 200);
     assert_eq!(fetched.json["execution"]["execution_id"], execution_id);
     assert_eq!(fetched.json["progress"]["event_count"], 2);
-    assert_eq!(fetched.json["progress"]["event_type_counts"]["ExecutionCreated"], 1);
-    assert_eq!(fetched.json["progress"]["event_type_counts"]["ExecutionSubmitted"], 1);
+    assert_eq!(
+        fetched.json["progress"]["event_type_counts"]["ExecutionCreated"],
+        1
+    );
+    assert_eq!(
+        fetched.json["progress"]["event_type_counts"]["ExecutionSubmitted"],
+        1
+    );
     assert_eq!(fetched.json["progress"]["candidate_queue_count"], 0);
-    assert_eq!(fetched.json["result"]["best_candidate_id"], serde_json::Value::Null);
+    assert_eq!(
+        fetched.json["result"]["best_candidate_id"],
+        serde_json::Value::Null
+    );
     assert_eq!(fetched.json["result"]["completed_iterations"], 0);
     assert_eq!(fetched.json["result"]["total_candidate_failures"], 0);
 }

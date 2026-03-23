@@ -20,8 +20,8 @@ use crate::contract::{ExecutionPolicy, RunState, StartRequest};
 use crate::orchestration::{
     BudgetPolicy, ConcurrencyPolicy, ConvergencePolicy, EvaluationConfig, ExecutionAction,
     ExecutionRuntime, ExecutionService, ExecutionSpec, FsExecutionStore, GlobalConfig,
-    GlobalScheduler, OrchestrationPolicy, PolicyPatch, QueuedCandidate,
-    VariationConfig, VariationProposal, VariationSelection, WorkflowTemplateRef,
+    GlobalScheduler, OrchestrationPolicy, PolicyPatch, QueuedCandidate, VariationConfig,
+    VariationProposal, VariationSelection, WorkflowTemplateRef,
 };
 #[cfg(feature = "serde")]
 use crate::runtime::{MockRuntime, VoidBoxRuntimeClient};
@@ -253,21 +253,19 @@ pub fn run_bridge() -> Result<(), String> {
 
     let config = BridgeConfig::from_env();
     let worker_config = config.clone();
-    thread::spawn(move || {
-        loop {
-            let runtime = VoidBoxRuntimeClient::new(worker_config.base_url.clone(), 250);
-            let _ = process_pending_executions_once(
-                GlobalConfig {
-                    max_concurrent_child_runs: 20,
-                },
-                runtime,
-                worker_config.execution_dir.clone(),
-            );
-            std::thread::sleep(std::time::Duration::from_millis(500));
-        }
+    thread::spawn(move || loop {
+        let runtime = VoidBoxRuntimeClient::new(worker_config.base_url.clone(), 250);
+        let _ = process_pending_executions_once(
+            GlobalConfig {
+                max_concurrent_child_runs: 20,
+            },
+            runtime,
+            worker_config.execution_dir.clone(),
+        );
+        std::thread::sleep(std::time::Duration::from_millis(500));
     });
-    let server =
-        Server::http(&config.listen).map_err(|e| format!("listen {} failed: {e}", config.listen))?;
+    let server = Server::http(&config.listen)
+        .map_err(|e| format!("listen {} failed: {e}", config.listen))?;
     let client = VoidBoxRuntimeClient::new(config.base_url.clone(), 250);
     println!(
         "voidctl bridge listening on http://{} -> {}",
@@ -282,7 +280,10 @@ pub fn run_bridge() -> Result<(), String> {
             let _ = req.respond(
                 Response::empty(204)
                     .with_header(make_header("Access-Control-Allow-Origin", "*"))
-                    .with_header(make_header("Access-Control-Allow-Methods", "GET,POST,OPTIONS"))
+                    .with_header(make_header(
+                        "Access-Control-Allow-Methods",
+                        "GET,POST,OPTIONS",
+                    ))
                     .with_header(make_header("Access-Control-Allow-Headers", "Content-Type")),
             );
             continue;
@@ -307,7 +308,10 @@ pub fn run_bridge() -> Result<(), String> {
                 .with_status_code(StatusCode(response.status))
                 .with_header(make_header("Content-Type", "application/json"))
                 .with_header(make_header("Access-Control-Allow-Origin", "*"))
-                .with_header(make_header("Access-Control-Allow-Methods", "GET,POST,OPTIONS"))
+                .with_header(make_header(
+                    "Access-Control-Allow-Methods",
+                    "GET,POST,OPTIONS",
+                ))
                 .with_header(make_header("Access-Control-Allow-Headers", "Content-Type")),
         );
     }
@@ -576,7 +580,10 @@ fn handle_execution_get(path: &str, config: &BridgeConfig) -> JsonHttpResponse {
             let result = ExecutionResultResponse {
                 best_candidate_id: snapshot.execution.result_best_candidate_id.clone(),
                 completed_iterations: snapshot.execution.completed_iterations,
-                total_candidate_failures: snapshot.execution.failure_counts.total_candidate_failures,
+                total_candidate_failures: snapshot
+                    .execution
+                    .failure_counts
+                    .total_candidate_failures,
             };
             json_response(
                 200,
@@ -668,8 +675,7 @@ fn summarize_progress(
             .events
             .iter()
             .filter(|event| {
-                event.event_type
-                    == crate::orchestration::ControlEventType::CandidateOutputCollected
+                event.event_type == crate::orchestration::ControlEventType::CandidateOutputCollected
             })
             .count() as u32,
         queued_candidate_count,
@@ -928,9 +934,7 @@ fn process_pending_executions_once<R: ExecutionRuntime>(
         let running = snapshot
             .candidates
             .iter()
-            .filter(|candidate| {
-                candidate.status == crate::orchestration::CandidateStatus::Running
-            })
+            .filter(|candidate| candidate.status == crate::orchestration::CandidateStatus::Running)
             .count();
         scheduler.register_execution(
             &execution_id,
@@ -1091,12 +1095,7 @@ impl ExecutionSpecRequest {
         let variation = match self.variation.source.as_str() {
             "parameter_space" => VariationConfig::parameter_space(
                 self.variation.candidates_per_iteration,
-                match self
-                    .variation
-                    .selection
-                    .as_deref()
-                    .unwrap_or("sequential")
-                {
+                match self.variation.selection.as_deref().unwrap_or("sequential") {
                     "random" => VariationSelection::Random,
                     _ => VariationSelection::Sequential,
                 },
@@ -1122,7 +1121,8 @@ impl ExecutionSpecRequest {
                     Some(_) => Some(VariationSelection::Sequential),
                 },
                 parameter_space: self.variation.parameter_space.unwrap_or_default(),
-                explicit: self.variation
+                explicit: self
+                    .variation
                     .explicit
                     .unwrap_or_default()
                     .into_iter()
@@ -1200,10 +1200,10 @@ fn policy_from_json(raw: Option<RunPolicyJson>) -> ExecutionPolicy {
         max_parallel_microvms_per_run: raw
             .max_parallel_microvms_per_run
             .unwrap_or(defaults.max_parallel_microvms_per_run),
-        max_stage_retries: raw
-            .max_stage_retries
-            .unwrap_or(defaults.max_stage_retries),
-        stage_timeout_secs: raw.stage_timeout_secs.unwrap_or(defaults.stage_timeout_secs),
+        max_stage_retries: raw.max_stage_retries.unwrap_or(defaults.max_stage_retries),
+        stage_timeout_secs: raw
+            .stage_timeout_secs
+            .unwrap_or(defaults.stage_timeout_secs),
         cancel_grace_period_secs: raw
             .cancel_grace_period_secs
             .unwrap_or(defaults.cancel_grace_period_secs),
@@ -1307,6 +1307,9 @@ fn to_tiny_response(response: JsonHttpResponse) -> tiny_http::Response<std::io::
         .with_status_code(tiny_http::StatusCode(response.status))
         .with_header(make_header("Content-Type", "application/json"))
         .with_header(make_header("Access-Control-Allow-Origin", "*"))
-        .with_header(make_header("Access-Control-Allow-Methods", "GET,POST,OPTIONS"))
+        .with_header(make_header(
+            "Access-Control-Allow-Methods",
+            "GET,POST,OPTIONS",
+        ))
         .with_header(make_header("Access-Control-Allow-Headers", "Content-Type"))
 }

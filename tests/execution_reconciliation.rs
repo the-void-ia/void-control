@@ -15,7 +15,9 @@ fn reloads_non_terminal_executions_after_restart() {
     let mut execution = Execution::new("exec-reload", "swarm", "reload state");
     execution.status = ExecutionStatus::Running;
 
-    store.create_execution(&execution).expect("create execution");
+    store
+        .create_execution(&execution)
+        .expect("create execution");
     store
         .append_event(
             "exec-reload",
@@ -54,7 +56,9 @@ fn paused_execution_remains_paused_after_restart() {
     let mut execution = Execution::new("exec-paused", "swarm", "stay paused");
     execution.status = ExecutionStatus::Paused;
 
-    store.create_execution(&execution).expect("create execution");
+    store
+        .create_execution(&execution)
+        .expect("create execution");
 
     let reconciler = ReconciliationService::new(FsExecutionStore::new(root));
     let active = reconciler.reload_active_executions().expect("reload");
@@ -70,7 +74,9 @@ fn completed_execution_is_not_reloaded_as_active() {
     let mut execution = Execution::new("exec-complete", "swarm", "done");
     execution.status = ExecutionStatus::Completed;
 
-    store.create_execution(&execution).expect("create execution");
+    store
+        .create_execution(&execution)
+        .expect("create execution");
 
     let reconciler = ReconciliationService::new(FsExecutionStore::new(root));
     let active = reconciler.reload_active_executions().expect("reload");
@@ -87,18 +93,22 @@ fn reloads_queued_candidates_fifo_across_active_executions() {
     exec_a.status = ExecutionStatus::Running;
     store.create_execution(&exec_a).expect("create a");
     let mut a1 = ExecutionCandidate::new("exec-a", "cand-a1", 2, 0, CandidateStatus::Queued);
-    a1.overrides.insert("agent.prompt".to_string(), "a1".to_string());
+    a1.overrides
+        .insert("agent.prompt".to_string(), "a1".to_string());
     store.save_candidate(&a1).expect("save a1");
 
     let mut exec_b = Execution::new("exec-b", "swarm", "b");
     exec_b.status = ExecutionStatus::Running;
     store.create_execution(&exec_b).expect("create b");
     let mut b1 = ExecutionCandidate::new("exec-b", "cand-b1", 1, 0, CandidateStatus::Queued);
-    b1.overrides.insert("agent.prompt".to_string(), "b1".to_string());
+    b1.overrides
+        .insert("agent.prompt".to_string(), "b1".to_string());
     store.save_candidate(&b1).expect("save b1");
 
     let reconciler = ReconciliationService::new(FsExecutionStore::new(root));
-    let queued = reconciler.reload_queued_candidates().expect("reload queued");
+    let queued = reconciler
+        .reload_queued_candidates()
+        .expect("reload queued");
 
     assert_eq!(queued.len(), 2);
     assert_eq!(queued[0].execution_id, "exec-b");
@@ -139,7 +149,9 @@ fn paused_execution_candidates_are_excluded_from_reloaded_queue() {
         .expect("save running candidate");
 
     let reconciler = ReconciliationService::new(FsExecutionStore::new(root));
-    let queued = reconciler.reload_queued_candidates().expect("reload queued");
+    let queued = reconciler
+        .reload_queued_candidates()
+        .expect("reload queued");
 
     assert_eq!(queued.len(), 1);
     assert_eq!(queued[0].execution_id, "exec-running");

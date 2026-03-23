@@ -21,11 +21,17 @@ fn submitted_pending_execution_can_be_processed_to_completion() {
     let mut runtime = MockRuntime::new();
     runtime.seed_success(
         "exec-run-candidate-1",
-        output("candidate-1", &[("latency_p99_ms", 90.0), ("cost_usd", 0.03)]),
+        output(
+            "candidate-1",
+            &[("latency_p99_ms", 90.0), ("cost_usd", 0.03)],
+        ),
     );
     runtime.seed_success(
         "exec-run-candidate-2",
-        output("candidate-2", &[("latency_p99_ms", 85.0), ("cost_usd", 0.02)]),
+        output(
+            "candidate-2",
+            &[("latency_p99_ms", 85.0), ("cost_usd", 0.02)],
+        ),
     );
 
     let mut service = ExecutionService::new(
@@ -38,7 +44,10 @@ fn submitted_pending_execution_can_be_processed_to_completion() {
     let processed = service.process_execution("exec-worker").expect("process");
 
     assert_eq!(processed.status, ExecutionStatus::Completed);
-    assert_eq!(processed.result_best_candidate_id.as_deref(), Some("candidate-2"));
+    assert_eq!(
+        processed.result_best_candidate_id.as_deref(),
+        Some("candidate-2")
+    );
 
     let snapshot = store.load_execution("exec-worker").expect("reload");
     assert_eq!(snapshot.execution.status, ExecutionStatus::Completed);
@@ -83,13 +92,19 @@ fn planning_execution_persists_queued_candidates_without_dispatching() {
     assert_eq!(snapshot.candidates[1].status, CandidateStatus::Queued);
     assert_eq!(snapshot.candidates[0].runtime_run_id, None);
     assert_eq!(snapshot.candidates[1].runtime_run_id, None);
-    let event_types: Vec<_> = snapshot.events.iter().map(|event| event.event_type).collect();
+    let event_types: Vec<_> = snapshot
+        .events
+        .iter()
+        .map(|event| event.event_type)
+        .collect();
     assert!(event_types.contains(&void_control::orchestration::ControlEventType::ExecutionStarted));
     assert!(event_types.contains(&void_control::orchestration::ControlEventType::IterationStarted));
     assert_eq!(
         event_types
             .iter()
-            .filter(|&&event| event == void_control::orchestration::ControlEventType::CandidateQueued)
+            .filter(
+                |&&event| event == void_control::orchestration::ControlEventType::CandidateQueued
+            )
             .count(),
         2
     );
@@ -117,11 +132,17 @@ fn processing_reuses_preplanned_candidates_without_duplication() {
     let mut runtime = MockRuntime::new();
     runtime.seed_success(
         "exec-run-candidate-1",
-        output("candidate-1", &[("latency_p99_ms", 90.0), ("cost_usd", 0.03)]),
+        output(
+            "candidate-1",
+            &[("latency_p99_ms", 90.0), ("cost_usd", 0.03)],
+        ),
     );
     runtime.seed_success(
         "exec-run-candidate-2",
-        output("candidate-2", &[("latency_p99_ms", 85.0), ("cost_usd", 0.02)]),
+        output(
+            "candidate-2",
+            &[("latency_p99_ms", 85.0), ("cost_usd", 0.02)],
+        ),
     );
     let mut worker = ExecutionService::new(
         GlobalConfig {
@@ -148,8 +169,7 @@ fn processing_reuses_preplanned_candidates_without_duplication() {
             .events
             .iter()
             .filter(|event| {
-                event.event_type
-                    == void_control::orchestration::ControlEventType::CandidateQueued
+                event.event_type == void_control::orchestration::ControlEventType::CandidateQueued
             })
             .count(),
         2
@@ -176,11 +196,17 @@ fn dispatch_execution_once_runs_only_one_queued_candidate() {
     let mut runtime = MockRuntime::new();
     runtime.seed_success(
         "exec-run-candidate-1",
-        output("candidate-1", &[("latency_p99_ms", 90.0), ("cost_usd", 0.03)]),
+        output(
+            "candidate-1",
+            &[("latency_p99_ms", 90.0), ("cost_usd", 0.03)],
+        ),
     );
     runtime.seed_success(
         "exec-run-candidate-2",
-        output("candidate-2", &[("latency_p99_ms", 85.0), ("cost_usd", 0.02)]),
+        output(
+            "candidate-2",
+            &[("latency_p99_ms", 85.0), ("cost_usd", 0.02)],
+        ),
     );
     let mut worker = ExecutionService::new(
         GlobalConfig {
@@ -263,20 +289,22 @@ fn stale_claim_is_recovered_and_processing_can_proceed() {
         .expect("submit");
 
     let execution_dir = root.join("exec-stale-claim");
-    std::fs::write(
-        execution_dir.join("claim.txt"),
-        "dead-worker|1",
-    )
-    .expect("seed stale claim");
+    std::fs::write(execution_dir.join("claim.txt"), "dead-worker|1").expect("seed stale claim");
 
     let mut runtime = MockRuntime::new();
     runtime.seed_success(
         "exec-run-candidate-1",
-        output("candidate-1", &[("latency_p99_ms", 90.0), ("cost_usd", 0.03)]),
+        output(
+            "candidate-1",
+            &[("latency_p99_ms", 90.0), ("cost_usd", 0.03)],
+        ),
     );
     runtime.seed_success(
         "exec-run-candidate-2",
-        output("candidate-2", &[("latency_p99_ms", 85.0), ("cost_usd", 0.02)]),
+        output(
+            "candidate-2",
+            &[("latency_p99_ms", 85.0), ("cost_usd", 0.02)],
+        ),
     );
 
     let mut service = ExecutionService::new(
@@ -308,7 +336,10 @@ fn refresh_claim_keeps_owned_claim_valid() {
         .refresh_claim("exec-refresh-claim", "worker-a")
         .expect("refresh");
     assert_eq!(
-        store.load_claim("exec-refresh-claim").expect("load claim").as_deref(),
+        store
+            .load_claim("exec-refresh-claim")
+            .expect("load claim")
+            .as_deref(),
         Some("worker-a")
     );
     store
@@ -363,7 +394,10 @@ fn candidate_records_round_trip_through_store() {
     );
     assert_eq!(snapshot.candidates[1].candidate_id, "candidate-2");
     assert_eq!(snapshot.candidates[1].status, CandidateStatus::Running);
-    assert_eq!(snapshot.candidates[1].runtime_run_id.as_deref(), Some("run-2"));
+    assert_eq!(
+        snapshot.candidates[1].runtime_run_id.as_deref(),
+        Some("run-2")
+    );
     assert_eq!(
         snapshot.candidates[1]
             .overrides
@@ -378,21 +412,23 @@ fn process_execution_persists_terminal_candidate_records() {
     let root = temp_store_dir("worker-candidate-lifecycle");
     let store = FsExecutionStore::new(root);
     let spec = spec(1);
-    ExecutionService::<MockRuntime>::submit_execution(
-        &store,
-        "exec-candidate-lifecycle",
-        &spec,
-    )
-    .expect("submit");
+    ExecutionService::<MockRuntime>::submit_execution(&store, "exec-candidate-lifecycle", &spec)
+        .expect("submit");
 
     let mut runtime = MockRuntime::new();
     runtime.seed_success(
         "exec-run-candidate-1",
-        output("candidate-1", &[("latency_p99_ms", 90.0), ("cost_usd", 0.03)]),
+        output(
+            "candidate-1",
+            &[("latency_p99_ms", 90.0), ("cost_usd", 0.03)],
+        ),
     );
     runtime.seed_success(
         "exec-run-candidate-2",
-        output("candidate-2", &[("latency_p99_ms", 85.0), ("cost_usd", 0.02)]),
+        output(
+            "candidate-2",
+            &[("latency_p99_ms", 85.0), ("cost_usd", 0.02)],
+        ),
     );
 
     let mut service = ExecutionService::new(
@@ -406,7 +442,9 @@ fn process_execution_persists_terminal_candidate_records() {
         .process_execution("exec-candidate-lifecycle")
         .expect("process");
 
-    let snapshot = store.load_execution("exec-candidate-lifecycle").expect("reload");
+    let snapshot = store
+        .load_execution("exec-candidate-lifecycle")
+        .expect("reload");
     assert_eq!(snapshot.candidates.len(), 2);
     assert_eq!(snapshot.candidates[0].candidate_id, "candidate-1");
     assert_eq!(snapshot.candidates[0].status, CandidateStatus::Completed);
@@ -422,7 +460,10 @@ fn process_execution_persists_terminal_candidate_records() {
         Some("a")
     );
     assert_eq!(snapshot.candidates[0].succeeded, Some(true));
-    assert_eq!(snapshot.candidates[0].metrics.get("latency_p99_ms"), Some(&90.0));
+    assert_eq!(
+        snapshot.candidates[0].metrics.get("latency_p99_ms"),
+        Some(&90.0)
+    );
     assert_eq!(snapshot.candidates[1].candidate_id, "candidate-2");
     assert_eq!(snapshot.candidates[1].status, CandidateStatus::Completed);
     assert_eq!(
@@ -437,7 +478,10 @@ fn process_execution_persists_terminal_candidate_records() {
         Some("b")
     );
     assert_eq!(snapshot.candidates[1].succeeded, Some(true));
-    assert_eq!(snapshot.candidates[1].metrics.get("latency_p99_ms"), Some(&85.0));
+    assert_eq!(
+        snapshot.candidates[1].metrics.get("latency_p99_ms"),
+        Some(&85.0)
+    );
 }
 
 #[test]
@@ -452,7 +496,10 @@ fn process_execution_persists_mixed_candidate_terminal_states() {
     runtime.seed_failure("exec-run-candidate-1");
     runtime.seed_success(
         "exec-run-candidate-2",
-        output("candidate-2", &[("latency_p99_ms", 85.0), ("cost_usd", 0.02)]),
+        output(
+            "candidate-2",
+            &[("latency_p99_ms", 85.0), ("cost_usd", 0.02)],
+        ),
     );
 
     let mut service = ExecutionService::new(
@@ -467,7 +514,9 @@ fn process_execution_persists_mixed_candidate_terminal_states() {
         .expect("process");
 
     assert_eq!(execution.status, ExecutionStatus::Completed);
-    let snapshot = store.load_execution("exec-candidate-mixed").expect("reload");
+    let snapshot = store
+        .load_execution("exec-candidate-mixed")
+        .expect("reload");
     assert_eq!(snapshot.candidates.len(), 2);
     assert_eq!(snapshot.candidates[0].candidate_id, "candidate-1");
     assert_eq!(snapshot.candidates[0].status, CandidateStatus::Failed);
@@ -489,11 +538,17 @@ fn process_execution_releases_claim_after_completion() {
     let mut runtime = MockRuntime::new();
     runtime.seed_success(
         "exec-run-candidate-1",
-        output("candidate-1", &[("latency_p99_ms", 90.0), ("cost_usd", 0.03)]),
+        output(
+            "candidate-1",
+            &[("latency_p99_ms", 90.0), ("cost_usd", 0.03)],
+        ),
     );
     runtime.seed_success(
         "exec-run-candidate-2",
-        output("candidate-2", &[("latency_p99_ms", 85.0), ("cost_usd", 0.02)]),
+        output(
+            "candidate-2",
+            &[("latency_p99_ms", 85.0), ("cost_usd", 0.02)],
+        ),
     );
 
     let mut service = ExecutionService::new(
@@ -513,7 +568,10 @@ fn process_execution_releases_claim_after_completion() {
         Some("candidate-2")
     );
     assert_eq!(snapshot.execution.completed_iterations, 1);
-    assert_eq!(snapshot.execution.failure_counts.total_candidate_failures, 0);
+    assert_eq!(
+        snapshot.execution.failure_counts.total_candidate_failures,
+        0
+    );
 }
 
 #[test]
@@ -527,11 +585,17 @@ fn process_execution_persists_lifecycle_events() {
     let mut runtime = MockRuntime::new();
     runtime.seed_success(
         "exec-run-candidate-1",
-        output("candidate-1", &[("latency_p99_ms", 90.0), ("cost_usd", 0.03)]),
+        output(
+            "candidate-1",
+            &[("latency_p99_ms", 90.0), ("cost_usd", 0.03)],
+        ),
     );
     runtime.seed_success(
         "exec-run-candidate-2",
-        output("candidate-2", &[("latency_p99_ms", 85.0), ("cost_usd", 0.02)]),
+        output(
+            "candidate-2",
+            &[("latency_p99_ms", 85.0), ("cost_usd", 0.02)],
+        ),
     );
 
     let mut service = ExecutionService::new(
@@ -544,15 +608,24 @@ fn process_execution_persists_lifecycle_events() {
     service.process_execution("exec-events").expect("process");
 
     let snapshot = store.load_execution("exec-events").expect("reload");
-    let event_types: Vec<_> = snapshot.events.iter().map(|event| event.event_type).collect();
-    assert!(event_types.contains(&void_control::orchestration::ControlEventType::ExecutionSubmitted));
+    let event_types: Vec<_> = snapshot
+        .events
+        .iter()
+        .map(|event| event.event_type)
+        .collect();
+    assert!(
+        event_types.contains(&void_control::orchestration::ControlEventType::ExecutionSubmitted)
+    );
     assert!(event_types.contains(&void_control::orchestration::ControlEventType::ExecutionStarted));
     assert!(event_types.contains(&void_control::orchestration::ControlEventType::CandidateQueued));
-    assert!(event_types.contains(&void_control::orchestration::ControlEventType::CandidateDispatched));
-    assert!(event_types.contains(
-        &void_control::orchestration::ControlEventType::CandidateOutputCollected
-    ));
-    assert!(event_types.contains(&void_control::orchestration::ControlEventType::ExecutionCompleted));
+    assert!(
+        event_types.contains(&void_control::orchestration::ControlEventType::CandidateDispatched)
+    );
+    assert!(event_types
+        .contains(&void_control::orchestration::ControlEventType::CandidateOutputCollected));
+    assert!(
+        event_types.contains(&void_control::orchestration::ControlEventType::ExecutionCompleted)
+    );
 }
 
 #[test]
@@ -675,20 +748,31 @@ fn paused_execution_does_not_block_other_queued_work_in_bridge_scheduler() {
         store.clone(),
     );
     planner.plan_execution("exec-paused").expect("plan paused");
-    planner.plan_execution("exec-running").expect("plan running");
+    planner
+        .plan_execution("exec-running")
+        .expect("plan running");
 
-    let mut paused = store.load_execution("exec-paused").expect("load paused").execution;
+    let mut paused = store
+        .load_execution("exec-paused")
+        .expect("load paused")
+        .execution;
     paused.status = ExecutionStatus::Paused;
     store.save_execution(&paused).expect("save paused");
 
     let mut runtime = MockRuntime::new();
     runtime.seed_success(
         "exec-run-candidate-3",
-        output("candidate-1", &[("latency_p99_ms", 90.0), ("cost_usd", 0.03)]),
+        output(
+            "candidate-1",
+            &[("latency_p99_ms", 90.0), ("cost_usd", 0.03)],
+        ),
     );
     runtime.seed_success(
         "exec-run-candidate-4",
-        output("candidate-2", &[("latency_p99_ms", 85.0), ("cost_usd", 0.02)]),
+        output(
+            "candidate-2",
+            &[("latency_p99_ms", 85.0), ("cost_usd", 0.02)],
+        ),
     );
 
     void_control::bridge::process_pending_executions_once_for_test(
@@ -707,7 +791,9 @@ fn paused_execution_does_not_block_other_queued_work_in_bridge_scheduler() {
         .iter()
         .all(|candidate| candidate.status == CandidateStatus::Queued));
 
-    let running_snapshot = store.load_execution("exec-running").expect("reload running");
+    let running_snapshot = store
+        .load_execution("exec-running")
+        .expect("reload running");
     assert_eq!(running_snapshot.execution.status, ExecutionStatus::Running);
     assert!(running_snapshot
         .candidates
@@ -739,19 +825,31 @@ fn bridge_scheduler_dispatches_earliest_queued_execution_first() {
     let mut runtime = MockRuntime::new();
     runtime.seed_success(
         "exec-run-candidate-1",
-        output("candidate-1", &[("latency_p99_ms", 90.0), ("cost_usd", 0.03)]),
+        output(
+            "candidate-1",
+            &[("latency_p99_ms", 90.0), ("cost_usd", 0.03)],
+        ),
     );
     runtime.seed_success(
         "exec-run-candidate-2",
-        output("candidate-2", &[("latency_p99_ms", 85.0), ("cost_usd", 0.02)]),
+        output(
+            "candidate-2",
+            &[("latency_p99_ms", 85.0), ("cost_usd", 0.02)],
+        ),
     );
     runtime.seed_success(
         "exec-run-candidate-3",
-        output("candidate-1", &[("latency_p99_ms", 88.0), ("cost_usd", 0.03)]),
+        output(
+            "candidate-1",
+            &[("latency_p99_ms", 88.0), ("cost_usd", 0.03)],
+        ),
     );
     runtime.seed_success(
         "exec-run-candidate-4",
-        output("candidate-2", &[("latency_p99_ms", 84.0), ("cost_usd", 0.02)]),
+        output(
+            "candidate-2",
+            &[("latency_p99_ms", 84.0), ("cost_usd", 0.02)],
+        ),
     );
 
     void_control::bridge::process_pending_executions_once_for_test(
@@ -843,20 +941,23 @@ fn temp_store_dir(label: &str) -> std::path::PathBuf {
     dir
 }
 
-fn tick_bridge_worker_until_terminal(
-    root: std::path::PathBuf,
-    execution_id: &str,
-) {
+fn tick_bridge_worker_until_terminal(root: std::path::PathBuf, execution_id: &str) {
     let store = FsExecutionStore::new(root.clone());
     for _ in 0..6 {
         let mut runtime = MockRuntime::new();
         runtime.seed_success(
             "exec-run-candidate-1",
-            output("candidate-1", &[("latency_p99_ms", 90.0), ("cost_usd", 0.03)]),
+            output(
+                "candidate-1",
+                &[("latency_p99_ms", 90.0), ("cost_usd", 0.03)],
+            ),
         );
         runtime.seed_success(
             "exec-run-candidate-2",
-            output("candidate-2", &[("latency_p99_ms", 85.0), ("cost_usd", 0.02)]),
+            output(
+                "candidate-2",
+                &[("latency_p99_ms", 85.0), ("cost_usd", 0.02)],
+            ),
         );
         void_control::bridge::process_pending_executions_once_for_test(
             GlobalConfig {

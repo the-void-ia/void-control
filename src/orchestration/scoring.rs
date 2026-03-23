@@ -31,7 +31,10 @@ pub struct RankedCandidate {
     pub metrics: BTreeMap<String, f64>,
 }
 
-pub fn score_iteration(config: &ScoringConfig, outputs: &[CandidateOutput]) -> Vec<RankedCandidate> {
+pub fn score_iteration(
+    config: &ScoringConfig,
+    outputs: &[CandidateOutput],
+) -> Vec<RankedCandidate> {
     let mut ranked: Vec<RankedCandidate> = outputs
         .iter()
         .map(|output| {
@@ -90,14 +93,26 @@ fn normalized_value(
     }
 }
 
-fn compare_ranked(config: &ScoringConfig, left: &RankedCandidate, right: &RankedCandidate) -> Ordering {
+fn compare_ranked(
+    config: &ScoringConfig,
+    left: &RankedCandidate,
+    right: &RankedCandidate,
+) -> Ordering {
     right
         .score
         .partial_cmp(&left.score)
         .unwrap_or(Ordering::Equal)
         .then_with(|| {
-            let left_metric = left.metrics.get(&config.tie_break_metric).copied().unwrap_or(f64::INFINITY);
-            let right_metric = right.metrics.get(&config.tie_break_metric).copied().unwrap_or(f64::INFINITY);
+            let left_metric = left
+                .metrics
+                .get(&config.tie_break_metric)
+                .copied()
+                .unwrap_or(f64::INFINITY);
+            let right_metric = right
+                .metrics
+                .get(&config.tie_break_metric)
+                .copied()
+                .unwrap_or(f64::INFINITY);
             left_metric
                 .partial_cmp(&right_metric)
                 .unwrap_or(Ordering::Equal)

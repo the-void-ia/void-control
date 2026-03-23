@@ -13,9 +13,7 @@ use crate::orchestration::types::{
     ExecutionStatus,
 };
 #[cfg(feature = "serde")]
-use crate::orchestration::types::{
-    CommunicationIntent, InboxSnapshot, RoutedMessage,
-};
+use crate::orchestration::types::{CommunicationIntent, InboxSnapshot, RoutedMessage};
 
 #[cfg(not(feature = "serde"))]
 mod serde_json {
@@ -93,7 +91,11 @@ mod serde_json {
     }
 
     fn encode_list(value: &[String]) -> String {
-        value.iter().map(|item| escape(item)).collect::<Vec<_>>().join(";")
+        value
+            .iter()
+            .map(|item| escape(item))
+            .collect::<Vec<_>>()
+            .join(";")
     }
 
     fn decode_map_string(value: &str) -> Result<BTreeMap<String, String>, Error> {
@@ -169,7 +171,11 @@ mod serde_json {
         let mut seen_separator = false;
         for ch in value.chars() {
             if escaped {
-                let target = if seen_separator { &mut right } else { &mut left };
+                let target = if seen_separator {
+                    &mut right
+                } else {
+                    &mut left
+                };
                 target.push('\\');
                 target.push(ch);
                 escaped = false;
@@ -324,10 +330,7 @@ impl FsExecutionStore {
     pub fn refresh_claim(&self, execution_id: &str, worker_id: &str) -> io::Result<()> {
         let claim_path = self.execution_dir(execution_id).join("claim.txt");
         let Some(existing) = self.load_claim_record(execution_id)? else {
-            return Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                "claim not found",
-            ));
+            return Err(io::Error::new(io::ErrorKind::NotFound, "claim not found"));
         };
         if existing.worker_id != worker_id {
             return Err(io::Error::new(
@@ -359,11 +362,7 @@ impl FsExecutionStore {
         }
     }
 
-    pub fn append_event(
-        &self,
-        execution_id: &str,
-        event: &ControlEventEnvelope,
-    ) -> io::Result<()> {
+    pub fn append_event(&self, execution_id: &str, event: &ControlEventEnvelope) -> io::Result<()> {
         let path = self.execution_dir(execution_id).join("events.log");
         let existing = fs::read_to_string(&path).unwrap_or_default();
         let next = format!(
@@ -400,14 +399,19 @@ impl FsExecutionStore {
     }
 
     pub fn save_candidate(&self, candidate: &ExecutionCandidate) -> io::Result<()> {
-        let dir = self.execution_dir(&candidate.execution_id).join("candidates");
+        let dir = self
+            .execution_dir(&candidate.execution_id)
+            .join("candidates");
         fs::create_dir_all(&dir)?;
         let overrides = serde_json::to_string(&candidate.overrides)
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err.to_string()))?;
         let metrics = serde_json::to_string(&candidate.metrics)
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err.to_string()))?;
         fs::write(
-            dir.join(format!("{}-{}.txt", candidate.created_seq, candidate.candidate_id)),
+            dir.join(format!(
+                "{}-{}.txt",
+                candidate.created_seq, candidate.candidate_id
+            )),
             format!(
                 "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
                 candidate.execution_id,
@@ -488,7 +492,10 @@ impl FsExecutionStore {
         execution_id: &str,
         message: &RoutedMessage,
     ) -> io::Result<()> {
-        append_ndjson_record(self.execution_dir(execution_id).join("messages.log"), message)
+        append_ndjson_record(
+            self.execution_dir(execution_id).join("messages.log"),
+            message,
+        )
     }
 
     #[cfg(feature = "serde")]
@@ -528,8 +535,8 @@ impl FsExecutionStore {
     pub fn save_spec(&self, execution_id: &str, spec: &ExecutionSpec) -> io::Result<()> {
         let dir = self.execution_dir(execution_id);
         fs::create_dir_all(&dir)?;
-        let payload =
-            serde_json::to_vec_pretty(spec).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+        let payload = serde_json::to_vec_pretty(spec)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
         fs::write(dir.join("spec.json"), payload)
     }
 
@@ -621,10 +628,7 @@ impl ExecutionStore for FsExecutionStore {
 }
 
 #[cfg(feature = "serde")]
-fn append_ndjson_record<T: serde::Serialize>(
-    path: PathBuf,
-    record: &T,
-) -> io::Result<()> {
+fn append_ndjson_record<T: serde::Serialize>(path: PathBuf, record: &T) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -652,10 +656,7 @@ fn load_ndjson_records<T: serde::de::DeserializeOwned>(path: PathBuf) -> io::Res
                     Ok(record) => records.push(record),
                     Err(err) if lines.peek().is_none() => break,
                     Err(err) => {
-                        return Err(io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            err.to_string(),
-                        ))
+                        return Err(io::Error::new(io::ErrorKind::InvalidData, err.to_string()))
                     }
                 }
             }
@@ -672,8 +673,7 @@ fn parse_execution(contents: String) -> io::Result<Execution> {
     let mode = required_line(&mut lines, "mode")?;
     let goal = required_line(&mut lines, "goal")?;
     let status = required_line(&mut lines, "status")?;
-    let result_best_candidate_id = optional_line(&mut lines)
-        .filter(|value| !value.is_empty());
+    let result_best_candidate_id = optional_line(&mut lines).filter(|value| !value.is_empty());
     let completed_iterations = optional_line(&mut lines)
         .map(|value| value.parse().map_err(invalid_data))
         .transpose()?
@@ -702,7 +702,7 @@ fn parse_events(contents: &str) -> Vec<ControlEventEnvelope> {
             let mut parts = line.split('|');
             let execution_id = parts.next()?;
             let seq = parts.next()?.parse().ok()?;
-            let event_type = ControlEventType::from_str(parts.next()?)?;
+            let event_type = ControlEventType::parse(parts.next()?)?;
             Some(ControlEventEnvelope::new(execution_id, seq, event_type))
         })
         .collect()
@@ -786,10 +786,7 @@ fn parse_candidate(contents: String) -> io::Result<ExecutionCandidate> {
     })
 }
 
-fn required_line<'a>(
-    lines: &mut impl Iterator<Item = &'a str>,
-    name: &str,
-) -> io::Result<String> {
+fn required_line<'a>(lines: &mut impl Iterator<Item = &'a str>, name: &str) -> io::Result<String> {
     lines
         .next()
         .map(|line| line.to_string())
@@ -867,10 +864,10 @@ fn validate_inbox_candidate_id(candidate_id: &str) -> io::Result<()> {
     match (components.next(), components.next()) {
         (Some(Component::Normal(_)), None) => {}
         _ => {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("unsafe candidate_id '{candidate_id}'"),
-        ))
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("unsafe candidate_id '{candidate_id}'"),
+            ))
         }
     }
     Ok(())

@@ -50,7 +50,7 @@ impl ControlEventType {
         }
     }
 
-    pub fn from_str(value: &str) -> Option<Self> {
+    pub fn parse(value: &str) -> Option<Self> {
         match value {
             "ExecutionCreated" => Some(Self::ExecutionCreated),
             "ExecutionSubmitted" => Some(Self::ExecutionSubmitted),
@@ -111,10 +111,7 @@ impl ControlEventEnvelope {
 }
 
 impl ExecutionSnapshot {
-    pub fn replay(
-        mut execution: Execution,
-        events: &[ControlEventEnvelope],
-    ) -> ExecutionSnapshot {
+    pub fn replay(mut execution: Execution, events: &[ControlEventEnvelope]) -> ExecutionSnapshot {
         let mut accumulator = ExecutionAccumulator::default();
 
         for event in events {

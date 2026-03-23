@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use void_control::orchestration::{
     CandidateInbox, CandidateOutput, CandidateSpec, ConvergencePolicy, ExecutionAccumulator,
-    IterationEvaluation, MessageStats, MetricDirection, SearchStrategy, ScoringConfig,
-    StopReason, VariationConfig, VariationProposal, VariationSelection, WeightedMetric,
+    IterationEvaluation, MessageStats, MetricDirection, ScoringConfig, SearchStrategy, StopReason,
+    VariationConfig, VariationProposal, VariationSelection, WeightedMetric,
 };
 
 #[test]
@@ -14,7 +14,12 @@ fn search_bootstraps_when_no_seed_exists() {
             VariationSelection::Sequential,
             BTreeMap::from([(
                 "sandbox.env.CONCURRENCY".to_string(),
-                vec!["2".to_string(), "4".to_string(), "8".to_string(), "16".to_string()],
+                vec![
+                    "2".to_string(),
+                    "4".to_string(),
+                    "8".to_string(),
+                    "16".to_string(),
+                ],
             )]),
         ),
         scoring_config(),
@@ -50,15 +55,17 @@ fn search_refines_around_explicit_incumbent() {
         scoring_config(),
         ConvergencePolicy::default(),
     );
-    let mut accumulator = ExecutionAccumulator::default();
-    accumulator.best_candidate_overrides = BTreeMap::from([(
-        "agent.prompt".to_string(),
-        "v1".to_string(),
-    )]);
+    let accumulator = ExecutionAccumulator {
+        best_candidate_overrides: BTreeMap::from([("agent.prompt".to_string(), "v1".to_string())]),
+        ..ExecutionAccumulator::default()
+    };
 
     let candidates = strategy.plan_candidates(
         &accumulator,
-        &[CandidateInbox::new("candidate-1"), CandidateInbox::new("candidate-2")],
+        &[
+            CandidateInbox::new("candidate-1"),
+            CandidateInbox::new("candidate-2"),
+        ],
         None,
     );
 
@@ -81,16 +88,18 @@ fn search_avoids_explored_signatures() {
         scoring_config(),
         ConvergencePolicy::default(),
     );
-    let mut accumulator = ExecutionAccumulator::default();
-    accumulator.best_candidate_overrides = BTreeMap::from([(
-        "agent.prompt".to_string(),
-        "v1".to_string(),
-    )]);
-    accumulator.explored_signatures = vec!["agent.prompt=baseline".to_string()];
+    let accumulator = ExecutionAccumulator {
+        best_candidate_overrides: BTreeMap::from([("agent.prompt".to_string(), "v1".to_string())]),
+        explored_signatures: vec!["agent.prompt=baseline".to_string()],
+        ..ExecutionAccumulator::default()
+    };
 
     let candidates = strategy.plan_candidates(
         &accumulator,
-        &[CandidateInbox::new("candidate-1"), CandidateInbox::new("candidate-2")],
+        &[
+            CandidateInbox::new("candidate-1"),
+            CandidateInbox::new("candidate-2"),
+        ],
         None,
     );
 
@@ -139,12 +148,18 @@ fn search_reduce_updates_incumbent_phase_and_signatures() {
 
     assert_eq!(next.best_candidate_id.as_deref(), Some("candidate-2"));
     assert_eq!(
-        next.best_candidate_overrides.get("agent.prompt").map(String::as_str),
+        next.best_candidate_overrides
+            .get("agent.prompt")
+            .map(String::as_str),
         Some("v1")
     );
     assert_eq!(next.search_phase.as_deref(), Some("refine"));
-    assert!(next.explored_signatures.contains(&"agent.prompt=baseline".to_string()));
-    assert!(next.explored_signatures.contains(&"agent.prompt=v1".to_string()));
+    assert!(next
+        .explored_signatures
+        .contains(&"agent.prompt=baseline".to_string()));
+    assert!(next
+        .explored_signatures
+        .contains(&"agent.prompt=v1".to_string()));
 }
 
 #[test]
@@ -160,13 +175,17 @@ fn search_stops_when_no_new_neighbors_remain() {
         scoring_config(),
         ConvergencePolicy::default(),
     );
-    let mut accumulator = ExecutionAccumulator::default();
-    accumulator.best_candidate_overrides = BTreeMap::from([(
-        "agent.prompt".to_string(),
-        "baseline".to_string(),
-    )]);
-    accumulator.explored_signatures =
-        vec!["agent.prompt=v1".to_string(), "agent.prompt=baseline".to_string()];
+    let accumulator = ExecutionAccumulator {
+        best_candidate_overrides: BTreeMap::from([(
+            "agent.prompt".to_string(),
+            "baseline".to_string(),
+        )]),
+        explored_signatures: vec![
+            "agent.prompt=v1".to_string(),
+            "agent.prompt=baseline".to_string(),
+        ],
+        ..ExecutionAccumulator::default()
+    };
 
     let stop = strategy.should_stop(
         &accumulator,
@@ -193,13 +212,17 @@ fn search_falls_back_to_incumbent_centered_planning_without_meaningful_stats() {
         scoring_config(),
         ConvergencePolicy::default(),
     );
-    let mut accumulator = ExecutionAccumulator::default();
-    accumulator.best_candidate_overrides =
-        BTreeMap::from([("agent.prompt".to_string(), "v1".to_string())]);
+    let accumulator = ExecutionAccumulator {
+        best_candidate_overrides: BTreeMap::from([("agent.prompt".to_string(), "v1".to_string())]),
+        ..ExecutionAccumulator::default()
+    };
 
     let candidates = strategy.plan_candidates(
         &accumulator,
-        &[CandidateInbox::new("candidate-1"), CandidateInbox::new("candidate-2")],
+        &[
+            CandidateInbox::new("candidate-1"),
+            CandidateInbox::new("candidate-2"),
+        ],
         Some(&MessageStats::default()),
     );
 
@@ -223,13 +246,17 @@ fn search_keeps_a_small_exploration_quota_when_signal_pressure_is_high() {
         scoring_config(),
         ConvergencePolicy::default(),
     );
-    let mut accumulator = ExecutionAccumulator::default();
-    accumulator.best_candidate_overrides =
-        BTreeMap::from([("agent.prompt".to_string(), "v1".to_string())]);
+    let accumulator = ExecutionAccumulator {
+        best_candidate_overrides: BTreeMap::from([("agent.prompt".to_string(), "v1".to_string())]),
+        ..ExecutionAccumulator::default()
+    };
 
     let candidates = strategy.plan_candidates(
         &accumulator,
-        &[CandidateInbox::new("candidate-1"), CandidateInbox::new("candidate-2")],
+        &[
+            CandidateInbox::new("candidate-1"),
+            CandidateInbox::new("candidate-2"),
+        ],
         Some(&MessageStats {
             iteration: 1,
             total_messages: 4,
@@ -295,7 +322,9 @@ fn search_reduce_uses_the_actual_planned_candidates() {
     );
 
     assert_eq!(
-        next.best_candidate_overrides.get("agent.prompt").map(String::as_str),
+        next.best_candidate_overrides
+            .get("agent.prompt")
+            .map(String::as_str),
         Some("v2")
     );
 }

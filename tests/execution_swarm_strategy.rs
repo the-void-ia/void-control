@@ -1,10 +1,9 @@
 use std::collections::BTreeMap;
 
 use void_control::orchestration::{
-    CandidateInbox, CandidateOutput, ConvergencePolicy, ExecutionAccumulator,
-    IterationEvaluation, MessageStats, MetricDirection, ScoringConfig, StopReason,
-    SwarmStrategy, VariationConfig, VariationProposal, VariationSelection, WeightedMetric,
-    score_iteration,
+    score_iteration, CandidateInbox, CandidateOutput, ConvergencePolicy, ExecutionAccumulator,
+    IterationEvaluation, MessageStats, MetricDirection, ScoringConfig, StopReason, SwarmStrategy,
+    VariationConfig, VariationProposal, VariationSelection, WeightedMetric,
 };
 
 #[test]
@@ -12,8 +11,16 @@ fn weighted_metrics_normalizes_within_iteration() {
     let scores = score_iteration(
         &scoring_config(),
         &[
-            candidate_output("cand-a", true, &[("latency_p99_ms", 100.0), ("cost_usd", 0.02)]),
-            candidate_output("cand-b", true, &[("latency_p99_ms", 200.0), ("cost_usd", 0.05)]),
+            candidate_output(
+                "cand-a",
+                true,
+                &[("latency_p99_ms", 100.0), ("cost_usd", 0.02)],
+            ),
+            candidate_output(
+                "cand-b",
+                true,
+                &[("latency_p99_ms", 200.0), ("cost_usd", 0.05)],
+            ),
         ],
     );
 
@@ -24,7 +31,11 @@ fn weighted_metrics_normalizes_within_iteration() {
 fn failed_candidate_scores_zero() {
     let scores = score_iteration(
         &scoring_config(),
-        &[candidate_output("cand-fail", false, &[("latency_p99_ms", 100.0)])],
+        &[candidate_output(
+            "cand-fail",
+            false,
+            &[("latency_p99_ms", 100.0)],
+        )],
     );
 
     assert_eq!(scores[0].score, 0.0);
@@ -36,8 +47,16 @@ fn best_result_uses_tie_breaking_after_score() {
     let scores = score_iteration(
         &scoring_config(),
         &[
-            candidate_output("cand-a", true, &[("latency_p99_ms", 100.0), ("cost_usd", 0.05)]),
-            candidate_output("cand-b", true, &[("latency_p99_ms", 100.0), ("cost_usd", 0.03)]),
+            candidate_output(
+                "cand-a",
+                true,
+                &[("latency_p99_ms", 100.0), ("cost_usd", 0.05)],
+            ),
+            candidate_output(
+                "cand-b",
+                true,
+                &[("latency_p99_ms", 100.0), ("cost_usd", 0.03)],
+            ),
         ],
     );
 
@@ -77,8 +96,10 @@ fn parameter_space_sequential_preserves_order() {
 
 #[test]
 fn explicit_variation_cycles_through_overrides() {
-    let mut accumulator = ExecutionAccumulator::default();
-    accumulator.scoring_history_len = 1;
+    let accumulator = ExecutionAccumulator {
+        scoring_history_len: 1,
+        ..ExecutionAccumulator::default()
+    };
     let proposals = VariationConfig::explicit(
         2,
         vec![
@@ -95,13 +116,15 @@ fn explicit_variation_cycles_through_overrides() {
 
 #[test]
 fn leader_directed_proposals_are_validated_before_use() {
-    let mut accumulator = ExecutionAccumulator::default();
-    accumulator.leader_proposals = vec![
-        proposal(&[("sandbox.env.CONCURRENCY", "2")]),
-        VariationProposal {
-            overrides: BTreeMap::new(),
-        },
-    ];
+    let accumulator = ExecutionAccumulator {
+        leader_proposals: vec![
+            proposal(&[("sandbox.env.CONCURRENCY", "2")]),
+            VariationProposal {
+                overrides: BTreeMap::new(),
+            },
+        ],
+        ..ExecutionAccumulator::default()
+    };
 
     let proposals = VariationConfig::leader_directed(2).generate(&accumulator);
 
@@ -111,13 +134,15 @@ fn leader_directed_proposals_are_validated_before_use() {
 
 #[test]
 fn signal_reactive_proposals_are_generated_from_planner_output() {
-    let mut accumulator = ExecutionAccumulator::default();
-    accumulator.leader_proposals = vec![
-        proposal(&[("sandbox.env.CONCURRENCY", "2")]),
-        VariationProposal {
-            overrides: BTreeMap::new(),
-        },
-    ];
+    let accumulator = ExecutionAccumulator {
+        leader_proposals: vec![
+            proposal(&[("sandbox.env.CONCURRENCY", "2")]),
+            VariationProposal {
+                overrides: BTreeMap::new(),
+            },
+        ],
+        ..ExecutionAccumulator::default()
+    };
 
     let proposals = VariationConfig::signal_reactive(2).generate(&accumulator);
 
@@ -141,7 +166,10 @@ fn swarm_plans_candidates_from_variation_source() {
 
     let candidates = strategy.plan_candidates(
         &ExecutionAccumulator::default(),
-        &[CandidateInbox::new("candidate-1"), CandidateInbox::new("candidate-2")],
+        &[
+            CandidateInbox::new("candidate-1"),
+            CandidateInbox::new("candidate-2"),
+        ],
         None,
     );
 
@@ -250,12 +278,14 @@ fn swarm_keeps_legacy_leader_directed_planning_unbiased_by_message_stats() {
         scoring_config(),
         ConvergencePolicy::default(),
     );
-    let mut accumulator = ExecutionAccumulator::default();
-    accumulator.leader_proposals = vec![
-        proposal(&[("agent.prompt", "first")]),
-        proposal(&[("agent.prompt", "second")]),
-        proposal(&[("agent.prompt", "third")]),
-    ];
+    let accumulator = ExecutionAccumulator {
+        leader_proposals: vec![
+            proposal(&[("agent.prompt", "first")]),
+            proposal(&[("agent.prompt", "second")]),
+            proposal(&[("agent.prompt", "third")]),
+        ],
+        ..ExecutionAccumulator::default()
+    };
 
     let candidates = strategy.plan_candidates(
         &accumulator,
@@ -329,8 +359,10 @@ fn swarm_should_stop_on_plateau() {
             max_iterations_without_improvement: Some(2),
         },
     );
-    let mut accumulator = ExecutionAccumulator::default();
-    accumulator.iterations_without_improvement = 2;
+    let accumulator = ExecutionAccumulator {
+        iterations_without_improvement: 2,
+        ..ExecutionAccumulator::default()
+    };
 
     let stop = strategy.should_stop(
         &accumulator,

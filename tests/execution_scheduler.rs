@@ -3,8 +3,7 @@ use std::collections::BTreeMap;
 use void_control::orchestration::{
     CandidateOutput, ExecutionAccumulator, ExecutionService, ExecutionSpec, ExecutionStatus,
     FsExecutionStore, GlobalConfig, OrchestrationPolicy, QueuedCandidate, SchedulerDecision,
-    StructuredOutputResult,
-    VariationConfig, VariationProposal,
+    StructuredOutputResult, VariationConfig, VariationProposal,
 };
 use void_control::runtime::MockRuntime;
 
@@ -18,13 +17,15 @@ fn mock_runtime_can_complete_runs_with_structured_outputs() {
 
     let started = runtime.start(test_start_request("run-1")).expect("start");
     let inspection = runtime.inspect(&started.handle).expect("inspect");
-    let output = runtime
-        .take_structured_output("run-1");
+    let output = runtime.take_structured_output("run-1");
     let StructuredOutputResult::Found(output) = output else {
         panic!("expected structured output")
     };
 
-    assert_eq!(inspection.state, void_control::contract::RunState::Succeeded);
+    assert_eq!(
+        inspection.state,
+        void_control::contract::RunState::Succeeded
+    );
     assert_eq!(output.metrics["latency_p99_ms"], 100.0);
 }
 
@@ -34,7 +35,9 @@ fn mock_runtime_can_simulate_failure_timeout_and_missing_output() {
     runtime.seed_failure("run-fail");
     runtime.seed_missing_output("run-missing");
 
-    let fail = runtime.start(test_start_request("run-fail")).expect("start fail");
+    let fail = runtime
+        .start(test_start_request("run-fail"))
+        .expect("start fail");
     let missing = runtime
         .start(test_start_request("run-missing"))
         .expect("start missing");
@@ -44,7 +47,10 @@ fn mock_runtime_can_simulate_failure_timeout_and_missing_output() {
         void_control::contract::RunState::Failed
     );
     assert_eq!(
-        runtime.inspect(&missing.handle).expect("inspect missing").state,
+        runtime
+            .inspect(&missing.handle)
+            .expect("inspect missing")
+            .state,
         void_control::contract::RunState::Succeeded
     );
     assert!(matches!(
@@ -130,8 +136,10 @@ fn per_execution_concurrency_cap_blocks_dispatch_until_release() {
 #[test]
 fn exhausted_budget_prevents_queue_entry() {
     let mut scheduler = void_control::orchestration::GlobalScheduler::new(1);
-    let mut accumulator = ExecutionAccumulator::default();
-    accumulator.completed_iterations = 1;
+    let accumulator = ExecutionAccumulator {
+        completed_iterations: 1,
+        ..ExecutionAccumulator::default()
+    };
 
     let decision = scheduler.enqueue_if_budget_allows(
         QueuedCandidate::new("exec-1", "cand-1", 1),
@@ -147,19 +155,36 @@ fn runs_single_iteration_and_completes_with_best_result() {
     let mut runtime = MockRuntime::new();
     runtime.seed_success(
         "exec-run-candidate-1",
-        output("candidate-1", &[("latency_p99_ms", 120.0), ("cost_usd", 0.04)]),
+        output(
+            "candidate-1",
+            &[("latency_p99_ms", 120.0), ("cost_usd", 0.04)],
+        ),
     );
     runtime.seed_success(
         "exec-run-candidate-2",
-        output("candidate-2", &[("latency_p99_ms", 90.0), ("cost_usd", 0.03)]),
+        output(
+            "candidate-2",
+            &[("latency_p99_ms", 90.0), ("cost_usd", 0.03)],
+        ),
     );
 
     let store = FsExecutionStore::new(temp_store_dir("single"));
-    let mut service = ExecutionService::new(GlobalConfig { max_concurrent_child_runs: 2 }, runtime, store);
-    let execution = service.run_to_completion(test_spec(1)).expect("run execution");
+    let mut service = ExecutionService::new(
+        GlobalConfig {
+            max_concurrent_child_runs: 2,
+        },
+        runtime,
+        store,
+    );
+    let execution = service
+        .run_to_completion(test_spec(1))
+        .expect("run execution");
 
     assert_eq!(execution.status, ExecutionStatus::Completed);
-    assert_eq!(execution.result_best_candidate_id.as_deref(), Some("candidate-2"));
+    assert_eq!(
+        execution.result_best_candidate_id.as_deref(),
+        Some("candidate-2")
+    );
 }
 
 #[test]
@@ -167,23 +192,41 @@ fn runs_multiple_iterations_until_threshold() {
     let mut runtime = MockRuntime::new();
     runtime.seed_success(
         "exec-run-candidate-1",
-        output("candidate-1", &[("latency_p99_ms", 100.0), ("cost_usd", 0.02)]),
+        output(
+            "candidate-1",
+            &[("latency_p99_ms", 100.0), ("cost_usd", 0.02)],
+        ),
     );
     runtime.seed_success(
         "exec-run-candidate-2",
-        output("candidate-2", &[("latency_p99_ms", 95.0), ("cost_usd", 0.20)]),
+        output(
+            "candidate-2",
+            &[("latency_p99_ms", 95.0), ("cost_usd", 0.20)],
+        ),
     );
     runtime.seed_success(
         "exec-run-candidate-3",
-        output("candidate-3", &[("latency_p99_ms", 70.0), ("cost_usd", 0.02)]),
+        output(
+            "candidate-3",
+            &[("latency_p99_ms", 70.0), ("cost_usd", 0.02)],
+        ),
     );
     runtime.seed_success(
         "exec-run-candidate-4",
-        output("candidate-4", &[("latency_p99_ms", 72.0), ("cost_usd", 0.02)]),
+        output(
+            "candidate-4",
+            &[("latency_p99_ms", 72.0), ("cost_usd", 0.02)],
+        ),
     );
 
     let store = FsExecutionStore::new(temp_store_dir("threshold"));
-    let mut service = ExecutionService::new(GlobalConfig { max_concurrent_child_runs: 2 }, runtime, store);
+    let mut service = ExecutionService::new(
+        GlobalConfig {
+            max_concurrent_child_runs: 2,
+        },
+        runtime,
+        store,
+    );
     let execution = service
         .run_to_completion(test_spec_with_threshold(0.9, 2))
         .expect("run execution");
@@ -198,11 +241,20 @@ fn short_circuits_iteration_after_failure_limit() {
     runtime.seed_failure("exec-run-candidate-1");
     runtime.seed_success(
         "exec-run-candidate-2",
-        output("candidate-2", &[("latency_p99_ms", 95.0), ("cost_usd", 0.03)]),
+        output(
+            "candidate-2",
+            &[("latency_p99_ms", 95.0), ("cost_usd", 0.03)],
+        ),
     );
 
     let store = FsExecutionStore::new(temp_store_dir("fail-limit"));
-    let mut service = ExecutionService::new(GlobalConfig { max_concurrent_child_runs: 2 }, runtime, store);
+    let mut service = ExecutionService::new(
+        GlobalConfig {
+            max_concurrent_child_runs: 2,
+        },
+        runtime,
+        store,
+    );
     let execution = service
         .run_to_completion(test_spec_with_failure_limit(1))
         .expect("run execution");
@@ -218,7 +270,13 @@ fn marks_execution_failed_when_all_candidates_fail_and_policy_says_fail() {
     runtime.seed_failure("exec-run-candidate-2");
 
     let store = FsExecutionStore::new(temp_store_dir("all-fail"));
-    let mut service = ExecutionService::new(GlobalConfig { max_concurrent_child_runs: 2 }, runtime, store);
+    let mut service = ExecutionService::new(
+        GlobalConfig {
+            max_concurrent_child_runs: 2,
+        },
+        runtime,
+        store,
+    );
     let execution = service
         .run_to_completion(test_spec_with_failure_limit(2))
         .expect("run execution");

@@ -93,10 +93,7 @@ fn to_raw_run_with_events(
     events: Vec<DaemonRunEventJson>,
 ) -> VoidBoxRunRaw {
     let DaemonRunStateJson {
-        id,
-        status,
-        error,
-        ..
+        id, status, error, ..
     } = run;
     VoidBoxRunRaw {
         id,

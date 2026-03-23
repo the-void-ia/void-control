@@ -114,14 +114,13 @@ pub fn from_void_box_run(run: &VoidBoxRunRaw) -> Result<ConvertedRunView, Contra
             seq,
             payload: flatten_payload(raw.payload.as_ref()),
         });
-
     }
 
     let mut tracker = EventSequenceTracker::default();
     for event in &events {
-        tracker.observe(event).map_err(|e| {
-            ContractError::new(ContractErrorCode::InvalidSpec, e, false)
-        })?;
+        tracker
+            .observe(event)
+            .map_err(|e| ContractError::new(ContractErrorCode::InvalidSpec, e, false))?;
     }
 
     let (started_at, updated_at) = derive_started_updated(&events);
@@ -386,7 +385,10 @@ mod tests {
         };
 
         let converted = from_void_box_run(&run).expect("conversion");
-        assert_eq!(converted.inspection.terminal_reason.as_deref(), Some("boom"));
+        assert_eq!(
+            converted.inspection.terminal_reason.as_deref(),
+            Some("boom")
+        );
     }
 
     #[test]
@@ -409,9 +411,15 @@ mod tests {
     #[test]
     fn flattens_scalar_payload_values() {
         let mut payload = BTreeMap::new();
-        payload.insert("a".to_string(), VoidBoxPayloadValue::String("x".to_string()));
+        payload.insert(
+            "a".to_string(),
+            VoidBoxPayloadValue::String("x".to_string()),
+        );
         payload.insert("b".to_string(), VoidBoxPayloadValue::Bool(true));
-        payload.insert("c".to_string(), VoidBoxPayloadValue::Unsupported("{}".to_string()));
+        payload.insert(
+            "c".to_string(),
+            VoidBoxPayloadValue::Unsupported("{}".to_string()),
+        );
 
         let run = VoidBoxRunRaw {
             id: "run-1".to_string(),
@@ -428,7 +436,10 @@ mod tests {
 
         let converted = from_void_box_run(&run).expect("conversion");
         assert_eq!(converted.events[0].payload.get("a"), Some(&"x".to_string()));
-        assert_eq!(converted.events[0].payload.get("b"), Some(&"true".to_string()));
+        assert_eq!(
+            converted.events[0].payload.get("b"),
+            Some(&"true".to_string())
+        );
         assert!(!converted.events[0].payload.contains_key("c"));
     }
 }

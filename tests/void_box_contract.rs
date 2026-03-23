@@ -230,7 +230,11 @@ workflow:
     };
 
     fs::write(path, yaml).unwrap_or_else(|e| {
-        panic!("failed to write fallback spec at '{}': {}", path.display(), e)
+        panic!(
+            "failed to write fallback spec at '{}': {}",
+            path.display(),
+            e
+        )
     });
 }
 
@@ -296,7 +300,10 @@ fn http_post_json(base_url: &str, path: &str, payload: &Value) -> (u16, Value) {
 }
 
 fn assert_error_shape(v: &Value) {
-    assert!(v.get("code").and_then(Value::as_str).is_some(), "missing code");
+    assert!(
+        v.get("code").and_then(Value::as_str).is_some(),
+        "missing code"
+    );
     assert!(
         v.get("message").and_then(Value::as_str).is_some(),
         "missing message"
@@ -342,7 +349,7 @@ fn is_terminal_status(status: &str) -> bool {
     )
 }
 
-fn get_artifact_publication<'a>(run: &'a Value) -> &'a Value {
+fn get_artifact_publication(run: &Value) -> &Value {
     run.get("artifact_publication")
         .unwrap_or_else(|| panic!("missing artifact_publication: {run}"))
 }
@@ -436,7 +443,10 @@ fn start_returns_enriched_contract_fields() {
     let run_id = unique_run_id("contract-start");
     let (status, json) = http_post_json(&base, "/v1/runs", &start_payload(&run_id, &spec));
     assert_eq!(status, 200, "body={json}");
-    assert_eq!(json.get("run_id").and_then(Value::as_str), Some(run_id.as_str()));
+    assert_eq!(
+        json.get("run_id").and_then(Value::as_str),
+        Some(run_id.as_str())
+    );
     assert!(json.get("attempt_id").and_then(Value::as_u64).is_some());
     assert!(json.get("state").and_then(Value::as_str).is_some());
 }
@@ -458,7 +468,10 @@ fn start_idempotency_active_run() {
 
     let (status_2, json_2) = http_post_json(&base, "/v1/runs", &payload);
     if status_2 == 200 {
-        assert_eq!(json_2.get("run_id").and_then(Value::as_str), Some(run_id.as_str()));
+        assert_eq!(
+            json_2.get("run_id").and_then(Value::as_str),
+            Some(run_id.as_str())
+        );
         assert_eq!(
             json_2.get("attempt_id").and_then(Value::as_u64),
             Some(first_attempt)
@@ -491,8 +504,14 @@ fn inspect_enriched_fields() {
     assert!(json.get("attempt_id").and_then(Value::as_u64).is_some());
     assert!(json.get("started_at").and_then(Value::as_str).is_some());
     assert!(json.get("updated_at").and_then(Value::as_str).is_some());
-    assert!(json.get("active_stage_count").and_then(Value::as_u64).is_some());
-    assert!(json.get("active_microvm_count").and_then(Value::as_u64).is_some());
+    assert!(json
+        .get("active_stage_count")
+        .and_then(Value::as_u64)
+        .is_some());
+    assert!(json
+        .get("active_microvm_count")
+        .and_then(Value::as_u64)
+        .is_some());
 }
 
 #[test]
@@ -513,9 +532,18 @@ fn events_envelope_required_fields() {
     for e in events {
         let event_id = e.get("event_id").and_then(Value::as_str).expect("event_id");
         let seq = e.get("seq").and_then(Value::as_u64).expect("seq");
-        assert!(e.get("event_type").and_then(Value::as_str).is_some(), "event_type");
-        assert!(e.get("attempt_id").and_then(Value::as_u64).is_some(), "attempt_id");
-        assert!(e.get("timestamp").and_then(Value::as_str).is_some(), "timestamp");
+        assert!(
+            e.get("event_type").and_then(Value::as_str).is_some(),
+            "event_type"
+        );
+        assert!(
+            e.get("attempt_id").and_then(Value::as_u64).is_some(),
+            "attempt_id"
+        );
+        assert!(
+            e.get("timestamp").and_then(Value::as_str).is_some(),
+            "timestamp"
+        );
         assert!(e.get("run_id").and_then(Value::as_str).is_some(), "run_id");
         seqs.push(seq);
         assert!(ids.insert(event_id.to_string()), "duplicate event_id");
@@ -570,8 +598,10 @@ fn events_resume_from_event_id() {
         assert_ne!(resumed_first, first_id);
     }
 
-    let (status_missing, json_missing) =
-        http_get_json(&base, &format!("/v1/runs/{run_id}/events?from_event_id=evt_missing"));
+    let (status_missing, json_missing) = http_get_json(
+        &base,
+        &format!("/v1/runs/{run_id}/events?from_event_id=evt_missing"),
+    );
     assert_eq!(status_missing, 200);
     assert!(json_missing.as_array().is_some());
 }
@@ -596,12 +626,10 @@ fn cancel_returns_terminal_response_shape() {
         Some(run_id.as_str())
     );
     assert!(json_cancel.get("state").and_then(Value::as_str).is_some());
-    assert!(
-        json_cancel
-            .get("terminal_event_id")
-            .and_then(Value::as_str)
-            .is_some()
-    );
+    assert!(json_cancel
+        .get("terminal_event_id")
+        .and_then(Value::as_str)
+        .is_some());
 }
 
 #[test]
@@ -683,24 +711,25 @@ fn structured_output_result_json_is_retrievable() {
         DefaultSpecKind::StructuredOutputSuccess,
     );
     let run_id = unique_run_id("contract-structured-output");
-    let (status_start, body_start) = http_post_json(&base, "/v1/runs", &start_payload(&run_id, &spec));
+    let (status_start, body_start) =
+        http_post_json(&base, "/v1/runs", &start_payload(&run_id, &spec));
     assert_eq!(status_start, 200, "body={body_start}");
 
     let terminal = wait_until_terminal(&base, &run_id, 30);
     assert_eq!(
-        terminal.get("status").and_then(Value::as_str).map(|s| s.to_ascii_lowercase()),
+        terminal
+            .get("status")
+            .and_then(Value::as_str)
+            .map(|s| s.to_ascii_lowercase()),
         Some("succeeded".to_string()),
         "terminal={terminal}"
     );
 
-    let (status, body) = http_get_text(
-        &base,
-        &format!("/v1/runs/{run_id}/stages/main/output-file"),
-    );
+    let (status, body) =
+        http_get_text(&base, &format!("/v1/runs/{run_id}/stages/main/output-file"));
     assert_eq!(status, 200, "body={body}");
-    let parsed = serde_json::from_str::<Value>(&body).unwrap_or_else(|e| {
-        panic!("structured output was not valid JSON: {e}; body={body}")
-    });
+    let parsed = serde_json::from_str::<Value>(&body)
+        .unwrap_or_else(|e| panic!("structured output was not valid JSON: {e}; body={body}"));
     assert!(parsed.get("metrics").and_then(Value::as_object).is_some());
 }
 
@@ -713,20 +742,22 @@ fn missing_result_json_is_typed_failure() {
         DefaultSpecKind::MissingStructuredOutput,
     );
     let run_id = unique_run_id("contract-missing-structured-output");
-    let (status_start, body_start) = http_post_json(&base, "/v1/runs", &start_payload(&run_id, &spec));
+    let (status_start, body_start) =
+        http_post_json(&base, "/v1/runs", &start_payload(&run_id, &spec));
     assert_eq!(status_start, 200, "body={body_start}");
 
     let terminal = wait_until_terminal(&base, &run_id, 30);
     assert_eq!(
-        terminal.get("status").and_then(Value::as_str).map(|s| s.to_ascii_lowercase()),
+        terminal
+            .get("status")
+            .and_then(Value::as_str)
+            .map(|s| s.to_ascii_lowercase()),
         Some("failed".to_string()),
         "terminal={terminal}"
     );
 
-    let (status, json) = http_get_json(
-        &base,
-        &format!("/v1/runs/{run_id}/stages/main/output-file"),
-    );
+    let (status, json) =
+        http_get_json(&base, &format!("/v1/runs/{run_id}/stages/main/output-file"));
     assert!(status >= 400, "body={json}");
     assert_error_shape(&json);
     assert_eq!(
@@ -744,20 +775,22 @@ fn malformed_result_json_is_typed_failure() {
         DefaultSpecKind::MalformedStructuredOutput,
     );
     let run_id = unique_run_id("contract-malformed-structured-output");
-    let (status_start, body_start) = http_post_json(&base, "/v1/runs", &start_payload(&run_id, &spec));
+    let (status_start, body_start) =
+        http_post_json(&base, "/v1/runs", &start_payload(&run_id, &spec));
     assert_eq!(status_start, 200, "body={body_start}");
 
     let terminal = wait_until_terminal(&base, &run_id, 30);
     assert_eq!(
-        terminal.get("status").and_then(Value::as_str).map(|s| s.to_ascii_lowercase()),
+        terminal
+            .get("status")
+            .and_then(Value::as_str)
+            .map(|s| s.to_ascii_lowercase()),
         Some("failed".to_string()),
         "terminal={terminal}"
     );
 
-    let (status, json) = http_get_json(
-        &base,
-        &format!("/v1/runs/{run_id}/stages/main/output-file"),
-    );
+    let (status, json) =
+        http_get_json(&base, &format!("/v1/runs/{run_id}/stages/main/output-file"));
     assert!(status >= 400, "body={json}");
     assert_error_shape(&json);
     assert_eq!(
@@ -775,12 +808,16 @@ fn manifest_lists_named_artifacts() {
         DefaultSpecKind::StructuredOutputWithArtifact,
     );
     let run_id = unique_run_id("contract-artifact-manifest");
-    let (status_start, body_start) = http_post_json(&base, "/v1/runs", &start_payload(&run_id, &spec));
+    let (status_start, body_start) =
+        http_post_json(&base, "/v1/runs", &start_payload(&run_id, &spec));
     assert_eq!(status_start, 200, "body={body_start}");
 
     let terminal = wait_until_terminal(&base, &run_id, 30);
     assert_eq!(
-        terminal.get("status").and_then(Value::as_str).map(|s| s.to_ascii_lowercase()),
+        terminal
+            .get("status")
+            .and_then(Value::as_str)
+            .map(|s| s.to_ascii_lowercase()),
         Some("succeeded".to_string()),
         "terminal={terminal}"
     );
@@ -824,7 +861,8 @@ fn named_artifact_endpoint_serves_manifested_file() {
         DefaultSpecKind::StructuredOutputWithArtifact,
     );
     let run_id = unique_run_id("contract-named-artifact");
-    let (status_start, body_start) = http_post_json(&base, "/v1/runs", &start_payload(&run_id, &spec));
+    let (status_start, body_start) =
+        http_post_json(&base, "/v1/runs", &start_payload(&run_id, &spec));
     assert_eq!(status_start, 200, "body={body_start}");
 
     let _ = wait_until_terminal(&base, &run_id, 30);
@@ -834,7 +872,10 @@ fn named_artifact_endpoint_serves_manifested_file() {
     let path = manifest_retrieval_path(&inspect, "report.md");
     let (status, body) = http_get_text(&base, &path);
     assert_eq!(status, 200, "body={body}");
-    assert!(body.contains("artifact content"), "unexpected artifact body={body}");
+    assert!(
+        body.contains("artifact content"),
+        "unexpected artifact body={body}"
+    );
 }
 
 #[test]
@@ -843,7 +884,8 @@ fn active_run_listing_supports_reconciliation() {
     let base = require_env("VOID_BOX_BASE_URL");
     let spec = resolve_spec_path("VOID_BOX_TEST_SPEC_FILE", DefaultSpecKind::LongRunning);
     let run_id = unique_run_id("contract-active-reconciliation");
-    let (status_start, body_start) = http_post_json(&base, "/v1/runs", &start_payload(&run_id, &spec));
+    let (status_start, body_start) =
+        http_post_json(&base, "/v1/runs", &start_payload(&run_id, &spec));
     assert_eq!(status_start, 200, "body={body_start}");
 
     let (status_active, active) = http_get_json(&base, "/v1/runs?state=active");
@@ -856,10 +898,17 @@ fn active_run_listing_supports_reconciliation() {
         run.get("run_id").and_then(Value::as_str) == Some(run_id.as_str())
             || run.get("id").and_then(Value::as_str) == Some(run_id.as_str())
     });
-    let matching = matching.unwrap_or_else(|| panic!("started run not present in active listing: {active}"));
+    let matching =
+        matching.unwrap_or_else(|| panic!("started run not present in active listing: {active}"));
     assert!(matching.get("attempt_id").and_then(Value::as_u64).is_some());
-    assert!(matching.get("active_stage_count").and_then(Value::as_u64).is_some());
-    assert!(matching.get("active_microvm_count").and_then(Value::as_u64).is_some());
+    assert!(matching
+        .get("active_stage_count")
+        .and_then(Value::as_u64)
+        .is_some());
+    assert!(matching
+        .get("active_microvm_count")
+        .and_then(Value::as_u64)
+        .is_some());
 
     let (status_terminal, terminal) = http_get_json(&base, "/v1/runs?state=terminal");
     assert_eq!(status_terminal, 200, "body={terminal}");

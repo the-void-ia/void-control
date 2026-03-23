@@ -10,18 +10,33 @@ use void_control::runtime::MockRuntime;
 fn dry_run_validates_without_creating_execution() {
     let store_dir = temp_store_dir("dry-run-valid");
     let store = FsExecutionStore::new(store_dir.clone());
-    let service = ExecutionService::new(GlobalConfig { max_concurrent_child_runs: 4 }, MockRuntime::new(), store);
+    let service = ExecutionService::new(
+        GlobalConfig {
+            max_concurrent_child_runs: 4,
+        },
+        MockRuntime::new(),
+        store,
+    );
 
     let result = service.dry_run(&spec(3)).expect("dry run");
 
     assert!(result.valid);
-    assert!(std::fs::read_dir(store_dir).expect("read dir").next().is_none());
+    assert!(std::fs::read_dir(store_dir)
+        .expect("read dir")
+        .next()
+        .is_none());
 }
 
 #[test]
 fn dry_run_returns_plan_warnings_and_errors() {
     let store = FsExecutionStore::new(temp_store_dir("dry-run-errors"));
-    let service = ExecutionService::new(GlobalConfig { max_concurrent_child_runs: 4 }, MockRuntime::new(), store);
+    let service = ExecutionService::new(
+        GlobalConfig {
+            max_concurrent_child_runs: 4,
+        },
+        MockRuntime::new(),
+        store,
+    );
     let mut spec = spec(3);
     spec.policy.budget.max_wall_clock_secs = None;
     spec.policy.budget.max_iterations = None;
@@ -36,14 +51,26 @@ fn dry_run_returns_plan_warnings_and_errors() {
 #[test]
 fn dry_run_reports_parameter_space_cardinality() {
     let store = FsExecutionStore::new(temp_store_dir("dry-run-cardinality"));
-    let service = ExecutionService::new(GlobalConfig { max_concurrent_child_runs: 4 }, MockRuntime::new(), store);
+    let service = ExecutionService::new(
+        GlobalConfig {
+            max_concurrent_child_runs: 4,
+        },
+        MockRuntime::new(),
+        store,
+    );
     let spec = ExecutionSpec {
         variation: VariationConfig::parameter_space(
             2,
             void_control::orchestration::VariationSelection::Sequential,
             BTreeMap::from([
-                ("sandbox.env.CONCURRENCY".to_string(), vec!["2".to_string(), "4".to_string()]),
-                ("sandbox.memory_mb".to_string(), vec!["512".to_string(), "1024".to_string()]),
+                (
+                    "sandbox.env.CONCURRENCY".to_string(),
+                    vec!["2".to_string(), "4".to_string()],
+                ),
+                (
+                    "sandbox.memory_mb".to_string(),
+                    vec!["512".to_string(), "1024".to_string()],
+                ),
             ]),
         ),
         ..spec(3)

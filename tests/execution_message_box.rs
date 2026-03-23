@@ -1,24 +1,25 @@
 #![cfg(feature = "serde")]
 
+use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
-use std::cell::RefCell;
-use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use void_control::contract::{
-    ContractError, RuntimeInspection, StartRequest, StartResult, RunState,
-};
-use void_control::orchestration::{
-    CandidateOutput, CandidateSpec, CandidateStatus, CommunicationIntent, CommunicationIntentAudience,
-    CommunicationIntentKind, CommunicationIntentPriority, ExecutionCandidate, ExecutionService, ExecutionSpec,
-    FsExecutionStore, GlobalConfig, InboxEntry, InboxSnapshot, MessageStats, OrchestrationPolicy, RoutedMessage,
-    RoutedMessageStatus, StructuredOutputResult, VariationConfig, VariationProposal, WorkflowTemplateRef,
-    extract_message_stats,
+    ContractError, RunState, RuntimeInspection, StartRequest, StartResult,
 };
 use void_control::orchestration::service::ExecutionRuntime;
+use void_control::orchestration::{
+    extract_message_stats, CandidateOutput, CandidateSpec, CandidateStatus, CommunicationIntent,
+    CommunicationIntentAudience, CommunicationIntentKind, CommunicationIntentPriority,
+    ExecutionCandidate, ExecutionService, ExecutionSpec, FsExecutionStore, GlobalConfig,
+    InboxEntry, InboxSnapshot, MessageStats, OrchestrationPolicy, RoutedMessage,
+    RoutedMessageStatus, StructuredOutputResult, VariationConfig, VariationProposal,
+    WorkflowTemplateRef,
+};
 use void_control::runtime::MockRuntime;
 use void_control::runtime::{LaunchInjectionAdapter, ProviderLaunchAdapter};
 
@@ -272,7 +273,10 @@ fn fs_store_rejects_unsafe_inbox_snapshot_paths() {
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
 
     let inbox_dir = root.join("exec-message-box").join("inboxes");
-    assert!(!inbox_dir.exists(), "unsafe path should not create inbox dirs");
+    assert!(
+        !inbox_dir.exists(),
+        "unsafe path should not create inbox dirs"
+    );
 }
 
 #[test]
@@ -298,8 +302,14 @@ fn fs_store_ignores_truncated_ndjson_tail_when_loading_intents() {
         .expect("append valid intent");
 
     let log_path = root.join("exec-message-box").join("intents.log");
-    fs::write(&log_path, format!("{}\n{{\"intent_id\":", serde_json::to_string(&intent).expect("serialize intent")))
-        .expect("truncate tail");
+    fs::write(
+        &log_path,
+        format!(
+            "{}\n{{\"intent_id\":",
+            serde_json::to_string(&intent).expect("serialize intent")
+        ),
+    )
+    .expect("truncate tail");
 
     let loaded = store
         .load_intents("exec-message-box")
@@ -367,11 +377,9 @@ fn service_launches_through_adapter_and_injects_inbox_content() {
     let requests = runtime_requests.borrow();
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].workflow_spec, "workflow-template");
-    let launch_context = requests[0]
-        .launch_context
-        .as_ref()
-        .expect("launch context");
-    let decoded: InboxSnapshot = serde_json::from_str(launch_context).expect("decode launch context");
+    let launch_context = requests[0].launch_context.as_ref().expect("launch context");
+    let decoded: InboxSnapshot =
+        serde_json::from_str(launch_context).expect("decode launch context");
     assert_eq!(decoded, snapshot);
 }
 
@@ -627,7 +635,10 @@ fn two_iteration_swarm_spec() -> ExecutionSpec {
             2,
             vec![
                 VariationProposal {
-                    overrides: BTreeMap::from([("agent.prompt".to_string(), "baseline".to_string())]),
+                    overrides: BTreeMap::from([(
+                        "agent.prompt".to_string(),
+                        "baseline".to_string(),
+                    )]),
                 },
                 VariationProposal {
                     overrides: BTreeMap::from([("agent.prompt".to_string(), "v1".to_string())]),

@@ -32,9 +32,7 @@ fn rejects_concurrency_above_global_pool() {
     })
     .expect_err("expected concurrency validation error");
 
-    assert!(err
-        .to_string()
-        .contains("max_concurrent_candidates"));
+    assert!(err.to_string().contains("max_concurrent_candidates"));
 }
 
 #[test]

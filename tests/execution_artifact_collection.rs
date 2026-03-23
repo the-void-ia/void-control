@@ -12,11 +12,20 @@ fn missing_output_can_mark_failed() {
     runtime.seed_missing_output("exec-run-candidate-1");
     runtime.seed_success(
         "exec-run-candidate-2",
-        output("candidate-2", &[("latency_p99_ms", 80.0), ("cost_usd", 0.03)]),
+        output(
+            "candidate-2",
+            &[("latency_p99_ms", 80.0), ("cost_usd", 0.03)],
+        ),
     );
 
     let store = FsExecutionStore::new(temp_store_dir("missing-failed"));
-    let mut service = ExecutionService::new(GlobalConfig { max_concurrent_child_runs: 2 }, runtime, store);
+    let mut service = ExecutionService::new(
+        GlobalConfig {
+            max_concurrent_child_runs: 2,
+        },
+        runtime,
+        store,
+    );
     let execution = service
         .run_to_completion(spec_with_missing_output_policy("mark_failed"))
         .expect("run execution");
@@ -31,18 +40,30 @@ fn missing_output_can_mark_incomplete_without_failure_count() {
     runtime.seed_missing_output("exec-run-candidate-1");
     runtime.seed_success(
         "exec-run-candidate-2",
-        output("candidate-2", &[("latency_p99_ms", 80.0), ("cost_usd", 0.03)]),
+        output(
+            "candidate-2",
+            &[("latency_p99_ms", 80.0), ("cost_usd", 0.03)],
+        ),
     );
 
     let store = FsExecutionStore::new(temp_store_dir("missing-incomplete"));
-    let mut service = ExecutionService::new(GlobalConfig { max_concurrent_child_runs: 2 }, runtime, store);
+    let mut service = ExecutionService::new(
+        GlobalConfig {
+            max_concurrent_child_runs: 2,
+        },
+        runtime,
+        store,
+    );
     let execution = service
         .run_to_completion(spec_with_continue_missing_output())
         .expect("run execution");
 
     assert_eq!(execution.status, ExecutionStatus::Completed);
     assert_eq!(execution.failure_counts.total_candidate_failures, 0);
-    assert_eq!(execution.result_best_candidate_id.as_deref(), Some("candidate-2"));
+    assert_eq!(
+        execution.result_best_candidate_id.as_deref(),
+        Some("candidate-2")
+    );
 }
 
 #[test]
@@ -52,15 +73,27 @@ fn iteration_failure_policy_continue_advances_despite_all_failures() {
     runtime.seed_failure("exec-run-candidate-2");
     runtime.seed_success(
         "exec-run-candidate-3",
-        output("candidate-3", &[("latency_p99_ms", 75.0), ("cost_usd", 0.02)]),
+        output(
+            "candidate-3",
+            &[("latency_p99_ms", 75.0), ("cost_usd", 0.02)],
+        ),
     );
     runtime.seed_success(
         "exec-run-candidate-4",
-        output("candidate-4", &[("latency_p99_ms", 78.0), ("cost_usd", 0.02)]),
+        output(
+            "candidate-4",
+            &[("latency_p99_ms", 78.0), ("cost_usd", 0.02)],
+        ),
     );
 
     let store = FsExecutionStore::new(temp_store_dir("continue"));
-    let mut service = ExecutionService::new(GlobalConfig { max_concurrent_child_runs: 2 }, runtime, store);
+    let mut service = ExecutionService::new(
+        GlobalConfig {
+            max_concurrent_child_runs: 2,
+        },
+        runtime,
+        store,
+    );
     let execution = service
         .run_to_completion(spec_with_iteration_failure_policy("continue", 2))
         .expect("run execution");
@@ -76,15 +109,27 @@ fn iteration_failure_policy_retry_retries_once() {
     runtime.seed_failure("exec-run-candidate-2");
     runtime.seed_success(
         "exec-run-candidate-3",
-        output("candidate-3", &[("latency_p99_ms", 74.0), ("cost_usd", 0.02)]),
+        output(
+            "candidate-3",
+            &[("latency_p99_ms", 74.0), ("cost_usd", 0.02)],
+        ),
     );
     runtime.seed_success(
         "exec-run-candidate-4",
-        output("candidate-4", &[("latency_p99_ms", 76.0), ("cost_usd", 0.02)]),
+        output(
+            "candidate-4",
+            &[("latency_p99_ms", 76.0), ("cost_usd", 0.02)],
+        ),
     );
 
     let store = FsExecutionStore::new(temp_store_dir("retry"));
-    let mut service = ExecutionService::new(GlobalConfig { max_concurrent_child_runs: 2 }, runtime, store);
+    let mut service = ExecutionService::new(
+        GlobalConfig {
+            max_concurrent_child_runs: 2,
+        },
+        runtime,
+        store,
+    );
     let execution = service
         .run_to_completion(spec_with_iteration_failure_policy("retry_iteration", 1))
         .expect("run execution");
@@ -99,11 +144,20 @@ fn malformed_output_is_counted_as_candidate_failure() {
     runtime.seed_malformed_output("exec-run-candidate-1");
     runtime.seed_success(
         "exec-run-candidate-2",
-        output("candidate-2", &[("latency_p99_ms", 80.0), ("cost_usd", 0.03)]),
+        output(
+            "candidate-2",
+            &[("latency_p99_ms", 80.0), ("cost_usd", 0.03)],
+        ),
     );
 
     let store = FsExecutionStore::new(temp_store_dir("malformed-output"));
-    let mut service = ExecutionService::new(GlobalConfig { max_concurrent_child_runs: 2 }, runtime, store);
+    let mut service = ExecutionService::new(
+        GlobalConfig {
+            max_concurrent_child_runs: 2,
+        },
+        runtime,
+        store,
+    );
     let execution = service
         .run_to_completion(spec_with_missing_output_policy("mark_failed"))
         .expect("run execution");

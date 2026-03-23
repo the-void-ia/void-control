@@ -86,7 +86,7 @@ impl SwarmStrategy {
             let convergence_pressure =
                 stats.broadcast_messages + stats.dropped_count + stats.expired_count;
             if convergence_pressure > exploration_pressure && candidates.len() > 1 {
-                candidates.truncate((candidates.len() + 1) / 2);
+                candidates.truncate(candidates.len().div_ceil(2));
             }
         }
 
@@ -278,11 +278,7 @@ impl SearchStrategy {
         accumulator: &ExecutionAccumulator,
     ) -> Vec<super::variation::VariationProposal> {
         let mut generated = self.variation.generate(accumulator);
-        let bootstrap_size = self
-            .variation
-            .candidates_per_iteration
-            .min(2)
-            .max(1) as usize;
+        let bootstrap_size = self.variation.candidates_per_iteration.clamp(1, 2) as usize;
         generated.truncate(bootstrap_size);
         generated
     }
@@ -305,7 +301,8 @@ impl SearchStrategy {
         .collect();
 
         if let Some(stats) = advisory_message_stats(&self.variation, message_stats) {
-            let exploration_pressure = stats.signal_count + stats.dropped_count + stats.expired_count;
+            let exploration_pressure =
+                stats.signal_count + stats.dropped_count + stats.expired_count;
             let refinement_pressure = stats.evaluation_count + stats.leader_messages;
             if exploration_pressure > refinement_pressure && proposals.len() > 2 {
                 let first = proposals.remove(0);
@@ -364,7 +361,9 @@ impl SearchStrategy {
         let incumbent = &accumulator.best_candidate_overrides;
         for (path, values) in &self.variation.parameter_space {
             let current = incumbent.get(path);
-            let Some(current_idx) = current.and_then(|value| values.iter().position(|candidate| candidate == value)) else {
+            let Some(current_idx) =
+                current.and_then(|value| values.iter().position(|candidate| candidate == value))
+            else {
                 continue;
             };
             for neighbor_idx in [current_idx.checked_sub(1), Some(current_idx + 1)]

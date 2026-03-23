@@ -108,10 +108,11 @@ impl VariationConfig {
             return Vec::new();
         };
 
-        let iter: Box<dyn Iterator<Item = String>> = match self.selection.unwrap_or(VariationSelection::Sequential) {
-            VariationSelection::Sequential => Box::new(values.iter().cloned()),
-            VariationSelection::Random => Box::new(values.iter().rev().cloned()),
-        };
+        let iter: Box<dyn Iterator<Item = String>> =
+            match self.selection.unwrap_or(VariationSelection::Sequential) {
+                VariationSelection::Sequential => Box::new(values.iter().cloned()),
+                VariationSelection::Random => Box::new(values.iter().rev().cloned()),
+            };
 
         iter.take(self.candidates_per_iteration as usize)
             .map(|value| VariationProposal {

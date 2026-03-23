@@ -63,12 +63,7 @@ fn swarm_incident_mitigation_explores_distinct_hypotheses_and_finds_best_family(
     for idx in 6..=10 {
         runtime.seed_success(
             &format!("exec-run-candidate-{idx}"),
-            metrics_output(
-                &format!("candidate-{idx}"),
-                90.0 + idx as f64,
-                0.05,
-                0.96,
-            ),
+            metrics_output(&format!("candidate-{idx}"), 90.0 + idx as f64, 0.05, 0.96),
         );
     }
 
@@ -85,8 +80,12 @@ fn swarm_incident_mitigation_explores_distinct_hypotheses_and_finds_best_family(
         .expect("run execution");
 
     let store = FsExecutionStore::new(store_dir);
-    let snapshot = store.load_execution(&execution.execution_id).expect("load execution");
-    let intents = store.load_intents(&execution.execution_id).expect("load intents");
+    let snapshot = store
+        .load_execution(&execution.execution_id)
+        .expect("load execution");
+    let intents = store
+        .load_intents(&execution.execution_id)
+        .expect("load intents");
     let messages = store
         .load_routed_messages(&execution.execution_id)
         .expect("load routed messages");
@@ -99,7 +98,9 @@ fn swarm_incident_mitigation_explores_distinct_hypotheses_and_finds_best_family(
     let best = snapshot
         .candidates
         .iter()
-        .filter(|candidate| Some(&candidate.candidate_id) == execution.result_best_candidate_id.as_ref())
+        .filter(|candidate| {
+            Some(&candidate.candidate_id) == execution.result_best_candidate_id.as_ref()
+        })
         .max_by_key(|candidate| candidate.created_seq)
         .expect("best candidate");
 
@@ -112,7 +113,9 @@ fn swarm_incident_mitigation_explores_distinct_hypotheses_and_finds_best_family(
     assert_eq!(execution.status, ExecutionStatus::Completed);
     assert_eq!(execution.completed_iterations, 2);
     assert_eq!(
-        best.overrides.get("mitigation.strategy").map(String::as_str),
+        best.overrides
+            .get("mitigation.strategy")
+            .map(String::as_str),
         Some("rate_limit_cache")
     );
     assert!(explored.starts_with(&[
@@ -158,14 +161,38 @@ fn swarm_incident_mitigation_explores_distinct_hypotheses_and_finds_best_family(
 fn swarm_prompt_optimization_finds_best_style_cluster() {
     let store_dir = temp_store_dir("swarm-prompt");
     let mut runtime = MockRuntime::new();
-    runtime.seed_success("exec-run-candidate-1", prompt_output("candidate-1", 0.74, 0.70));
-    runtime.seed_success("exec-run-candidate-2", prompt_output("candidate-2", 0.89, 0.92));
-    runtime.seed_success("exec-run-candidate-3", prompt_output("candidate-3", 0.78, 0.76));
-    runtime.seed_success("exec-run-candidate-4", prompt_output("candidate-4", 0.69, 0.65));
-    runtime.seed_success("exec-run-candidate-5", prompt_output("candidate-5", 0.81, 0.83));
-    runtime.seed_success("exec-run-candidate-6", prompt_output("candidate-6", 0.76, 0.72));
-    runtime.seed_success("exec-run-candidate-7", prompt_output("candidate-7", 0.72, 0.90));
-    runtime.seed_success("exec-run-candidate-8", prompt_output("candidate-8", 0.96, 0.97));
+    runtime.seed_success(
+        "exec-run-candidate-1",
+        prompt_output("candidate-1", 0.74, 0.70),
+    );
+    runtime.seed_success(
+        "exec-run-candidate-2",
+        prompt_output("candidate-2", 0.89, 0.92),
+    );
+    runtime.seed_success(
+        "exec-run-candidate-3",
+        prompt_output("candidate-3", 0.78, 0.76),
+    );
+    runtime.seed_success(
+        "exec-run-candidate-4",
+        prompt_output("candidate-4", 0.69, 0.65),
+    );
+    runtime.seed_success(
+        "exec-run-candidate-5",
+        prompt_output("candidate-5", 0.81, 0.83),
+    );
+    runtime.seed_success(
+        "exec-run-candidate-6",
+        prompt_output("candidate-6", 0.76, 0.72),
+    );
+    runtime.seed_success(
+        "exec-run-candidate-7",
+        prompt_output("candidate-7", 0.72, 0.90),
+    );
+    runtime.seed_success(
+        "exec-run-candidate-8",
+        prompt_output("candidate-8", 0.96, 0.97),
+    );
 
     let store = FsExecutionStore::new(store_dir.clone());
     let mut service = ExecutionService::new(
@@ -185,7 +212,9 @@ fn swarm_prompt_optimization_finds_best_style_cluster() {
     let best = snapshot
         .candidates
         .iter()
-        .find(|candidate| Some(&candidate.candidate_id) == execution.result_best_candidate_id.as_ref())
+        .find(|candidate| {
+            Some(&candidate.candidate_id) == execution.result_best_candidate_id.as_ref()
+        })
         .expect("best candidate");
 
     assert_eq!(execution.status, ExecutionStatus::Completed);
@@ -337,10 +366,22 @@ fn search_rate_limit_tuning_refines_known_good_direction() {
 fn search_pipeline_optimization_refines_known_bottleneck_config() {
     let store_dir = temp_store_dir("search-pipeline");
     let mut runtime = MockRuntime::new();
-    runtime.seed_success("exec-run-candidate-1", pipeline_output("candidate-1", 0.72, 0.78));
-    runtime.seed_success("exec-run-candidate-2", pipeline_output("candidate-2", 0.84, 0.86));
-    runtime.seed_success("exec-run-candidate-3", pipeline_output("candidate-3", 0.93, 0.95));
-    runtime.seed_success("exec-run-candidate-4", pipeline_output("candidate-4", 0.80, 0.82));
+    runtime.seed_success(
+        "exec-run-candidate-1",
+        pipeline_output("candidate-1", 0.72, 0.78),
+    );
+    runtime.seed_success(
+        "exec-run-candidate-2",
+        pipeline_output("candidate-2", 0.84, 0.86),
+    );
+    runtime.seed_success(
+        "exec-run-candidate-3",
+        pipeline_output("candidate-3", 0.93, 0.95),
+    );
+    runtime.seed_success(
+        "exec-run-candidate-4",
+        pipeline_output("candidate-4", 0.80, 0.82),
+    );
 
     let store = FsExecutionStore::new(store_dir.clone());
     ExecutionService::<MockRuntime>::submit_execution(
@@ -383,7 +424,9 @@ fn search_pipeline_optimization_refines_known_bottleneck_config() {
     let best = snapshot
         .candidates
         .iter()
-        .filter(|candidate| Some(&candidate.candidate_id) == snapshot.execution.result_best_candidate_id.as_ref())
+        .filter(|candidate| {
+            Some(&candidate.candidate_id) == snapshot.execution.result_best_candidate_id.as_ref()
+        })
         .max_by_key(|candidate| candidate.created_seq)
         .expect("best candidate");
 
@@ -680,7 +723,12 @@ fn proposal(items: &[(&str, &str)]) -> VariationProposal {
     }
 }
 
-fn metrics_output(candidate_id: &str, latency_p99_ms: f64, cost_usd: f64, success_rate: f64) -> CandidateOutput {
+fn metrics_output(
+    candidate_id: &str,
+    latency_p99_ms: f64,
+    cost_usd: f64,
+    success_rate: f64,
+) -> CandidateOutput {
     CandidateOutput::new(
         candidate_id.to_string(),
         true,

@@ -79,9 +79,13 @@ fn store_round_trips_execution_and_events() {
         event(ControlEventType::IterationStarted),
     ];
 
-    store.create_execution(&execution).expect("create execution");
+    store
+        .create_execution(&execution)
+        .expect("create execution");
     for event in &events {
-        store.append_event("exec-store-1", event).expect("append event");
+        store
+            .append_event("exec-store-1", event)
+            .expect("append event");
     }
     store
         .save_accumulator(
@@ -108,7 +112,9 @@ fn store_can_reload_accumulator_after_restart() {
 
     {
         let store = FsExecutionStore::new(root.clone());
-        store.create_execution(&execution).expect("create execution");
+        store
+            .create_execution(&execution)
+            .expect("create execution");
         store
             .save_accumulator(
                 "exec-store-2",

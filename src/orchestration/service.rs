@@ -1,6 +1,8 @@
 use std::io;
 
-use crate::contract::{ContractError, ExecutionPolicy, RuntimeInspection, StartRequest, StartResult};
+use crate::contract::{
+    ContractError, ExecutionPolicy, RuntimeInspection, StartRequest, StartResult,
+};
 
 use super::events::{ControlEventEnvelope, ControlEventType};
 #[cfg(feature = "serde")]
@@ -57,6 +59,18 @@ enum DispatchOutcome {
     Paused(io::Error),
     Retryable(io::Error),
     Canceled,
+}
+
+struct CandidateStateUpdate<'a> {
+    execution_id: &'a str,
+    candidate_id: &'a str,
+    created_seq: u64,
+    iteration: u32,
+    status: CandidateStatus,
+    runtime_run_id: Option<String>,
+    overrides: &'a std::collections::BTreeMap<String, String>,
+    succeeded: Option<bool>,
+    metrics: &'a std::collections::BTreeMap<String, f64>,
 }
 
 enum SelectedStrategy {
@@ -200,10 +214,7 @@ where
             snapshot.execution.status,
             ExecutionStatus::Pending | ExecutionStatus::Running
         ) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                invalid_message,
-            ));
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, invalid_message));
         }
         let spec = self.store.load_spec(execution_id)?;
         Ok((snapshot, spec))
@@ -238,14 +249,17 @@ where
             match self.check_execution_control(execution_id, worker_id)? {
                 ExecutionControl::Continue => {}
                 ExecutionControl::Paused => {
-                    return Err(io::Error::new(io::ErrorKind::WouldBlock, "execution paused"));
+                    return Err(io::Error::new(
+                        io::ErrorKind::WouldBlock,
+                        "execution paused",
+                    ));
                 }
                 ExecutionControl::Canceled => return Ok(None),
             }
             let inspection = self
                 .runtime
                 .inspect_run(handle)
-                .map_err(|err| io::Error::new(io::ErrorKind::Other, err.message.clone()))?;
+                .map_err(|err| io::Error::other(err.message.clone()))?;
             if inspection.state.is_terminal() {
                 return Ok(Some(inspection));
             }
@@ -306,7 +320,10 @@ where
         let worker_id = Self::worker_id();
         self.store.create_execution(&execution)?;
         self.append_event(&execution.execution_id, ControlEventType::ExecutionCreated)?;
-        self.append_event(&execution.execution_id, ControlEventType::ExecutionSubmitted)?;
+        self.append_event(
+            &execution.execution_id,
+            ControlEventType::ExecutionSubmitted,
+        )?;
         execution.status = ExecutionStatus::Running;
         self.store.save_execution(&execution)?;
         self.append_event(&execution.execution_id, ControlEventType::ExecutionStarted)?;
@@ -472,28 +489,24 @@ where
 
     fn append_event(&self, execution_id: &str, event_type: ControlEventType) -> io::Result<()> {
         let seq = self.store.load_execution(execution_id)?.events.len() as u64 + 1;
-        self.store
-            .append_event(execution_id, &ControlEventEnvelope::new(execution_id, seq, event_type))
+        self.store.append_event(
+            execution_id,
+            &ControlEventEnvelope::new(execution_id, seq, event_type),
+        )
     }
 
-    fn save_candidate_state(
-        &self,
-        execution_id: &str,
-        candidate_id: &str,
-        created_seq: u64,
-        iteration: u32,
-        status: CandidateStatus,
-        runtime_run_id: Option<String>,
-        overrides: &std::collections::BTreeMap<String, String>,
-        succeeded: Option<bool>,
-        metrics: &std::collections::BTreeMap<String, f64>,
-    ) -> io::Result<()> {
-        let mut record =
-            ExecutionCandidate::new(execution_id, candidate_id, created_seq, iteration, status);
-        record.runtime_run_id = runtime_run_id;
-        record.overrides = overrides.clone();
-        record.succeeded = succeeded;
-        record.metrics = metrics.clone();
+    fn save_candidate_state(&self, update: CandidateStateUpdate<'_>) -> io::Result<()> {
+        let mut record = ExecutionCandidate::new(
+            update.execution_id,
+            update.candidate_id,
+            update.created_seq,
+            update.iteration,
+            update.status,
+        );
+        record.runtime_run_id = update.runtime_run_id;
+        record.overrides = update.overrides.clone();
+        record.succeeded = update.succeeded;
+        record.metrics = update.metrics.clone();
         self.store.save_candidate(&record)
     }
 
@@ -604,17 +617,17 @@ where
         let candidates = strategy.plan_candidates(accumulator, &inboxes, message_stats.as_ref());
         for candidate in &candidates {
             let candidate_seq = self.next_candidate_id;
-            self.save_candidate_state(
-                &execution.execution_id,
-                &candidate.candidate_id,
-                candidate_seq,
+            self.save_candidate_state(CandidateStateUpdate {
+                execution_id: &execution.execution_id,
+                candidate_id: &candidate.candidate_id,
+                created_seq: candidate_seq,
                 iteration,
-                CandidateStatus::Queued,
-                None,
-                &candidate.overrides,
-                None,
-                &Default::default(),
-            )?;
+                status: CandidateStatus::Queued,
+                runtime_run_id: None,
+                overrides: &candidate.overrides,
+                succeeded: None,
+                metrics: &Default::default(),
+            })?;
             self.append_event(&execution.execution_id, ControlEventType::CandidateQueued)?;
             self.next_candidate_id += 1;
         }
@@ -622,14 +635,12 @@ where
     }
 
     #[cfg(feature = "serde")]
-    fn load_message_stats(
-        &self,
-        execution_id: &str,
-        iteration: u32,
-    ) -> io::Result<MessageStats> {
+    fn load_message_stats(&self, execution_id: &str, iteration: u32) -> io::Result<MessageStats> {
         let intents = self.store.load_intents(execution_id)?;
         let messages = self.store.load_routed_messages(execution_id)?;
-        Ok(message_box::extract_message_stats(&intents, &messages, iteration))
+        Ok(message_box::extract_message_stats(
+            &intents, &messages, iteration,
+        ))
     }
 
     fn load_or_plan_iteration_candidates(
@@ -670,7 +681,10 @@ where
         created_seq: u64,
     ) -> io::Result<DispatchOutcome> {
         let run_id = format!("exec-run-candidate-{created_seq}");
-        self.append_event(&execution.execution_id, ControlEventType::CandidateDispatched)?;
+        self.append_event(
+            &execution.execution_id,
+            ControlEventType::CandidateDispatched,
+        )?;
         #[cfg(feature = "serde")]
         let launch_inbox = self.load_launch_inbox_snapshot(
             &execution.execution_id,
@@ -692,7 +706,7 @@ where
         let started = self
             .runtime
             .start_run(launch_request)
-            .map_err(|err| io::Error::new(io::ErrorKind::Other, err.message))?;
+            .map_err(|err| io::Error::other(err.message))?;
         #[cfg(not(feature = "serde"))]
         let started = self
             .runtime
@@ -702,54 +716,54 @@ where
                 launch_context: None,
                 policy: default_runtime_policy(),
             })
-            .map_err(|err| io::Error::new(io::ErrorKind::Other, err.message))?;
-        self.save_candidate_state(
-            &execution.execution_id,
-            &candidate.candidate_id,
+            .map_err(|err| io::Error::other(err.message))?;
+        self.save_candidate_state(CandidateStateUpdate {
+            execution_id: &execution.execution_id,
+            candidate_id: &candidate.candidate_id,
             created_seq,
             iteration,
-            CandidateStatus::Running,
-            Some(run_id.clone()),
-            &candidate.overrides,
-            None,
-            &Default::default(),
-        )?;
+            status: CandidateStatus::Running,
+            runtime_run_id: Some(run_id.clone()),
+            overrides: &candidate.overrides,
+            succeeded: None,
+            metrics: &Default::default(),
+        })?;
 
-        let inspection = match self.wait_for_terminal_run(&execution.execution_id, worker_id, &started.handle)
-        {
-            Ok(Some(inspection)) => inspection,
-            Ok(None) => {
-                self.save_candidate_state(
-                    &execution.execution_id,
-                    &candidate.candidate_id,
-                    created_seq,
-                    iteration,
-                    CandidateStatus::Canceled,
-                    Some(run_id),
-                    &candidate.overrides,
-                    None,
-                    &Default::default(),
-                )?;
-                return Ok(DispatchOutcome::Canceled);
-            }
-            Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
-                return Ok(DispatchOutcome::Paused(err));
-            }
-            Err(err) => return Err(err),
-        };
+        let inspection =
+            match self.wait_for_terminal_run(&execution.execution_id, worker_id, &started.handle) {
+                Ok(Some(inspection)) => inspection,
+                Ok(None) => {
+                    self.save_candidate_state(CandidateStateUpdate {
+                        execution_id: &execution.execution_id,
+                        candidate_id: &candidate.candidate_id,
+                        created_seq,
+                        iteration,
+                        status: CandidateStatus::Canceled,
+                        runtime_run_id: Some(run_id),
+                        overrides: &candidate.overrides,
+                        succeeded: None,
+                        metrics: &Default::default(),
+                    })?;
+                    return Ok(DispatchOutcome::Canceled);
+                }
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                    return Ok(DispatchOutcome::Paused(err));
+                }
+                Err(err) => return Err(err),
+            };
 
         if inspection.state == crate::contract::RunState::Failed {
-            self.save_candidate_state(
-                &execution.execution_id,
-                &candidate.candidate_id,
+            self.save_candidate_state(CandidateStateUpdate {
+                execution_id: &execution.execution_id,
+                candidate_id: &candidate.candidate_id,
                 created_seq,
                 iteration,
-                CandidateStatus::Failed,
-                Some(inspection.run_id.clone()),
-                &candidate.overrides,
-                Some(false),
-                &Default::default(),
-            )?;
+                status: CandidateStatus::Failed,
+                runtime_run_id: Some(inspection.run_id.clone()),
+                overrides: &candidate.overrides,
+                succeeded: Some(false),
+                metrics: &Default::default(),
+            })?;
             self.append_event(
                 &execution.execution_id,
                 ControlEventType::CandidateOutputCollected,
@@ -766,17 +780,17 @@ where
 
         match self.runtime.take_structured_output(&inspection.run_id) {
             StructuredOutputResult::Found(mut output) => {
-                self.save_candidate_state(
-                    &execution.execution_id,
-                    &candidate.candidate_id,
+                self.save_candidate_state(CandidateStateUpdate {
+                    execution_id: &execution.execution_id,
+                    candidate_id: &candidate.candidate_id,
                     created_seq,
                     iteration,
-                    CandidateStatus::Completed,
-                    Some(inspection.run_id.clone()),
-                    &candidate.overrides,
-                    Some(output.succeeded),
-                    &output.metrics,
-                )?;
+                    status: CandidateStatus::Completed,
+                    runtime_run_id: Some(inspection.run_id.clone()),
+                    overrides: &candidate.overrides,
+                    succeeded: Some(output.succeeded),
+                    metrics: &output.metrics,
+                })?;
                 output.candidate_id = candidate.candidate_id.clone();
                 self.append_event(
                     &execution.execution_id,
@@ -796,21 +810,21 @@ where
             }
             StructuredOutputResult::Missing => {
                 let failed = spec.policy.missing_output_policy == "mark_failed";
-                self.save_candidate_state(
-                    &execution.execution_id,
-                    &candidate.candidate_id,
+                self.save_candidate_state(CandidateStateUpdate {
+                    execution_id: &execution.execution_id,
+                    candidate_id: &candidate.candidate_id,
                     created_seq,
                     iteration,
-                    if failed {
+                    status: if failed {
                         CandidateStatus::Failed
                     } else {
                         CandidateStatus::Completed
                     },
-                    Some(inspection.run_id.clone()),
-                    &candidate.overrides,
-                    Some(!failed),
-                    &Default::default(),
-                )?;
+                    runtime_run_id: Some(inspection.run_id.clone()),
+                    overrides: &candidate.overrides,
+                    succeeded: Some(!failed),
+                    metrics: &Default::default(),
+                })?;
                 self.append_event(
                     &execution.execution_id,
                     ControlEventType::CandidateOutputCollected,
@@ -827,21 +841,21 @@ where
             StructuredOutputResult::Error(err) => match err.code {
                 crate::contract::ContractErrorCode::StructuredOutputMissing => {
                     let failed = spec.policy.missing_output_policy == "mark_failed";
-                    self.save_candidate_state(
-                        &execution.execution_id,
-                        &candidate.candidate_id,
+                    self.save_candidate_state(CandidateStateUpdate {
+                        execution_id: &execution.execution_id,
+                        candidate_id: &candidate.candidate_id,
                         created_seq,
                         iteration,
-                        if failed {
+                        status: if failed {
                             CandidateStatus::Failed
                         } else {
                             CandidateStatus::Completed
                         },
-                        Some(inspection.run_id.clone()),
-                        &candidate.overrides,
-                        Some(!failed),
-                        &Default::default(),
-                    )?;
+                        runtime_run_id: Some(inspection.run_id.clone()),
+                        overrides: &candidate.overrides,
+                        succeeded: Some(!failed),
+                        metrics: &Default::default(),
+                    })?;
                     self.append_event(
                         &execution.execution_id,
                         ControlEventType::CandidateOutputCollected,
@@ -866,17 +880,17 @@ where
                     )))
                 }
                 _ => {
-                    self.save_candidate_state(
-                        &execution.execution_id,
-                        &candidate.candidate_id,
+                    self.save_candidate_state(CandidateStateUpdate {
+                        execution_id: &execution.execution_id,
+                        candidate_id: &candidate.candidate_id,
                         created_seq,
                         iteration,
-                        CandidateStatus::Failed,
-                        Some(inspection.run_id.clone()),
-                        &candidate.overrides,
-                        Some(false),
-                        &Default::default(),
-                    )?;
+                        status: CandidateStatus::Failed,
+                        runtime_run_id: Some(inspection.run_id.clone()),
+                        overrides: &candidate.overrides,
+                        succeeded: Some(false),
+                        metrics: &Default::default(),
+                    })?;
                     self.append_event(
                         &execution.execution_id,
                         ControlEventType::CandidateOutputCollected,
@@ -914,12 +928,18 @@ where
                 ExecutionControl::Paused => {
                     execution.status = ExecutionStatus::Paused;
                     self.store.save_execution(execution)?;
-                    return Err(io::Error::new(io::ErrorKind::WouldBlock, "execution paused"));
+                    return Err(io::Error::new(
+                        io::ErrorKind::WouldBlock,
+                        "execution paused",
+                    ));
                 }
                 ExecutionControl::Canceled => {
                     execution.status = ExecutionStatus::Canceled;
                     self.store.save_execution(execution)?;
-                    self.append_event(&execution.execution_id, ControlEventType::ExecutionCanceled)?;
+                    self.append_event(
+                        &execution.execution_id,
+                        ControlEventType::ExecutionCanceled,
+                    )?;
                     return Ok(execution.clone());
                 }
             }
@@ -949,12 +969,18 @@ where
                     ExecutionControl::Paused => {
                         execution.status = ExecutionStatus::Paused;
                         self.store.save_execution(execution)?;
-                        return Err(io::Error::new(io::ErrorKind::WouldBlock, "execution paused"));
+                        return Err(io::Error::new(
+                            io::ErrorKind::WouldBlock,
+                            "execution paused",
+                        ));
                     }
                     ExecutionControl::Canceled => {
                         execution.status = ExecutionStatus::Canceled;
                         self.store.save_execution(execution)?;
-                        self.append_event(&execution.execution_id, ControlEventType::ExecutionCanceled)?;
+                        self.append_event(
+                            &execution.execution_id,
+                            ControlEventType::ExecutionCanceled,
+                        )?;
                         return Ok(execution.clone());
                     }
                 }
@@ -968,7 +994,7 @@ where
                     execution,
                     spec,
                     worker_id,
-                    &candidate,
+                    candidate,
                     iteration,
                     candidate_seq,
                 )? {
@@ -989,7 +1015,10 @@ where
                     DispatchOutcome::Canceled => {
                         execution.status = ExecutionStatus::Canceled;
                         self.store.save_execution(execution)?;
-                        self.append_event(&execution.execution_id, ControlEventType::ExecutionCanceled)?;
+                        self.append_event(
+                            &execution.execution_id,
+                            ControlEventType::ExecutionCanceled,
+                        )?;
                         return Ok(execution.clone());
                     }
                 }
@@ -1002,7 +1031,10 @@ where
                 .filter(|candidate| candidate.iteration == iteration)
                 .collect();
             let has_pending_candidates = persisted_iteration_candidates.iter().any(|candidate| {
-                matches!(candidate.status, CandidateStatus::Queued | CandidateStatus::Running)
+                matches!(
+                    candidate.status,
+                    CandidateStatus::Queued | CandidateStatus::Running
+                )
             });
             if has_pending_candidates {
                 self.store.save_execution(execution)?;
@@ -1040,7 +1072,8 @@ where
             execution.completed_iterations = accumulator.completed_iterations;
             execution.failure_counts = accumulator.failure_counts.clone();
             execution.result_best_candidate_id = accumulator.best_candidate_id.clone();
-            self.store.save_accumulator(&execution.execution_id, &accumulator)?;
+            self.store
+                .save_accumulator(&execution.execution_id, &accumulator)?;
 
             let all_failed = outputs.iter().all(|output| !output.succeeded);
             if all_failed {
@@ -1061,7 +1094,10 @@ where
                     _ => {
                         execution.status = ExecutionStatus::Failed;
                         self.store.save_execution(execution)?;
-                        self.append_event(&execution.execution_id, ControlEventType::ExecutionFailed)?;
+                        self.append_event(
+                            &execution.execution_id,
+                            ControlEventType::ExecutionFailed,
+                        )?;
                         return Ok(execution.clone());
                     }
                 }
@@ -1077,12 +1113,21 @@ where
             if strategy.should_stop(&accumulator, &evaluation).is_some() {
                 execution.status = ExecutionStatus::Completed;
                 self.store.save_execution(execution)?;
-                self.append_event(&execution.execution_id, ControlEventType::IterationCompleted)?;
-                self.append_event(&execution.execution_id, ControlEventType::ExecutionCompleted)?;
+                self.append_event(
+                    &execution.execution_id,
+                    ControlEventType::IterationCompleted,
+                )?;
+                self.append_event(
+                    &execution.execution_id,
+                    ControlEventType::ExecutionCompleted,
+                )?;
                 return Ok(execution.clone());
             }
 
-            self.append_event(&execution.execution_id, ControlEventType::IterationCompleted)?;
+            self.append_event(
+                &execution.execution_id,
+                ControlEventType::IterationCompleted,
+            )?;
             iteration += 1;
         }
 
@@ -1146,11 +1191,7 @@ impl ExecutionService<crate::runtime::MockRuntime> {
         };
         store.append_event(
             execution_id,
-            &ControlEventEnvelope::new(
-                execution_id,
-                snapshot.events.len() as u64 + 1,
-                event_type,
-            ),
+            &ControlEventEnvelope::new(execution_id, snapshot.events.len() as u64 + 1, event_type),
         )?;
         Ok(snapshot.execution)
     }

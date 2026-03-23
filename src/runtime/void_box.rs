@@ -2,9 +2,9 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 
 use crate::contract::{
-    from_void_box_run_and_events_json, from_void_box_run_json, ContractError, ContractErrorCode,
-    map_void_box_status, ConvertedRunView, EventEnvelope, EventType, RunState, RuntimeInspection, StartRequest,
-    StartResult, StopRequest, StopResult, SubscribeEventsRequest,
+    from_void_box_run_and_events_json, from_void_box_run_json, map_void_box_status, ContractError,
+    ContractErrorCode, ConvertedRunView, EventEnvelope, EventType, RunState, RuntimeInspection,
+    StartRequest, StartResult, StopRequest, StopResult, SubscribeEventsRequest,
 };
 use crate::orchestration::CandidateOutput;
 
@@ -41,9 +41,10 @@ impl VoidBoxRuntimeClient {
     }
 
     pub fn start(&self, request: StartRequest) -> Result<StartResult, ContractError> {
-        request.policy.validate().map_err(|msg| {
-            ContractError::new(ContractErrorCode::InvalidPolicy, msg, false)
-        })?;
+        request
+            .policy
+            .validate()
+            .map_err(|msg| ContractError::new(ContractErrorCode::InvalidPolicy, msg, false))?;
 
         let input = match request.launch_context.as_deref() {
             Some(context) => Some(serde_json::from_str(context).map_err(|e| {
@@ -283,9 +284,14 @@ impl VoidBoxRuntimeClient {
         &self,
         run_id: &str,
     ) -> Result<Option<CandidateOutput>, ContractError> {
-        if let Some(retrieval_path) = self.find_manifest_artifact_path(run_id, None, "result.json")? {
+        if let Some(retrieval_path) =
+            self.find_manifest_artifact_path(run_id, None, "result.json")?
+        {
             let response = self.http_get(&retrieval_path)?;
-            return match parse_artifact_response(&response, ContractErrorCode::StructuredOutputMissing)? {
+            return match parse_artifact_response(
+                &response,
+                ContractErrorCode::StructuredOutputMissing,
+            )? {
                 Some(body) => parse_structured_output(run_id, &body).map(Some),
                 None => Ok(None),
             };
@@ -528,7 +534,10 @@ fn run_id_from_handle(handle: &str) -> Result<&str, ContractError> {
     })
 }
 
-fn filter_events_from_id(events: Vec<EventEnvelope>, from_event_id: Option<&str>) -> Vec<EventEnvelope> {
+fn filter_events_from_id(
+    events: Vec<EventEnvelope>,
+    from_event_id: Option<&str>,
+) -> Vec<EventEnvelope> {
     let Some(from_id) = from_event_id else {
         return events;
     };
@@ -566,7 +575,9 @@ fn manifest_retrieval_path(
             .and_then(serde_json::Value::as_str);
         if entry_name == Some(name)
             && retrieval_path.is_some()
-            && stage.map(|wanted| Some(wanted) == entry_stage).unwrap_or(true)
+            && stage
+                .map(|wanted| Some(wanted) == entry_stage)
+                .unwrap_or(true)
         {
             return Ok(retrieval_path.map(normalize_retrieval_path));
         }
@@ -640,11 +651,7 @@ fn parse_api_error(body: &str) -> Option<ContractError> {
         .get("retryable")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
-    Some(ContractError::new(
-        map_error_code(code),
-        message,
-        retryable,
-    ))
+    Some(ContractError::new(map_error_code(code), message, retryable))
 }
 
 fn map_error_code(code: &str) -> ContractErrorCode {
@@ -664,10 +671,7 @@ fn map_error_code(code: &str) -> ContractErrorCode {
     }
 }
 
-fn parse_structured_output(
-    run_id: &str,
-    body: &str,
-) -> Result<CandidateOutput, ContractError> {
+fn parse_structured_output(run_id: &str, body: &str) -> Result<CandidateOutput, ContractError> {
     let value: serde_json::Value = serde_json::from_str(body).map_err(|e| {
         ContractError::new(
             ContractErrorCode::StructuredOutputMalformed,
@@ -845,7 +849,9 @@ mod tests {
     fn returns_none_when_structured_output_file_missing() {
         let client = client(vec![]);
 
-        let output = client.fetch_structured_output("run-missing").expect("fetch");
+        let output = client
+            .fetch_structured_output("run-missing")
+            .expect("fetch");
 
         assert!(output.is_none());
     }
@@ -888,7 +894,12 @@ mod tests {
     #[test]
     fn fetch_structured_output_maps_missing_output_error() {
         let client = client(vec![
-            ("GET", "/v1/runs/run-missing-output", 200, r#"{"id":"run-missing-output","status":"Completed"}"#),
+            (
+                "GET",
+                "/v1/runs/run-missing-output",
+                200,
+                r#"{"id":"run-missing-output","status":"Completed"}"#,
+            ),
             (
                 "GET",
                 "/v1/runs/run-missing-output/stages/main/output-file",
@@ -908,7 +919,12 @@ mod tests {
     #[test]
     fn fetch_structured_output_falls_back_to_output_stage_after_main_404() {
         let client = client(vec![
-            ("GET", "/v1/runs/run-output-stage", 200, r#"{"id":"run-output-stage","status":"Completed"}"#),
+            (
+                "GET",
+                "/v1/runs/run-output-stage",
+                200,
+                r#"{"id":"run-output-stage","status":"Completed"}"#,
+            ),
             (
                 "GET",
                 "/v1/runs/run-output-stage/stages/main/output-file",
@@ -934,7 +950,12 @@ mod tests {
     #[test]
     fn fetch_structured_output_maps_malformed_output_error() {
         let client = client(vec![
-            ("GET", "/v1/runs/run-malformed", 200, r#"{"id":"run-malformed","status":"Completed"}"#),
+            (
+                "GET",
+                "/v1/runs/run-malformed",
+                200,
+                r#"{"id":"run-malformed","status":"Completed"}"#,
+            ),
             (
                 "GET",
                 "/v1/runs/run-malformed/stages/main/output-file",
@@ -1049,7 +1070,10 @@ mod tests {
         assert_eq!(recorded[0].1, "/v1/runs");
         let body: serde_json::Value =
             serde_json::from_str(&recorded[0].2).expect("parse request body");
-        assert_eq!(body.get("file").and_then(serde_json::Value::as_str), Some("fixtures/sample.vbrun"));
+        assert_eq!(
+            body.get("file").and_then(serde_json::Value::as_str),
+            Some("fixtures/sample.vbrun")
+        );
         assert_eq!(body.get("input"), Some(&snapshot));
     }
 
@@ -1126,7 +1150,12 @@ mod tests {
 
     #[test]
     fn inspect_404_maps_to_not_found() {
-        let c = client(vec![("GET", "/v1/runs/run-404", 404, r#"{"error":"not found"}"#)]);
+        let c = client(vec![(
+            "GET",
+            "/v1/runs/run-404",
+            404,
+            r#"{"error":"not found"}"#,
+        )]);
         let err = c.inspect("vb:run-404").expect_err("expected not found");
         assert_eq!(err.code, ContractErrorCode::NotFound);
     }

@@ -92,9 +92,24 @@ fn supported_strategies_persist_terminal_candidate_records() {
 
         assert_eq!(candidates.len(), queued_count, "{mode}");
         assert!(!candidates.is_empty(), "{mode}");
-        assert!(candidates.iter().all(|candidate| candidate.status == CandidateStatus::Completed), "{mode}");
-        assert!(candidates.iter().all(|candidate| candidate.runtime_run_id.is_some()), "{mode}");
-        assert!(candidates.iter().all(|candidate| candidate.succeeded == Some(true)), "{mode}");
+        assert!(
+            candidates
+                .iter()
+                .all(|candidate| candidate.status == CandidateStatus::Completed),
+            "{mode}"
+        );
+        assert!(
+            candidates
+                .iter()
+                .all(|candidate| candidate.runtime_run_id.is_some()),
+            "{mode}"
+        );
+        assert!(
+            candidates
+                .iter()
+                .all(|candidate| candidate.succeeded == Some(true)),
+            "{mode}"
+        );
     }
 }
 
@@ -131,24 +146,40 @@ fn search_strategy_refines_across_incremental_worker_ticks() {
     let mut runtime = MockRuntime::new();
     runtime.seed_success(
         "exec-run-candidate-1",
-        output("candidate-1", &[("latency_p99_ms", 95.0), ("cost_usd", 0.05)]),
+        output(
+            "candidate-1",
+            &[("latency_p99_ms", 95.0), ("cost_usd", 0.05)],
+        ),
     );
     runtime.seed_success(
         "exec-run-candidate-2",
-        output("candidate-2", &[("latency_p99_ms", 80.0), ("cost_usd", 0.03)]),
+        output(
+            "candidate-2",
+            &[("latency_p99_ms", 80.0), ("cost_usd", 0.03)],
+        ),
     );
     runtime.seed_success(
         "exec-run-candidate-3",
-        output("candidate-3", &[("latency_p99_ms", 70.0), ("cost_usd", 0.02)]),
+        output(
+            "candidate-3",
+            &[("latency_p99_ms", 70.0), ("cost_usd", 0.02)],
+        ),
     );
     runtime.seed_success(
         "exec-run-candidate-4",
-        output("candidate-4", &[("latency_p99_ms", 72.0), ("cost_usd", 0.025)]),
+        output(
+            "candidate-4",
+            &[("latency_p99_ms", 72.0), ("cost_usd", 0.025)],
+        ),
     );
 
     let store = FsExecutionStore::new(store_dir.clone());
-    ExecutionService::<MockRuntime>::submit_execution(&store, "exec-search", &strategy_spec("search"))
-        .expect("submit execution");
+    ExecutionService::<MockRuntime>::submit_execution(
+        &store,
+        "exec-search",
+        &strategy_spec("search"),
+    )
+    .expect("submit execution");
 
     let mut service = ExecutionService::new(
         GlobalConfig {
@@ -157,13 +188,18 @@ fn search_strategy_refines_across_incremental_worker_ticks() {
         runtime,
         store,
     );
-    service.plan_execution("exec-search").expect("plan execution");
+    service
+        .plan_execution("exec-search")
+        .expect("plan execution");
 
     for _ in 0..8 {
         let execution = service
             .dispatch_execution_once("exec-search")
             .expect("dispatch execution");
-        if matches!(execution.status, ExecutionStatus::Completed | ExecutionStatus::Failed) {
+        if matches!(
+            execution.status,
+            ExecutionStatus::Completed | ExecutionStatus::Failed
+        ) {
             break;
         }
     }
@@ -216,11 +252,17 @@ fn swarm_strategy_routes_intents_into_next_iteration_message_box_and_events() {
     );
     runtime.seed_success(
         "exec-run-candidate-3",
-        output("candidate-3", &[("latency_p99_ms", 70.0), ("cost_usd", 0.02)]),
+        output(
+            "candidate-3",
+            &[("latency_p99_ms", 70.0), ("cost_usd", 0.02)],
+        ),
     );
     runtime.seed_success(
         "exec-run-candidate-4",
-        output("candidate-4", &[("latency_p99_ms", 72.0), ("cost_usd", 0.025)]),
+        output(
+            "candidate-4",
+            &[("latency_p99_ms", 72.0), ("cost_usd", 0.025)],
+        ),
     );
 
     let store = FsExecutionStore::new(store_dir.clone());
@@ -236,8 +278,12 @@ fn swarm_strategy_routes_intents_into_next_iteration_message_box_and_events() {
         .expect("run execution");
 
     let store = FsExecutionStore::new(store_dir);
-    let snapshot = store.load_execution(&execution.execution_id).expect("load execution");
-    let intents = store.load_intents(&execution.execution_id).expect("load intents");
+    let snapshot = store
+        .load_execution(&execution.execution_id)
+        .expect("load execution");
+    let intents = store
+        .load_intents(&execution.execution_id)
+        .expect("load intents");
     let messages = store
         .load_routed_messages(&execution.execution_id)
         .expect("load routed messages");
@@ -252,14 +298,16 @@ fn swarm_strategy_routes_intents_into_next_iteration_message_box_and_events() {
     assert_eq!(
         messages
             .iter()
-            .filter(|message| message.status == void_control::orchestration::RoutedMessageStatus::Routed)
+            .filter(|message| message.status
+                == void_control::orchestration::RoutedMessageStatus::Routed)
             .count(),
         2
     );
     assert_eq!(
         messages
             .iter()
-            .filter(|message| message.status == void_control::orchestration::RoutedMessageStatus::Delivered)
+            .filter(|message| message.status
+                == void_control::orchestration::RoutedMessageStatus::Delivered)
             .count(),
         3
     );
@@ -297,7 +345,10 @@ fn search_strategy_persists_lineage_and_delivers_parent_intent_to_refinement_ite
     );
     runtime.seed_success(
         "exec-run-candidate-2",
-        output("candidate-2", &[("latency_p99_ms", 80.0), ("cost_usd", 0.03)]),
+        output(
+            "candidate-2",
+            &[("latency_p99_ms", 80.0), ("cost_usd", 0.03)],
+        ),
     );
     runtime.seed_success(
         "exec-run-candidate-3",
@@ -314,7 +365,10 @@ fn search_strategy_persists_lineage_and_delivers_parent_intent_to_refinement_ite
     );
     runtime.seed_success(
         "exec-run-candidate-4",
-        output("candidate-4", &[("latency_p99_ms", 72.0), ("cost_usd", 0.025)]),
+        output(
+            "candidate-4",
+            &[("latency_p99_ms", 72.0), ("cost_usd", 0.025)],
+        ),
     );
 
     let store = FsExecutionStore::new(store_dir.clone());
@@ -330,7 +384,9 @@ fn search_strategy_persists_lineage_and_delivers_parent_intent_to_refinement_ite
         .expect("run execution");
 
     let store = FsExecutionStore::new(store_dir);
-    let intents = store.load_intents(&execution.execution_id).expect("load intents");
+    let intents = store
+        .load_intents(&execution.execution_id)
+        .expect("load intents");
     let inbox = store
         .load_inbox_snapshot(&execution.execution_id, 1, "candidate-1")
         .expect("load iteration-1 inbox");
@@ -362,21 +418,27 @@ fn signal_reactive_search_runs_end_to_end() {
             "multiple candidates saw the same bottleneck",
         )],
     );
-    runtime.seed_success(
-        "exec-run-candidate-1",
-        signal_output.clone(),
-    );
+    runtime.seed_success("exec-run-candidate-1", signal_output.clone());
     runtime.seed_success(
         "exec-run-candidate-2",
-        output("candidate-2", &[("latency_p99_ms", 80.0), ("cost_usd", 0.03)]),
+        output(
+            "candidate-2",
+            &[("latency_p99_ms", 80.0), ("cost_usd", 0.03)],
+        ),
     );
     runtime.seed_success(
         "exec-run-candidate-3",
-        output("candidate-3", &[("latency_p99_ms", 70.0), ("cost_usd", 0.02)]),
+        output(
+            "candidate-3",
+            &[("latency_p99_ms", 70.0), ("cost_usd", 0.02)],
+        ),
     );
     runtime.seed_success(
         "exec-run-candidate-4",
-        output("candidate-4", &[("latency_p99_ms", 72.0), ("cost_usd", 0.025)]),
+        output(
+            "candidate-4",
+            &[("latency_p99_ms", 72.0), ("cost_usd", 0.025)],
+        ),
     );
 
     let execution_id = "exec-search-signal-reactive";
@@ -451,14 +513,16 @@ fn signal_reactive_search_runs_end_to_end() {
     assert_eq!(
         messages
             .iter()
-            .filter(|message| message.status == void_control::orchestration::RoutedMessageStatus::Routed)
+            .filter(|message| message.status
+                == void_control::orchestration::RoutedMessageStatus::Routed)
             .count(),
         1
     );
     assert_eq!(
         messages
             .iter()
-            .filter(|message| message.status == void_control::orchestration::RoutedMessageStatus::Delivered)
+            .filter(|message| message.status
+                == void_control::orchestration::RoutedMessageStatus::Delivered)
             .count(),
         2
     );
@@ -475,19 +539,31 @@ fn legacy_leader_directed_uses_persisted_planner_proposals() {
     let mut runtime = MockRuntime::new();
     runtime.seed_success(
         "exec-run-candidate-1",
-        output("candidate-1", &[("latency_p99_ms", 95.0), ("cost_usd", 0.05)]),
+        output(
+            "candidate-1",
+            &[("latency_p99_ms", 95.0), ("cost_usd", 0.05)],
+        ),
     );
     runtime.seed_success(
         "exec-run-candidate-2",
-        output("candidate-2", &[("latency_p99_ms", 80.0), ("cost_usd", 0.03)]),
+        output(
+            "candidate-2",
+            &[("latency_p99_ms", 80.0), ("cost_usd", 0.03)],
+        ),
     );
     runtime.seed_success(
         "exec-run-candidate-3",
-        output("candidate-3", &[("latency_p99_ms", 70.0), ("cost_usd", 0.02)]),
+        output(
+            "candidate-3",
+            &[("latency_p99_ms", 70.0), ("cost_usd", 0.02)],
+        ),
     );
     runtime.seed_success(
         "exec-run-candidate-4",
-        output("candidate-4", &[("latency_p99_ms", 72.0), ("cost_usd", 0.025)]),
+        output(
+            "candidate-4",
+            &[("latency_p99_ms", 72.0), ("cost_usd", 0.025)],
+        ),
     );
 
     ExecutionService::<MockRuntime>::submit_execution(&store, "exec-legacy-leader", &spec)
@@ -553,19 +629,31 @@ fn run_mode_to_completion(
     let mut runtime = MockRuntime::new();
     runtime.seed_success(
         "exec-run-candidate-1",
-        output("candidate-1", &[("latency_p99_ms", 95.0), ("cost_usd", 0.05)]),
+        output(
+            "candidate-1",
+            &[("latency_p99_ms", 95.0), ("cost_usd", 0.05)],
+        ),
     );
     runtime.seed_success(
         "exec-run-candidate-2",
-        output("candidate-2", &[("latency_p99_ms", 80.0), ("cost_usd", 0.03)]),
+        output(
+            "candidate-2",
+            &[("latency_p99_ms", 80.0), ("cost_usd", 0.03)],
+        ),
     );
     runtime.seed_success(
         "exec-run-candidate-3",
-        output("candidate-3", &[("latency_p99_ms", 70.0), ("cost_usd", 0.02)]),
+        output(
+            "candidate-3",
+            &[("latency_p99_ms", 70.0), ("cost_usd", 0.02)],
+        ),
     );
     runtime.seed_success(
         "exec-run-candidate-4",
-        output("candidate-4", &[("latency_p99_ms", 72.0), ("cost_usd", 0.025)]),
+        output(
+            "candidate-4",
+            &[("latency_p99_ms", 72.0), ("cost_usd", 0.025)],
+        ),
     );
 
     let store = FsExecutionStore::new(store_dir.clone());
@@ -658,7 +746,10 @@ fn strategy_spec(mode: &str) -> ExecutionSpec {
             2,
             vec![
                 VariationProposal {
-                    overrides: BTreeMap::from([("agent.prompt".to_string(), "baseline".to_string())]),
+                    overrides: BTreeMap::from([(
+                        "agent.prompt".to_string(),
+                        "baseline".to_string(),
+                    )]),
                 },
                 VariationProposal {
                     overrides: BTreeMap::from([("agent.prompt".to_string(), "v1".to_string())]),
@@ -748,14 +839,18 @@ fn seed_iteration_inboxes(
         .map(|candidate_id| CandidateInbox::new(candidate_id))
         .collect::<Vec<_>>();
     let routed = void_control::orchestration::message_box::route_intents(intents);
-    for (snapshot, delivered) in void_control::orchestration::message_box::materialize_inbox_snapshots(
-        execution_id,
-        iteration,
-        &inboxes,
-        intents,
-        &routed,
-    ) {
-        store.save_inbox_snapshot(&snapshot).expect("save inbox snapshot");
+    for (snapshot, delivered) in
+        void_control::orchestration::message_box::materialize_inbox_snapshots(
+            execution_id,
+            iteration,
+            &inboxes,
+            intents,
+            &routed,
+        )
+    {
+        store
+            .save_inbox_snapshot(&snapshot)
+            .expect("save inbox snapshot");
         for delivered in delivered {
             store
                 .append_routed_message(execution_id, &delivered)
