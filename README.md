@@ -26,6 +26,12 @@ Click the preview above for the full-quality MP4, or use the direct file link: [
 - Provides terminal-first and graph-first operator UX.
 - Enforces runtime contract compatibility with `void-box`.
 
+## Documentation
+
+- Architecture: [docs/architecture.md](docs/architecture.md)
+- Contributor and agent guide: [AGENTS.md](AGENTS.md)
+- Release and compatibility process: [docs/release-process.md](docs/release-process.md)
+
 ## Project Components
 
 - `spec/`: Runtime and orchestration contracts.
@@ -78,6 +84,34 @@ cd web/void-control-ux
 VITE_VOID_BOX_BASE_URL=http://127.0.0.1:43100 \
 VITE_VOID_CONTROL_BASE_URL=http://127.0.0.1:43210 \
 npm run dev
+```
+
+## Development
+
+Rust validation:
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test
+cargo test --features serde
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
+```
+
+UI validation:
+
+```bash
+cd web/void-control-ux
+npm ci
+npm run build
+```
+
+Optional local pre-commit setup:
+
+```bash
+pip install pre-commit
+pre-commit install
+pre-commit run --all-files
 ```
 
 ## Terminal Console
