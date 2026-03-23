@@ -5,6 +5,7 @@ use crate::contract::{
     ContractError, ContractErrorCode, EventEnvelope, EventType, RunState, RuntimeInspection,
     StartRequest, StartResult, StopRequest, StopResult, SubscribeEventsRequest,
 };
+use crate::orchestration::{CandidateOutput, StructuredOutputResult};
 
 #[derive(Debug, Clone)]
 struct RunRecord {
@@ -18,6 +19,14 @@ struct RunRecord {
     exit_code: Option<i32>,
     events: Vec<EventEnvelope>,
     next_seq: u64,
+}
+
+#[derive(Debug, Clone)]
+enum SeededOutcome {
+    Success(CandidateOutput),
+    Failure,
+    MissingOutput,
+    MalformedOutput,
 }
 
 impl RunRecord {
@@ -58,6 +67,7 @@ impl RunRecord {
 #[derive(Debug, Default)]
 pub struct MockRuntime {
     runs: Vec<RunRecord>,
+    seeded: BTreeMap<String, SeededOutcome>,
 }
 
 impl MockRuntime {
@@ -88,6 +98,25 @@ impl MockRuntime {
 
         let mut record = RunRecord::new(request.run_id);
         record.push_event(EventType::RunStarted, BTreeMap::new());
+        match self.seeded.get(&record.run_id) {
+            Some(SeededOutcome::Success(_)) | Some(SeededOutcome::MissingOutput) => {
+                record.state = RunState::Succeeded;
+                record.push_event(EventType::RunCompleted, BTreeMap::new());
+            }
+            Some(SeededOutcome::MalformedOutput) => {
+                record.state = RunState::Failed;
+                record.exit_code = Some(1);
+                record.terminal_reason = Some("malformed structured output".to_string());
+                record.push_event(EventType::RunFailed, BTreeMap::new());
+            }
+            Some(SeededOutcome::Failure) => {
+                record.state = RunState::Failed;
+                record.exit_code = Some(1);
+                record.terminal_reason = Some("seeded failure".to_string());
+                record.push_event(EventType::RunFailed, BTreeMap::new());
+            }
+            None => {}
+        }
         let result = StartResult {
             handle: record.handle.clone(),
             attempt_id: record.attempt_id,
@@ -176,6 +205,38 @@ impl MockRuntime {
 
         Ok(record.events.clone())
     }
+
+    pub fn seed_success(&mut self, run_id: &str, output: CandidateOutput) {
+        self.seeded
+            .insert(run_id.to_string(), SeededOutcome::Success(output));
+    }
+
+    pub fn seed_failure(&mut self, run_id: &str) {
+        self.seeded
+            .insert(run_id.to_string(), SeededOutcome::Failure);
+    }
+
+    pub fn seed_missing_output(&mut self, run_id: &str) {
+        self.seeded
+            .insert(run_id.to_string(), SeededOutcome::MissingOutput);
+    }
+
+    pub fn seed_malformed_output(&mut self, run_id: &str) {
+        self.seeded
+            .insert(run_id.to_string(), SeededOutcome::MalformedOutput);
+    }
+
+    pub fn take_structured_output(&mut self, run_id: &str) -> StructuredOutputResult {
+        match self.seeded.get(run_id) {
+            Some(SeededOutcome::Success(output)) => StructuredOutputResult::Found(output.clone()),
+            Some(SeededOutcome::MalformedOutput) => StructuredOutputResult::Error(ContractError::new(
+                ContractErrorCode::StructuredOutputMalformed,
+                format!("run '{run_id}' emitted malformed structured output"),
+                false,
+            )),
+            _ => StructuredOutputResult::Missing,
+        }
+    }
 }
 
 fn now_rfc3339_like() -> String {
@@ -207,6 +268,7 @@ mod tests {
         let req = StartRequest {
             run_id: "run-1".to_string(),
             workflow_spec: "workflow".to_string(),
+            launch_context: None,
             policy: policy(),
         };
 
@@ -223,6 +285,7 @@ mod tests {
         let req = StartRequest {
             run_id: "run-2".to_string(),
             workflow_spec: "workflow".to_string(),
+            launch_context: None,
             policy: policy(),
         };
         let started = runtime.start(req).expect("start");
@@ -244,6 +307,7 @@ mod tests {
         let req = StartRequest {
             run_id: "run-3".to_string(),
             workflow_spec: "workflow".to_string(),
+            launch_context: None,
             policy: policy(),
         };
         let started = runtime.start(req).expect("start");
@@ -271,6 +335,7 @@ mod tests {
             .start(StartRequest {
                 run_id: "run-4".to_string(),
                 workflow_spec: "workflow".to_string(),
+                launch_context: None,
                 policy: ExecutionPolicy {
                     max_parallel_microvms_per_run: 0,
                     max_stage_retries: 1,
@@ -290,6 +355,7 @@ mod tests {
             .start(StartRequest {
                 run_id: "run-5".to_string(),
                 workflow_spec: "workflow".to_string(),
+                launch_context: None,
                 policy: policy(),
             })
             .expect("start");
@@ -310,4 +376,3 @@ mod tests {
         assert!(events.iter().any(|e| e.event_type == EventType::RunCanceled));
     }
 }
-

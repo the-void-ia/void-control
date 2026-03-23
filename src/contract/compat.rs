@@ -49,8 +49,10 @@ pub struct ConvertedRunView {
 
 pub fn map_void_box_status(status: &str) -> Option<RunState> {
     match status.to_ascii_lowercase().as_str() {
+        "pending" => Some(RunState::Pending),
+        "starting" => Some(RunState::Starting),
         "running" => Some(RunState::Running),
-        "completed" => Some(RunState::Succeeded),
+        "completed" | "succeeded" | "success" => Some(RunState::Succeeded),
         "failed" => Some(RunState::Failed),
         "cancelled" | "canceled" => Some(RunState::Canceled),
         _ => None,
@@ -222,8 +224,11 @@ mod tests {
 
     #[test]
     fn maps_void_box_status_values() {
+        assert_eq!(map_void_box_status("Pending"), Some(RunState::Pending));
+        assert_eq!(map_void_box_status("Starting"), Some(RunState::Starting));
         assert_eq!(map_void_box_status("Running"), Some(RunState::Running));
         assert_eq!(map_void_box_status("Completed"), Some(RunState::Succeeded));
+        assert_eq!(map_void_box_status("Succeeded"), Some(RunState::Succeeded));
         assert_eq!(map_void_box_status("Failed"), Some(RunState::Failed));
         assert_eq!(map_void_box_status("Cancelled"), Some(RunState::Canceled));
     }

@@ -4,6 +4,7 @@ use crate::contract::{ExecutionPolicy, RunState};
 pub struct StartRequest {
     pub run_id: String,
     pub workflow_spec: String,
+    pub launch_context: Option<String>,
     pub policy: ExecutionPolicy,
 }
 

@@ -5,6 +5,12 @@ pub enum ContractErrorCode {
     NotFound,
     AlreadyTerminal,
     ResourceLimitExceeded,
+    StructuredOutputMissing,
+    StructuredOutputMalformed,
+    ArtifactNotFound,
+    ArtifactPublicationIncomplete,
+    ArtifactStoreUnavailable,
+    RetrievalTimeout,
     InternalError,
 }
 

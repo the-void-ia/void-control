@@ -21,6 +21,10 @@ enum DefaultSpecKind {
     LongRunning,
     Timeout,
     BaselineSuccess,
+    StructuredOutputSuccess,
+    StructuredOutputWithArtifact,
+    MissingStructuredOutput,
+    MalformedStructuredOutput,
 }
 
 static FALLBACK_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -46,6 +50,10 @@ fn fallback_spec_path(kind: DefaultSpecKind) -> PathBuf {
         DefaultSpecKind::LongRunning => "long_running",
         DefaultSpecKind::Timeout => "timeout",
         DefaultSpecKind::BaselineSuccess => "baseline_success",
+        DefaultSpecKind::StructuredOutputSuccess => "structured_output_success",
+        DefaultSpecKind::StructuredOutputWithArtifact => "structured_output_with_artifact",
+        DefaultSpecKind::MissingStructuredOutput => "missing_structured_output",
+        DefaultSpecKind::MalformedStructuredOutput => "malformed_structured_output",
     };
     let nonce = FALLBACK_COUNTER.fetch_add(1, Ordering::Relaxed);
     let nanos = SystemTime::now()
@@ -125,6 +133,100 @@ workflow:
   output_step: transform
 "#
         }
+        DefaultSpecKind::StructuredOutputSuccess => {
+            r#"api_version: v1
+kind: workflow
+name: structured-output-success
+
+sandbox:
+  mode: mock
+  network: false
+
+workflow:
+  steps:
+    - name: produce
+      run:
+        program: sh
+        args:
+          - -lc
+          - |
+            cat > result.json <<'JSON'
+            {"status":"success","summary":"ok","metrics":{"latency_p99_ms":87,"cost_usd":0.018},"artifacts":[]}
+            JSON
+  output_step: produce
+"#
+        }
+        DefaultSpecKind::StructuredOutputWithArtifact => {
+            r#"api_version: v1
+kind: workflow
+name: structured-output-with-artifact
+
+sandbox:
+  mode: mock
+  network: false
+
+workflow:
+  steps:
+    - name: produce
+      run:
+        program: sh
+        args:
+          - -lc
+          - |
+            cat > result.json <<'JSON'
+            {"status":"success","summary":"ok","metrics":{"latency_p99_ms":87,"cost_usd":0.018},"artifacts":[{"name":"report.md","stage":"main","media_type":"text/markdown"}]}
+            JSON
+            cat > report.md <<'MD'
+            # report
+            artifact content
+            MD
+  output_step: produce
+"#
+        }
+        DefaultSpecKind::MissingStructuredOutput => {
+            r#"api_version: v1
+kind: workflow
+name: missing-structured-output
+
+sandbox:
+  mode: mock
+  network: false
+
+workflow:
+  steps:
+    - name: produce
+      run:
+        program: sh
+        args:
+          - -lc
+          - |
+            echo "completed without result.json"
+  output_step: produce
+"#
+        }
+        DefaultSpecKind::MalformedStructuredOutput => {
+            r#"api_version: v1
+kind: workflow
+name: malformed-structured-output
+
+sandbox:
+  mode: mock
+  network: false
+
+workflow:
+  steps:
+    - name: produce
+      run:
+        program: sh
+        args:
+          - -lc
+          - |
+            cat > result.json <<'JSON'
+            {"status":"success","summary":"ok","metrics":not-json,"artifacts":[]}
+            JSON
+  output_step: produce
+"#
+        }
     };
 
     fs::write(path, yaml).unwrap_or_else(|e| {
@@ -182,6 +284,10 @@ fn http_get_json(base_url: &str, path: &str) -> (u16, Value) {
     (status, json)
 }
 
+fn http_get_text(base_url: &str, path: &str) -> (u16, String) {
+    http_request(base_url, "GET", path, None)
+}
+
 fn http_post_json(base_url: &str, path: &str, payload: &Value) -> (u16, Value) {
     let body = payload.to_string();
     let (status, body) = http_request(base_url, "POST", path, Some(&body));
@@ -234,6 +340,37 @@ fn is_terminal_status(status: &str) -> bool {
         status.to_ascii_lowercase().as_str(),
         "succeeded" | "failed" | "cancelled" | "canceled"
     )
+}
+
+fn get_artifact_publication<'a>(run: &'a Value) -> &'a Value {
+    run.get("artifact_publication")
+        .unwrap_or_else(|| panic!("missing artifact_publication: {run}"))
+}
+
+fn get_manifest_entries(run: &Value) -> &[Value] {
+    get_artifact_publication(run)
+        .get("manifest")
+        .and_then(Value::as_array)
+        .unwrap_or_else(|| panic!("missing artifact manifest: {run}"))
+}
+
+fn find_manifest_entry<'a>(run: &'a Value, name: &str) -> &'a Value {
+    get_manifest_entries(run)
+        .iter()
+        .find(|entry| entry.get("name").and_then(Value::as_str) == Some(name))
+        .unwrap_or_else(|| panic!("missing manifest entry '{name}': {run}"))
+}
+
+fn manifest_retrieval_path(run: &Value, name: &str) -> String {
+    let path = find_manifest_entry(run, name)
+        .get("retrieval_path")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("manifest entry '{name}' missing retrieval_path: {run}"));
+    if path.starts_with('/') {
+        path.to_string()
+    } else {
+        format!("/{}", path)
+    }
 }
 
 fn wait_until_terminal(base: &str, run_id: &str, timeout_secs: u64) -> Value {
@@ -539,11 +676,190 @@ fn structured_error_invalid_policy() {
 
 #[test]
 #[ignore = "requires live void-box daemon"]
-fn list_runs_for_reconciliation() {
+fn structured_output_result_json_is_retrievable() {
     let base = require_env("VOID_BOX_BASE_URL");
+    let spec = resolve_spec_path(
+        "VOID_BOX_STRUCTURED_OUTPUT_SPEC_FILE",
+        DefaultSpecKind::StructuredOutputSuccess,
+    );
+    let run_id = unique_run_id("contract-structured-output");
+    let (status_start, body_start) = http_post_json(&base, "/v1/runs", &start_payload(&run_id, &spec));
+    assert_eq!(status_start, 200, "body={body_start}");
+
+    let terminal = wait_until_terminal(&base, &run_id, 30);
+    assert_eq!(
+        terminal.get("status").and_then(Value::as_str).map(|s| s.to_ascii_lowercase()),
+        Some("succeeded".to_string()),
+        "terminal={terminal}"
+    );
+
+    let (status, body) = http_get_text(
+        &base,
+        &format!("/v1/runs/{run_id}/stages/main/output-file"),
+    );
+    assert_eq!(status, 200, "body={body}");
+    let parsed = serde_json::from_str::<Value>(&body).unwrap_or_else(|e| {
+        panic!("structured output was not valid JSON: {e}; body={body}")
+    });
+    assert!(parsed.get("metrics").and_then(Value::as_object).is_some());
+}
+
+#[test]
+#[ignore = "requires live void-box daemon"]
+fn missing_result_json_is_typed_failure() {
+    let base = require_env("VOID_BOX_BASE_URL");
+    let spec = resolve_spec_path(
+        "VOID_BOX_MISSING_STRUCTURED_OUTPUT_SPEC_FILE",
+        DefaultSpecKind::MissingStructuredOutput,
+    );
+    let run_id = unique_run_id("contract-missing-structured-output");
+    let (status_start, body_start) = http_post_json(&base, "/v1/runs", &start_payload(&run_id, &spec));
+    assert_eq!(status_start, 200, "body={body_start}");
+
+    let terminal = wait_until_terminal(&base, &run_id, 30);
+    assert_eq!(
+        terminal.get("status").and_then(Value::as_str).map(|s| s.to_ascii_lowercase()),
+        Some("failed".to_string()),
+        "terminal={terminal}"
+    );
+
+    let (status, json) = http_get_json(
+        &base,
+        &format!("/v1/runs/{run_id}/stages/main/output-file"),
+    );
+    assert!(status >= 400, "body={json}");
+    assert_error_shape(&json);
+    assert_eq!(
+        json.get("code").and_then(Value::as_str),
+        Some("STRUCTURED_OUTPUT_MISSING")
+    );
+}
+
+#[test]
+#[ignore = "requires live void-box daemon"]
+fn malformed_result_json_is_typed_failure() {
+    let base = require_env("VOID_BOX_BASE_URL");
+    let spec = resolve_spec_path(
+        "VOID_BOX_MALFORMED_STRUCTURED_OUTPUT_SPEC_FILE",
+        DefaultSpecKind::MalformedStructuredOutput,
+    );
+    let run_id = unique_run_id("contract-malformed-structured-output");
+    let (status_start, body_start) = http_post_json(&base, "/v1/runs", &start_payload(&run_id, &spec));
+    assert_eq!(status_start, 200, "body={body_start}");
+
+    let terminal = wait_until_terminal(&base, &run_id, 30);
+    assert_eq!(
+        terminal.get("status").and_then(Value::as_str).map(|s| s.to_ascii_lowercase()),
+        Some("failed".to_string()),
+        "terminal={terminal}"
+    );
+
+    let (status, json) = http_get_json(
+        &base,
+        &format!("/v1/runs/{run_id}/stages/main/output-file"),
+    );
+    assert!(status >= 400, "body={json}");
+    assert_error_shape(&json);
+    assert_eq!(
+        json.get("code").and_then(Value::as_str),
+        Some("STRUCTURED_OUTPUT_MALFORMED")
+    );
+}
+
+#[test]
+#[ignore = "requires live void-box daemon"]
+fn manifest_lists_named_artifacts() {
+    let base = require_env("VOID_BOX_BASE_URL");
+    let spec = resolve_spec_path(
+        "VOID_BOX_STRUCTURED_OUTPUT_ARTIFACT_SPEC_FILE",
+        DefaultSpecKind::StructuredOutputWithArtifact,
+    );
+    let run_id = unique_run_id("contract-artifact-manifest");
+    let (status_start, body_start) = http_post_json(&base, "/v1/runs", &start_payload(&run_id, &spec));
+    assert_eq!(status_start, 200, "body={body_start}");
+
+    let terminal = wait_until_terminal(&base, &run_id, 30);
+    assert_eq!(
+        terminal.get("status").and_then(Value::as_str).map(|s| s.to_ascii_lowercase()),
+        Some("succeeded".to_string()),
+        "terminal={terminal}"
+    );
+
+    let (status, inspect) = http_get_json(&base, &format!("/v1/runs/{run_id}"));
+    assert_eq!(status, 200, "body={inspect}");
+    assert!(inspect.get("artifact_publication").is_some());
+    assert_eq!(
+        get_artifact_publication(&inspect)
+            .get("status")
+            .and_then(Value::as_str),
+        Some("published")
+    );
+    let manifest = get_manifest_entries(&inspect);
+    assert!(
+        manifest
+            .iter()
+            .any(|entry| entry.get("name").and_then(Value::as_str) == Some("result.json")),
+        "manifest missing result.json: {inspect}"
+    );
+    let artifact_entry = find_manifest_entry(&inspect, "report.md");
+    assert_eq!(
+        artifact_entry.get("stage").and_then(Value::as_str),
+        Some("main")
+    );
+    assert!(
+        artifact_entry
+            .get("retrieval_path")
+            .and_then(Value::as_str)
+            .is_some(),
+        "artifact entry missing retrieval_path: {artifact_entry}"
+    );
+}
+
+#[test]
+#[ignore = "requires live void-box daemon"]
+fn named_artifact_endpoint_serves_manifested_file() {
+    let base = require_env("VOID_BOX_BASE_URL");
+    let spec = resolve_spec_path(
+        "VOID_BOX_STRUCTURED_OUTPUT_ARTIFACT_SPEC_FILE",
+        DefaultSpecKind::StructuredOutputWithArtifact,
+    );
+    let run_id = unique_run_id("contract-named-artifact");
+    let (status_start, body_start) = http_post_json(&base, "/v1/runs", &start_payload(&run_id, &spec));
+    assert_eq!(status_start, 200, "body={body_start}");
+
+    let _ = wait_until_terminal(&base, &run_id, 30);
+    let (status_inspect, inspect) = http_get_json(&base, &format!("/v1/runs/{run_id}"));
+    assert_eq!(status_inspect, 200, "body={inspect}");
+
+    let path = manifest_retrieval_path(&inspect, "report.md");
+    let (status, body) = http_get_text(&base, &path);
+    assert_eq!(status, 200, "body={body}");
+    assert!(body.contains("artifact content"), "unexpected artifact body={body}");
+}
+
+#[test]
+#[ignore = "requires live void-box daemon"]
+fn active_run_listing_supports_reconciliation() {
+    let base = require_env("VOID_BOX_BASE_URL");
+    let spec = resolve_spec_path("VOID_BOX_TEST_SPEC_FILE", DefaultSpecKind::LongRunning);
+    let run_id = unique_run_id("contract-active-reconciliation");
+    let (status_start, body_start) = http_post_json(&base, "/v1/runs", &start_payload(&run_id, &spec));
+    assert_eq!(status_start, 200, "body={body_start}");
+
     let (status_active, active) = http_get_json(&base, "/v1/runs?state=active");
     assert_eq!(status_active, 200, "body={active}");
-    assert!(active.get("runs").and_then(Value::as_array).is_some());
+    let runs = active
+        .get("runs")
+        .and_then(Value::as_array)
+        .unwrap_or_else(|| panic!("active runs payload missing runs array: {active}"));
+    let matching = runs.iter().find(|run| {
+        run.get("run_id").and_then(Value::as_str) == Some(run_id.as_str())
+            || run.get("id").and_then(Value::as_str) == Some(run_id.as_str())
+    });
+    let matching = matching.unwrap_or_else(|| panic!("started run not present in active listing: {active}"));
+    assert!(matching.get("attempt_id").and_then(Value::as_u64).is_some());
+    assert!(matching.get("active_stage_count").and_then(Value::as_u64).is_some());
+    assert!(matching.get("active_microvm_count").and_then(Value::as_u64).is_some());
 
     let (status_terminal, terminal) = http_get_json(&base, "/v1/runs?state=terminal");
     assert_eq!(status_terminal, 200, "body={terminal}");
