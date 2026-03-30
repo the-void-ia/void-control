@@ -98,6 +98,73 @@ cd web/void-control-ux
 npm run dev -- --host 127.0.0.1 --port 3000
 ```
 
+Canonical live swarm workflow:
+
+```bash
+cd /home/diego/github/agent-infra/void-box
+TMPDIR=$PWD/target/tmp scripts/build_claude_rootfs.sh
+export VOID_BOX_KERNEL=/boot/vmlinuz-$(uname -r)
+export VOID_BOX_INITRAMFS=$PWD/target/void-box-rootfs.cpio.gz
+export ANTHROPIC_API_KEY=sk-ant-...
+cargo run --bin voidbox -- serve --listen 127.0.0.1:43100
+```
+
+In a second terminal:
+
+```bash
+cd /home/diego/github/void-control
+cargo run --features serde --bin voidctl -- serve
+```
+
+Submit the swarm execution from a third terminal:
+
+```bash
+cd /home/diego/github/void-control
+curl -sS -X POST http://127.0.0.1:43210/v1/executions \
+  -H 'Content-Type: text/yaml' \
+  --data-binary @examples/swarm-transform-optimization.yaml
+```
+
+Monitor progress from the bridge:
+
+```bash
+curl -sS http://127.0.0.1:43210/v1/executions/<execution_id>
+```
+
+Swarm/service template requirements:
+
+- use the production `void-box` initramfs from `scripts/build_claude_rootfs.sh`
+- do not use `/tmp/void-box-test-rootfs.cpio.gz` for Claude-backed swarm runs
+- swarm runtime templates must set `agent.mode: service`
+- `agent.mode: service` requires `agent.output_file`
+- `agent.mode: service` must not set `agent.timeout_secs`
+
+Health check:
+
+```bash
+curl -sS http://127.0.0.1:43100/v1/health
+```
+
+Execution examples:
+
+```bash
+curl -sS -X POST http://127.0.0.1:43210/v1/executions \
+  -H 'Content-Type: text/yaml' \
+  --data-binary @examples/swarm-transform-optimization.yaml
+
+curl -sS -X POST http://127.0.0.1:43210/v1/executions \
+  -H 'Content-Type: text/yaml' \
+  --data-binary @examples/search-rate-limit-optimization.yaml
+```
+
+Important:
+
+- top-level execution specs in `examples/*.yaml` are `void-control` documents
+- referenced files under `examples/void-box/*.yaml` are runtime templates for `void-box`
+- non-interactive `voidctl` currently exposes `serve` and `help`; use the bridge
+  HTTP API or UI for execution create/dry-run flows
+- quote URLs that contain `?` when using `curl` from `zsh`
+
 ## Runtime compatibility commands
 
 Live daemon contract gate:

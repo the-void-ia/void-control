@@ -83,9 +83,11 @@ impl GlobalScheduler {
                 running,
                 max_concurrent,
             });
+        self.active_slots = self.active_slots.saturating_sub(queue.running);
         queue.paused = paused;
         queue.running = running;
         queue.max_concurrent = max_concurrent;
+        self.active_slots += running;
     }
 
     pub fn enqueue_if_budget_allows(

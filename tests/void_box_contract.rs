@@ -66,6 +66,16 @@ fn fallback_spec_path(kind: DefaultSpecKind) -> PathBuf {
     ))
 }
 
+fn temp_spec_path(label: &str) -> PathBuf {
+    let nonce = FALLBACK_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let pid = std::process::id();
+    env::temp_dir().join(format!("void-control-{label}-{pid}-{nanos}-{nonce}.yaml"))
+}
+
 fn write_fallback_spec(path: &Path, kind: DefaultSpecKind) {
     let yaml = match kind {
         DefaultSpecKind::LongRunning => {
@@ -236,6 +246,13 @@ workflow:
             e
         )
     });
+}
+
+fn write_temp_spec(label: &str, yaml: &str) -> String {
+    let path = temp_spec_path(label);
+    fs::write(&path, yaml)
+        .unwrap_or_else(|e| panic!("failed to write temp spec at '{}': {}", path.display(), e));
+    path.to_string_lossy().to_string()
 }
 
 fn unique_run_id(prefix: &str) -> String {
@@ -424,6 +441,26 @@ fn assert_no_spec_parse_failure(base: &str, run_id: &str) {
             "run '{run_id}' has file-read failure message in event: {event}"
         );
     }
+}
+
+fn messaging_agent_spec() -> String {
+    write_temp_spec(
+        "sidecar-agent",
+        r#"api_version: v1
+kind: agent
+name: sidecar-agent
+
+sandbox:
+  mode: mock
+  network: false
+
+agent:
+  prompt: "test sidecar agent"
+  messaging:
+    enabled: true
+    provider_bridge: claude_channels
+"#,
+    )
 }
 
 #[test]
@@ -1111,4 +1148,80 @@ fn policy_no_policy_regression_allows_completion() {
         .unwrap_or_default()
         .to_ascii_lowercase();
     assert_eq!(status, "succeeded", "terminal={terminal}");
+}
+
+#[test]
+#[ignore = "requires live void-box daemon with sidecar-enabled runtime"]
+fn sidecar_delivery_adapter_smoke_against_live_daemon() {
+    use void_control::orchestration::{CandidateSpec, InboxEntry, InboxSnapshot};
+    use void_control::runtime::{HttpSidecarAdapter, MessageDeliveryAdapter, VoidBoxRunRef};
+
+    let base = require_env("VOID_BOX_BASE_URL");
+    let spec = messaging_agent_spec();
+    let run_id = unique_run_id("contract-sidecar-adapter");
+    let payload = start_payload_without_policy(&run_id, &spec);
+    let (status_start, body_start) = http_post_json(&base, "/v1/runs", &payload);
+    assert_eq!(status_start, 200, "body={body_start}");
+
+    let adapter = HttpSidecarAdapter::new();
+    let run_ref = VoidBoxRunRef {
+        daemon_base_url: base.clone(),
+        run_id: run_id.clone(),
+    };
+    let inbox = InboxSnapshot {
+        execution_id: "exec-sidecar-contract".to_string(),
+        candidate_id: run_id.clone(),
+        iteration: 1,
+        entries: vec![InboxEntry {
+            message_id: "msg-001".to_string(),
+            intent_id: "intent-001".to_string(),
+            from_candidate_id: "candidate-source".to_string(),
+            kind: void_control::orchestration::CommunicationIntentKind::Proposal,
+            payload: json!({"summary_text": "use approach A"}),
+        }],
+    };
+
+    let mut injected = false;
+    for _ in 0..20 {
+        match adapter.inject_at_launch(
+            &run_ref,
+            &CandidateSpec {
+                candidate_id: run_id.clone(),
+                overrides: Default::default(),
+            },
+            &inbox,
+        ) {
+            Ok(()) => {
+                injected = true;
+                break;
+            }
+            Err(_) => thread::sleep(Duration::from_millis(10)),
+        }
+    }
+    if injected {
+        let drained = adapter
+            .drain_intents(&run_ref)
+            .expect("drain intents from daemon sidecar");
+        assert!(
+            drained.is_empty(),
+            "no guest intents should have been posted yet"
+        );
+
+        let drained_again = adapter
+            .drain_intents(&run_ref)
+            .expect("drain intents second time");
+        assert!(drained_again.is_empty(), "drain should remain empty");
+    } else {
+        let terminal = wait_until_terminal(&base, &run_id, 30);
+        let status = terminal
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        assert!(
+            status == "succeeded" || status == "failed",
+            "terminal={terminal}"
+        );
+    }
+    assert_no_spec_parse_failure(&base, &run_id);
 }

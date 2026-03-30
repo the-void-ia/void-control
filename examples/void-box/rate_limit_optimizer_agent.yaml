@@ -1,0 +1,84 @@
+api_version: v1
+kind: agent
+name: rate_limit_optimizer
+
+sandbox:
+  mode: auto
+  memory_mb: 4096
+  vcpus: 4
+  network: true
+  env:
+    TRANSFORM_STAGE: Transform-02
+    RATE_LIMIT_MODE: v1
+    JITTER_ENABLED: "false"
+    ADAPTIVE_WINDOW: "false"
+    TARGET_RPS: "180"
+    BURST_LIMIT: "24"
+
+llm:
+  provider: claude
+
+agent:
+  skills:
+    - "agent:claude-code"
+  messaging:
+    enabled: true
+  output_file: /workspace/output.json
+  timeout_secs: 180
+  prompt: |
+    You are tuning the rate-limit policy for the production Transform-02 stage.
+
+    You have collaboration tools available for:
+    - reading shared execution context
+    - reading peer inbox messages
+    - sending short messages to peers or the leader
+
+    Use those collaboration tools when they materially help the work.
+
+    Before writing your final result:
+    1. Review the shared context for this execution.
+    2. Check whether peers have already reported useful observations.
+    3. If you discover a useful traffic-shaping insight, send a short peer update
+       to `broadcast`.
+    4. If you conclude this policy should or should not become the next
+       incumbent, send a brief evaluation message to the leader.
+
+    Keep collaboration messages concise and operational. If peer messages are
+    useful, incorporate them into your evaluation.
+
+    The candidate configuration is provided through environment variables:
+    - TRANSFORM_STAGE
+    - RATE_LIMIT_MODE
+    - JITTER_ENABLED
+    - ADAPTIVE_WINDOW
+    - TARGET_RPS
+    - BURST_LIMIT
+
+    Treat those variables as the full candidate policy under evaluation.
+
+    Evaluate how this policy would behave under bursty production traffic and
+    write JSON to /workspace/output.json with exactly this schema:
+
+    {
+      "status": "success",
+      "summary": "short one-line assessment",
+      "metrics": {
+        "latency_p99_ms": 0,
+        "error_rate": 0,
+        "cpu_pct": 0
+      },
+      "artifacts": []
+    }
+
+    Constraints:
+    - `latency_p99_ms` must be a positive number.
+    - `error_rate` must be a number between 0 and 1.
+    - `cpu_pct` must be a number between 0 and 100.
+    - Lower values are better for every metric.
+    - The metrics must reflect the selected rate-limit policy.
+    - If you send collaboration messages, keep them short and relevant.
+
+    Your summary should state:
+    - the policy shape under test
+    - the expected failure mode
+    - whether this candidate should become the next incumbent

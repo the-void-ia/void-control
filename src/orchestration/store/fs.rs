@@ -603,6 +603,14 @@ impl FsExecutionStore {
     }
 }
 
+fn claim_ttl_ms() -> u64 {
+    std::env::var("VOID_CONTROL_CLAIM_TTL_MS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(FsExecutionStore::CLAIM_TTL_MS)
+}
+
 impl ExecutionStore for FsExecutionStore {
     fn load_execution(&self, execution_id: &str) -> io::Result<ExecutionSnapshot> {
         FsExecutionStore::load_execution(self, execution_id)
@@ -897,5 +905,5 @@ fn parse_claim(contents: &str) -> Option<ExecutionClaim> {
 }
 
 fn claim_is_stale(claim: &ExecutionClaim) -> bool {
-    now_ms().saturating_sub(claim.claimed_at_ms) > FsExecutionStore::CLAIM_TTL_MS
+    now_ms().saturating_sub(claim.claimed_at_ms) > claim_ttl_ms()
 }

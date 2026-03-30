@@ -12,6 +12,27 @@ use super::types::{
 };
 
 #[cfg(feature = "serde")]
+pub fn merge_and_dedup(
+    sidecar_intents: Vec<CommunicationIntent>,
+    structured_output_intents: Vec<CommunicationIntent>,
+) -> Vec<CommunicationIntent> {
+    let mut merged = Vec::with_capacity(sidecar_intents.len() + structured_output_intents.len());
+    let mut seen = BTreeSet::new();
+
+    for intent in sidecar_intents
+        .into_iter()
+        .chain(structured_output_intents.into_iter())
+    {
+        let dedup_key = message_dedup_key(&intent);
+        if seen.insert(dedup_key) {
+            merged.push(intent);
+        }
+    }
+
+    merged
+}
+
+#[cfg(feature = "serde")]
 pub fn normalize_intents(
     candidate_id: &str,
     iteration: u32,
@@ -285,4 +306,180 @@ fn summary_text(payload: &Value) -> String {
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string()
+}
+
+#[cfg(feature = "serde")]
+fn message_dedup_key(intent: &CommunicationIntent) -> String {
+    format!(
+        "{}|{}|{}",
+        normalized_payload_key(&intent.payload),
+        audience_key(&intent.audience),
+        intent.iteration
+    )
+}
+
+#[cfg(feature = "serde")]
+fn normalized_payload_key(payload: &Value) -> String {
+    let mut out = String::new();
+    append_normalized_value(payload, &mut out);
+    out
+}
+
+#[cfg(feature = "serde")]
+fn append_normalized_value(value: &Value, out: &mut String) {
+    match value {
+        Value::Null => out.push_str("null"),
+        Value::Bool(value) => out.push_str(if *value { "true" } else { "false" }),
+        Value::Number(value) => out.push_str(&value.to_string()),
+        Value::String(value) => out.push_str(
+            &serde_json::to_string(value)
+                .expect("serialize string value for canonical payload key"),
+        ),
+        Value::Array(values) => {
+            out.push('[');
+            for (idx, item) in values.iter().enumerate() {
+                if idx > 0 {
+                    out.push(',');
+                }
+                append_normalized_value(item, out);
+            }
+            out.push(']');
+        }
+        Value::Object(values) => {
+            out.push('{');
+            let mut keys: Vec<_> = values.keys().collect();
+            keys.sort();
+            for (idx, key) in keys.iter().enumerate() {
+                if idx > 0 {
+                    out.push(',');
+                }
+                out.push_str(
+                    &serde_json::to_string(key)
+                        .expect("serialize object key for canonical payload key"),
+                );
+                out.push(':');
+                append_normalized_value(&values[*key], out);
+            }
+            out.push('}');
+        }
+    }
+}
+
+#[cfg(feature = "serde")]
+fn audience_key(audience: &CommunicationIntentAudience) -> &'static str {
+    match audience {
+        CommunicationIntentAudience::Leader => "leader",
+        CommunicationIntentAudience::Broadcast => "broadcast",
+    }
+}
+
+#[cfg(all(test, feature = "serde"))]
+mod tests {
+    use super::{merge_and_dedup, CommunicationIntent, CommunicationIntentAudience};
+    use crate::orchestration::{CommunicationIntentKind, CommunicationIntentPriority};
+    use serde_json::json;
+
+    fn intent(
+        intent_id: &str,
+        from_candidate_id: &str,
+        iteration: u32,
+        audience: CommunicationIntentAudience,
+        payload: serde_json::Value,
+    ) -> CommunicationIntent {
+        CommunicationIntent {
+            intent_id: intent_id.to_string(),
+            from_candidate_id: from_candidate_id.to_string(),
+            iteration,
+            kind: CommunicationIntentKind::Proposal,
+            audience,
+            payload,
+            priority: CommunicationIntentPriority::Normal,
+            ttl_iterations: 1,
+            caused_by: None,
+            context: None,
+        }
+    }
+
+    #[test]
+    fn merge_and_dedup_prefers_sidecar_for_exact_duplicate() {
+        let sidecar = vec![intent(
+            "sidecar-1",
+            "candidate-1",
+            2,
+            CommunicationIntentAudience::Leader,
+            json!({
+                "summary_text": "keep cache warm",
+                "strategy_hint": "cache",
+            }),
+        )];
+        let structured_output = vec![intent(
+            "output-1",
+            "candidate-1",
+            2,
+            CommunicationIntentAudience::Leader,
+            json!({
+                "strategy_hint": "cache",
+                "summary_text": "keep cache warm",
+            }),
+        )];
+
+        let merged = merge_and_dedup(sidecar, structured_output);
+
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].intent_id, "sidecar-1");
+    }
+
+    #[test]
+    fn merge_and_dedup_keeps_intents_when_audience_or_iteration_differs() {
+        let sidecar = vec![
+            intent(
+                "sidecar-1",
+                "candidate-1",
+                2,
+                CommunicationIntentAudience::Leader,
+                json!({
+                    "summary_text": "route to leader",
+                }),
+            ),
+            intent(
+                "sidecar-2",
+                "candidate-1",
+                3,
+                CommunicationIntentAudience::Broadcast,
+                json!({
+                    "summary_text": "same content, later iteration",
+                }),
+            ),
+        ];
+        let structured_output = vec![
+            intent(
+                "output-1",
+                "candidate-1",
+                2,
+                CommunicationIntentAudience::Broadcast,
+                json!({
+                    "summary_text": "route to leader",
+                }),
+            ),
+            intent(
+                "output-2",
+                "candidate-1",
+                4,
+                CommunicationIntentAudience::Broadcast,
+                json!({
+                    "summary_text": "same content, later iteration",
+                }),
+            ),
+        ];
+
+        let merged = merge_and_dedup(sidecar, structured_output);
+
+        assert_eq!(
+            merged
+                .iter()
+                .map(|intent| intent.intent_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["sidecar-1", "sidecar-2", "output-1", "output-2"]
+        );
+    }
 }

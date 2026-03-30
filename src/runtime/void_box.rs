@@ -7,6 +7,8 @@ use crate::contract::{
     StartRequest, StartResult, StopRequest, StopResult, SubscribeEventsRequest,
 };
 use crate::orchestration::CandidateOutput;
+#[cfg(feature = "serde")]
+use crate::runtime::VoidBoxRunRef;
 
 pub struct VoidBoxRuntimeClient {
     base_url: String,
@@ -40,25 +42,26 @@ impl VoidBoxRuntimeClient {
         self.poll_interval_ms
     }
 
+    #[cfg(feature = "serde")]
+    pub fn delivery_run_ref(&self, handle: &str) -> Result<VoidBoxRunRef, ContractError> {
+        Ok(VoidBoxRunRef {
+            daemon_base_url: self.base_url.clone(),
+            run_id: run_id_from_handle(handle)?.to_string(),
+        })
+    }
+
     pub fn start(&self, request: StartRequest) -> Result<StartResult, ContractError> {
         request
             .policy
             .validate()
             .map_err(|msg| ContractError::new(ContractErrorCode::InvalidPolicy, msg, false))?;
 
-        let input = match request.launch_context.as_deref() {
-            Some(context) => Some(serde_json::from_str(context).map_err(|e| {
-                ContractError::new(
-                    ContractErrorCode::InvalidSpec,
-                    format!("invalid launch_context JSON: {e}"),
-                    false,
-                )
-            })?),
-            None => None,
-        };
         let payload = serde_json::json!({
             "file": request.workflow_spec,
-            "input": input.unwrap_or(serde_json::Value::Null)
+            "input": request
+                .launch_context
+                .map(serde_json::Value::String)
+                .unwrap_or(serde_json::Value::Null)
         })
         .to_string();
 
@@ -284,8 +287,20 @@ impl VoidBoxRuntimeClient {
         &self,
         run_id: &str,
     ) -> Result<Option<CandidateOutput>, ContractError> {
-        if let Some(retrieval_path) =
-            self.find_manifest_artifact_path(run_id, None, "result.json")?
+        let run_path = format!("/v1/runs/{run_id}");
+        let run_resp = self.http_get(&run_path)?;
+        if run_resp.status == 404 {
+            return Ok(None);
+        }
+        if run_resp.status >= 400 {
+            return Err(map_http_error(
+                run_resp.status,
+                &run_resp.body,
+                "inspect failed while resolving structured output",
+            ));
+        }
+
+        if let Some(retrieval_path) = manifest_retrieval_path(&run_resp.body, None, "result.json")?
         {
             let response = self.http_get(&retrieval_path)?;
             return match parse_artifact_response(
@@ -297,8 +312,30 @@ impl VoidBoxRuntimeClient {
             };
         }
 
+        let run_value: serde_json::Value = serde_json::from_str(&run_resp.body).map_err(|e| {
+            ContractError::new(
+                ContractErrorCode::InvalidSpec,
+                format!("invalid run JSON: {e}"),
+                false,
+            )
+        })?;
+
+        if let Some(output) = structured_output_from_run_report(run_id, &run_value)? {
+            return Ok(Some(output));
+        }
+
         let mut last_missing_error = None;
-        for stage in ["main", "output"] {
+        let mut stages = vec!["main".to_string(), "output".to_string()];
+        if let Some(report_stage) = run_value
+            .get("report")
+            .and_then(|report| report.get("name"))
+            .and_then(serde_json::Value::as_str)
+        {
+            if !stages.iter().any(|stage| stage == report_stage) {
+                stages.push(report_stage.to_string());
+            }
+        }
+        for stage in stages {
             let path = format!("/v1/runs/{run_id}/stages/{stage}/output-file");
             let response = self.http_get(&path)?;
             if response.status == 404 {
@@ -403,7 +440,7 @@ impl VoidBoxRuntimeClient {
     }
 }
 
-trait HttpTransport {
+pub(crate) trait HttpTransport {
     fn request(
         &self,
         base_url: &str,
@@ -413,7 +450,7 @@ trait HttpTransport {
     ) -> Result<HttpResponse, ContractError>;
 }
 
-struct TcpHttpTransport;
+pub(crate) struct TcpHttpTransport;
 
 impl HttpTransport for TcpHttpTransport {
     fn request(
@@ -460,12 +497,12 @@ impl HttpTransport for TcpHttpTransport {
 }
 
 #[derive(Debug, Clone)]
-struct HttpResponse {
-    status: u16,
-    body: String,
+pub(crate) struct HttpResponse {
+    pub(crate) status: u16,
+    pub(crate) body: String,
 }
 
-fn parse_http_response(raw: &str) -> Result<HttpResponse, ContractError> {
+pub(crate) fn parse_http_response(raw: &str) -> Result<HttpResponse, ContractError> {
     let (head, body) = raw.split_once("\r\n\r\n").ok_or_else(|| {
         ContractError::new(
             ContractErrorCode::InvalidSpec,
@@ -495,7 +532,7 @@ fn parse_http_response(raw: &str) -> Result<HttpResponse, ContractError> {
     })
 }
 
-fn parse_host_port(base_url: &str) -> Result<(String, u16), ContractError> {
+pub(crate) fn parse_host_port(base_url: &str) -> Result<(String, u16), ContractError> {
     let stripped = base_url.strip_prefix("http://").ok_or_else(|| {
         ContractError::new(
             ContractErrorCode::InvalidSpec,
@@ -584,6 +621,34 @@ fn manifest_retrieval_path(
     }
 
     Ok(None)
+}
+
+fn structured_output_from_run_report(
+    run_id: &str,
+    value: &serde_json::Value,
+) -> Result<Option<CandidateOutput>, ContractError> {
+    let output_ready = value
+        .get("output_ready")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    if !output_ready {
+        return Ok(None);
+    }
+
+    let Some(output) = value
+        .get("report")
+        .and_then(|report| report.get("output"))
+        .and_then(serde_json::Value::as_str)
+    else {
+        return Ok(None);
+    };
+
+    let trimmed = output.trim_start();
+    if !trimmed.starts_with('{') && !trimmed.starts_with('[') {
+        return Ok(None);
+    }
+
+    parse_structured_output(run_id, output).map(Some)
 }
 
 fn parse_artifact_response(
@@ -827,12 +892,20 @@ mod tests {
 
     #[test]
     fn fetches_structured_output_from_stage_output_file() {
-        let client = client(vec![(
-            "GET",
-            "/v1/runs/run-123/stages/main/output-file",
-            200,
-            r#"{"status":"success","summary":"ok","metrics":{"latency_p99_ms":87,"cost_usd":0.018},"artifacts":[]}"#,
-        )]);
+        let client = client(vec![
+            (
+                "GET",
+                "/v1/runs/run-123",
+                200,
+                r#"{"id":"run-123","status":"Completed"}"#,
+            ),
+            (
+                "GET",
+                "/v1/runs/run-123/stages/main/output-file",
+                200,
+                r#"{"status":"success","summary":"ok","metrics":{"latency_p99_ms":87,"cost_usd":0.018},"artifacts":[]}"#,
+            ),
+        ]);
 
         let output = client
             .fetch_structured_output("run-123")
@@ -889,6 +962,149 @@ mod tests {
             .expect("output");
 
         assert_eq!(output.metrics.get("latency_p99_ms"), Some(&77.0));
+    }
+
+    #[test]
+    fn fetch_structured_output_uses_run_report_when_output_ready() {
+        let client = client(vec![(
+            "GET",
+            "/v1/runs/run-service",
+            200,
+            r#"{
+                "id":"run-service",
+                "status":"running",
+                "output_ready":true,
+                "report":{
+                    "name":"transform_optimizer",
+                    "kind":"agent",
+                    "success":true,
+                    "output":"{\"status\":\"success\",\"summary\":\"ok\",\"metrics\":{\"latency_p99_ms\":61,\"error_rate\":0.01,\"cpu_pct\":48},\"artifacts\":[]}",
+                    "stages":1,
+                    "total_cost_usd":0.1,
+                    "input_tokens":10,
+                    "output_tokens":20
+                }
+            }"#,
+        )]);
+
+        let output = client
+            .fetch_structured_output("run-service")
+            .expect("fetch")
+            .expect("output");
+
+        assert!(output.succeeded);
+        assert_eq!(output.metrics.get("latency_p99_ms"), Some(&61.0));
+        assert_eq!(output.metrics.get("error_rate"), Some(&0.01));
+        assert_eq!(output.metrics.get("cpu_pct"), Some(&48.0));
+    }
+
+    #[test]
+    fn fetch_structured_output_falls_back_when_report_output_is_guest_path() {
+        let client = client(vec![
+            (
+                "GET",
+                "/v1/runs/run-service-path",
+                200,
+                r#"{
+                    "id":"run-service-path",
+                    "status":"running",
+                    "output_ready":true,
+                    "report":{
+                        "name":"transform_optimizer",
+                        "kind":"agent",
+                        "success":true,
+                        "output":"/workspace/output.json",
+                        "stages":1,
+                        "total_cost_usd":0.1,
+                        "input_tokens":10,
+                        "output_tokens":20
+                    },
+                    "artifact_publication": {
+                        "manifest": [
+                            {
+                                "name": "result.json",
+                                "stage": "main",
+                                "retrieval_path": "/v1/runs/run-service-path/stages/main/artifacts/result.json"
+                            }
+                        ]
+                    }
+                }"#,
+            ),
+            (
+                "GET",
+                "/v1/runs/run-service-path/stages/main/artifacts/result.json",
+                200,
+                r#"{"status":"success","summary":"ok","metrics":{"latency_p99_ms":59,"error_rate":0.02,"cpu_pct":44},"artifacts":[]}"#,
+            ),
+        ]);
+
+        let output = client
+            .fetch_structured_output("run-service-path")
+            .expect("fetch")
+            .expect("output");
+
+        assert!(output.succeeded);
+        assert_eq!(output.metrics.get("latency_p99_ms"), Some(&59.0));
+        assert_eq!(output.metrics.get("error_rate"), Some(&0.02));
+        assert_eq!(output.metrics.get("cpu_pct"), Some(&44.0));
+    }
+
+    #[test]
+    fn fetch_structured_output_uses_report_stage_output_file_when_report_output_is_guest_path() {
+        let client = client(vec![
+            (
+                "GET",
+                "/v1/runs/run-service-stage",
+                200,
+                r#"{
+                    "id":"run-service-stage",
+                    "status":"running",
+                    "output_ready":true,
+                    "report":{
+                        "name":"transform_optimizer",
+                        "kind":"agent",
+                        "success":true,
+                        "output":"/workspace/output.json",
+                        "stages":1,
+                        "total_cost_usd":0.1,
+                        "input_tokens":10,
+                        "output_tokens":20
+                    },
+                    "artifact_publication": {
+                        "status": "not_started",
+                        "manifest": []
+                    }
+                }"#,
+            ),
+            (
+                "GET",
+                "/v1/runs/run-service-stage/stages/main/output-file",
+                404,
+                r#"{"code":"STRUCTURED_OUTPUT_MISSING","message":"main missing result.json","retryable":false}"#,
+            ),
+            (
+                "GET",
+                "/v1/runs/run-service-stage/stages/output/output-file",
+                404,
+                r#"{"code":"STRUCTURED_OUTPUT_MISSING","message":"output missing result.json","retryable":false}"#,
+            ),
+            (
+                "GET",
+                "/v1/runs/run-service-stage/stages/transform_optimizer/output-file",
+                200,
+                r#"{"status":"success","summary":"ok","metrics":{"latency_p99_ms":52,"error_rate":0.03,"cpu_pct":41},"artifacts":[]}"#,
+            ),
+        ]);
+
+        let output = client
+            .fetch_structured_output("run-service-stage")
+            .expect("fetch")
+            .expect("output");
+
+        assert!(output.succeeded);
+        assert_eq!(output.metrics.get("latency_p99_ms"), Some(&52.0));
+        assert_eq!(output.metrics.get("error_rate"), Some(&0.03));
+        assert_eq!(output.metrics.get("cpu_pct"), Some(&41.0));
     }
 
     #[test]
@@ -1074,7 +1290,11 @@ mod tests {
             body.get("file").and_then(serde_json::Value::as_str),
             Some("fixtures/sample.vbrun")
         );
-        assert_eq!(body.get("input"), Some(&snapshot));
+        let expected_input = snapshot.to_string();
+        assert_eq!(
+            body.get("input").and_then(serde_json::Value::as_str),
+            Some(expected_input.as_str())
+        );
     }
 
     #[test]

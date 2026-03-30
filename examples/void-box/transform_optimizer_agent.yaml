@@ -1,0 +1,87 @@
+api_version: v1
+kind: agent
+name: transform_optimizer
+
+sandbox:
+  mode: auto
+  memory_mb: 3072
+  vcpus: 2
+  network: true
+  env:
+    TRANSFORM_STAGE: Transform-02
+    TRANSFORM_STRATEGY: baseline
+    TRANSFORM_PARALLELISM: "2"
+    TRANSFORM_BATCH_SIZE: "16"
+    TRANSFORM_CACHE_MODE: disabled
+    TRANSFORM_VALIDATION_MODE: balanced
+    TRANSFORM_PREFETCH: disabled
+    TRANSFORM_CPU_BUDGET: "70"
+
+llm:
+  provider: claude
+
+agent:
+  mode: service
+  skills:
+    - "agent:claude-code"
+  messaging:
+    enabled: true
+  output_file: /workspace/output.json
+  prompt: |
+    You are optimizing the production transformation stage named
+    Transform-02.
+
+    You are one sibling candidate in a swarm run. Your assigned investigation
+    role is provided in `TRANSFORM_ROLE`. Treat that role as your primary lens:
+    focus on that aspect first, then incorporate useful peer observations before
+    finalizing your assessment.
+
+    You have collaboration tools available for:
+    - reading shared execution context
+    - reading peer inbox messages
+    - sending short messages to peers or the leader
+
+    Before writing your final result:
+    1. Review the shared context for this execution.
+    2. Evaluate this candidate through the lens of `TRANSFORM_ROLE`.
+    3. Check whether peers have already reported useful observations from other
+       investigation roles.
+    4. Share one concise `broadcast` observation that could help sibling
+       candidates compare or refine their own findings.
+    5. Send one concise recommendation to the leader describing whether this
+       candidate should be promoted, refined, or rejected after considering
+       both your role-specific findings and any useful peer context.
+
+    Keep collaboration messages concise and operational. Use them to share
+    evidence, tradeoffs, or risks that another role would plausibly need.
+
+    Read the candidate configuration from these environment variables only:
+    - TRANSFORM_STRATEGY
+    - TRANSFORM_PARALLELISM
+    - TRANSFORM_BATCH_SIZE
+    - TRANSFORM_CACHE_MODE
+    - TRANSFORM_VALIDATION_MODE
+    - TRANSFORM_PREFETCH
+    - TRANSFORM_CPU_BUDGET
+    - TRANSFORM_ROLE
+
+    Write JSON to /workspace/output.json with exactly this schema:
+    {
+      "status": "success",
+      "summary": "short one-line assessment",
+      "metrics": {
+        "latency_p99_ms": 0,
+        "error_rate": 0,
+        "cpu_pct": 0
+      },
+      "artifacts": []
+    }
+
+    Requirements:
+    - latency_p99_ms must be a positive number.
+    - error_rate must be between 0 and 1.
+    - cpu_pct must be between 0 and 100.
+    - Lower values are better for all metrics.
+    - The metrics must reflect the provided strategy configuration.
+    - The summary must mention the assigned `TRANSFORM_ROLE`.
+    - Collaboration messages should be short and relevant to sibling decision-making.

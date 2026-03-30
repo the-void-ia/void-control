@@ -13,7 +13,7 @@ pub mod variation;
 
 pub use events::{ControlEventEnvelope, ControlEventType};
 #[cfg(feature = "serde")]
-pub use message_box::extract_message_stats;
+pub use message_box::{extract_message_stats, merge_and_dedup};
 pub use policy::{
     BudgetPolicy, ConcurrencyPolicy, ConvergencePolicy, GlobalConfig, OrchestrationPolicy,
 };

@@ -196,6 +196,62 @@ fn create_execution_route_accepts_search_specs() {
 }
 
 #[test]
+fn create_execution_route_accepts_yaml_specs() {
+    let root = temp_root("create-yaml");
+    let spec_dir = root.join("specs");
+    let execution_dir = root.join("executions");
+    let body = r#"
+mode: swarm
+goal: optimize transform latency
+workflow:
+  template: examples/void-box/transform_optimizer_agent.yaml
+policy:
+  budget:
+    max_iterations: 2
+    max_wall_clock_secs: 600
+  concurrency:
+    max_concurrent_candidates: 4
+  convergence:
+    strategy: exhaustive
+  max_candidate_failures_per_iteration: 10
+  missing_output_policy: mark_incomplete
+  iteration_failure_policy: continue
+evaluation:
+  scoring_type: weighted_metrics
+  weights:
+    latency_p99_ms: -0.55
+    error_rate: -0.30
+    cpu_pct: -0.15
+  pass_threshold: 0.7
+  ranking: highest_score
+  tie_breaking: latency_p99_ms
+variation:
+  source: explicit
+  candidates_per_iteration: 2
+  explicit:
+    - overrides:
+        sandbox.env.TRANSFORM_STRATEGY: baseline
+    - overrides:
+        sandbox.env.TRANSFORM_STRATEGY: batch-fusion
+swarm: true
+"#;
+
+    let created = void_control::bridge::handle_bridge_request_with_dirs_for_test(
+        "POST",
+        "/v1/executions",
+        Some(body),
+        &spec_dir,
+        &execution_dir,
+    )
+    .expect("create");
+
+    assert_eq!(created.status, 200);
+    assert_eq!(created.json["status"], "Pending");
+    assert_eq!(created.json["mode"], "swarm");
+    assert_eq!(created.json["goal"], "optimize transform latency");
+}
+
+#[test]
 fn get_execution_events_route_returns_persisted_event_stream() {
     let root = temp_root("execution-events");
     let spec_dir = root.join("specs");

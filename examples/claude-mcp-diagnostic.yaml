@@ -1,0 +1,34 @@
+mode: swarm
+goal: >
+  Diagnostic run to verify that a Claude-backed candidate can actually use the
+  void-mcp collaboration bridge and emit canonical sidecar intents.
+workflow:
+  template: examples/void-box/claude_mcp_diagnostic_agent.yaml
+policy:
+  budget:
+    max_iterations: 1
+    max_child_runs: 1
+    max_wall_clock_secs: 600
+  concurrency:
+    max_concurrent_candidates: 1
+  convergence:
+    strategy: threshold
+    min_score: 0.0
+    max_iterations_without_improvement: 0
+  max_candidate_failures_per_iteration: 1
+  missing_output_policy: mark_failed
+  iteration_failure_policy: fail_fast
+evaluation:
+  scoring_type: weighted_metrics
+  weights:
+    latency_p99_ms: -1.0
+  pass_threshold: 0.0
+  ranking: highest_score
+  tie_breaking: latency_p99_ms
+variation:
+  source: explicit
+  candidates_per_iteration: 1
+  explicit:
+    - overrides:
+        sandbox.env.MCP_DIAGNOSTIC_ROLE: force-mcp
+swarm: true

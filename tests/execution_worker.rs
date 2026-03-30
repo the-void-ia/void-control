@@ -1,7 +1,11 @@
 #![cfg(feature = "serde")]
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 
+use void_control::contract::{
+    ContractError, ContractErrorCode, RunState, RuntimeInspection, StartRequest, StartResult,
+};
 use void_control::orchestration::{
     CandidateOutput, CandidateStatus, ExecutionCandidate, ExecutionService, ExecutionSpec,
     ExecutionStatus, FsExecutionStore, GlobalConfig, OrchestrationPolicy, VariationConfig,
@@ -65,6 +69,92 @@ fn bridge_worker_helper_processes_pending_executions() {
 
     let snapshot = store.load_execution("exec-bridge-worker").expect("reload");
     assert_eq!(snapshot.execution.status, ExecutionStatus::Completed);
+}
+
+#[test]
+fn bridge_worker_resumes_running_candidate_even_without_queued_candidates() {
+    let root = temp_store_dir("bridge-worker-running-only");
+    let store = FsExecutionStore::new(root.clone());
+    let spec = single_candidate_spec();
+    ExecutionService::<StepwiseRuntime>::submit_execution(&store, "exec-bridge-running-only", &spec)
+        .expect("submit");
+
+    void_control::bridge::process_pending_executions_once_for_test(
+        GlobalConfig {
+            max_concurrent_child_runs: 2,
+        },
+        StepwiseRuntime::with_outputs(
+            1,
+            [(
+                "exec-run-candidate-1",
+                output("candidate-1", &[("latency_p99_ms", 90.0), ("cost_usd", 0.03)]),
+            )],
+        ),
+        root.clone(),
+    )
+    .expect("first bridge tick");
+
+    let first = store.load_execution("exec-bridge-running-only").expect("reload");
+    assert_eq!(first.candidates.len(), 1);
+    assert_eq!(first.candidates[0].status, CandidateStatus::Running);
+
+    void_control::bridge::process_pending_executions_once_for_test(
+        GlobalConfig {
+            max_concurrent_child_runs: 2,
+        },
+        StepwiseRuntime::with_outputs(
+            0,
+            [(
+                "exec-run-candidate-1",
+                output("candidate-1", &[("latency_p99_ms", 90.0), ("cost_usd", 0.03)]),
+            )],
+        ),
+        root,
+    )
+    .expect("second bridge tick");
+
+    let second = store.load_execution("exec-bridge-running-only").expect("reload");
+    assert_eq!(second.candidates[0].status, CandidateStatus::Completed);
+    assert_eq!(second.execution.status, ExecutionStatus::Completed);
+}
+
+#[test]
+fn bridge_worker_dispatches_multiple_candidates_up_to_execution_concurrency() {
+    let root = temp_store_dir("bridge-worker-parallel");
+    let store = FsExecutionStore::new(root.clone());
+    let spec = spec_with_candidate_count(1, 4, 4);
+    ExecutionService::<StepwiseRuntime>::submit_execution(&store, "exec-bridge-parallel", &spec)
+        .expect("submit");
+
+    void_control::bridge::process_pending_executions_once_for_test(
+        GlobalConfig {
+            max_concurrent_child_runs: 4,
+        },
+        StepwiseRuntime::new(1),
+        root,
+    )
+    .expect("bridge tick");
+
+    let snapshot = store.load_execution("exec-bridge-parallel").expect("reload");
+    assert_eq!(
+        snapshot
+            .candidates
+            .iter()
+            .filter(|candidate| candidate.status == CandidateStatus::Running)
+            .count(),
+        4
+    );
+    assert_eq!(
+        snapshot
+            .events
+            .iter()
+            .filter(|event| {
+                event.event_type
+                    == void_control::orchestration::ControlEventType::CandidateDispatched
+            })
+            .count(),
+        4
+    );
 }
 
 #[test]
@@ -235,6 +325,200 @@ fn dispatch_execution_once_runs_only_one_queued_candidate() {
             })
             .count(),
         1
+    );
+    assert_eq!(
+        snapshot
+            .events
+            .iter()
+            .filter(|event| {
+                event.event_type
+                    == void_control::orchestration::ControlEventType::CandidateOutputCollected
+            })
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn dispatch_execution_once_persists_running_candidate_for_nonterminal_run() {
+    let root = temp_store_dir("worker-dispatch-running");
+    let store = FsExecutionStore::new(root);
+    let spec = spec(1);
+    ExecutionService::<StepwiseRuntime>::submit_execution(&store, "exec-dispatch-running", &spec)
+        .expect("submit");
+
+    let mut planner = ExecutionService::new(
+        GlobalConfig {
+            max_concurrent_child_runs: 2,
+        },
+        StepwiseRuntime::new(1),
+        store.clone(),
+    );
+    planner.plan_execution("exec-dispatch-running").expect("plan");
+
+    let output = output("candidate-1", &[("latency_p99_ms", 90.0), ("cost_usd", 0.03)]);
+    let runtime = StepwiseRuntime::with_outputs(1, [("exec-run-candidate-1", output)]);
+    let mut worker = ExecutionService::new(
+        GlobalConfig {
+            max_concurrent_child_runs: 2,
+        },
+        runtime,
+        store.clone(),
+    );
+    let execution = worker
+        .dispatch_execution_once("exec-dispatch-running")
+        .expect("dispatch once");
+
+    assert_eq!(execution.status, ExecutionStatus::Running);
+    let snapshot = store.load_execution("exec-dispatch-running").expect("reload");
+    assert_eq!(snapshot.execution.status, ExecutionStatus::Running);
+    assert_eq!(snapshot.candidates[0].status, CandidateStatus::Running);
+    assert_eq!(
+        snapshot.candidates[0].runtime_run_id.as_deref(),
+        Some("step:exec-run-candidate-1")
+    );
+    assert_eq!(snapshot.candidates[1].status, CandidateStatus::Queued);
+    assert_eq!(
+        snapshot
+            .events
+            .iter()
+            .filter(|event| {
+                event.event_type
+                    == void_control::orchestration::ControlEventType::CandidateDispatched
+            })
+            .count(),
+        1
+    );
+    assert_eq!(
+        snapshot
+            .events
+            .iter()
+            .filter(|event| {
+                event.event_type
+                    == void_control::orchestration::ControlEventType::CandidateOutputCollected
+            })
+            .count(),
+        0
+    );
+}
+
+#[test]
+fn dispatch_execution_once_reconciles_persisted_running_candidate_on_later_tick() {
+    let root = temp_store_dir("worker-dispatch-reconcile");
+    let store = FsExecutionStore::new(root);
+    let spec = spec(1);
+    ExecutionService::<StepwiseRuntime>::submit_execution(
+        &store,
+        "exec-dispatch-reconcile",
+        &spec,
+    )
+    .expect("submit");
+
+    let mut planner = ExecutionService::new(
+        GlobalConfig {
+            max_concurrent_child_runs: 2,
+        },
+        StepwiseRuntime::new(1),
+        store.clone(),
+    );
+    planner.plan_execution("exec-dispatch-reconcile").expect("plan");
+
+    let output = output("candidate-1", &[("latency_p99_ms", 90.0), ("cost_usd", 0.03)]);
+    let runtime = StepwiseRuntime::with_outputs(1, [("exec-run-candidate-1", output)]);
+    let mut worker = ExecutionService::new(
+        GlobalConfig {
+            max_concurrent_child_runs: 2,
+        },
+        runtime,
+        store.clone(),
+    );
+    worker
+        .dispatch_execution_once("exec-dispatch-reconcile")
+        .expect("first dispatch");
+    let second = worker
+        .dispatch_execution_once("exec-dispatch-reconcile")
+        .expect("second dispatch");
+
+    assert_eq!(second.status, ExecutionStatus::Running);
+    let snapshot = store.load_execution("exec-dispatch-reconcile").expect("reload");
+    assert_eq!(snapshot.candidates[0].status, CandidateStatus::Completed);
+    assert_eq!(snapshot.candidates[1].status, CandidateStatus::Queued);
+    assert_eq!(snapshot.candidates[0].succeeded, Some(true));
+    assert_eq!(
+        snapshot
+            .events
+            .iter()
+            .filter(|event| {
+                event.event_type
+                    == void_control::orchestration::ControlEventType::CandidateDispatched
+            })
+            .count(),
+        1
+    );
+    assert_eq!(
+        snapshot
+            .events
+            .iter()
+            .filter(|event| {
+                event.event_type
+                    == void_control::orchestration::ControlEventType::CandidateOutputCollected
+            })
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn dispatch_execution_once_prefers_structured_output_over_failed_terminal_state() {
+    let root = temp_store_dir("worker-dispatch-terminal-failed-with-output");
+    let store = FsExecutionStore::new(root);
+    let spec = spec(1);
+    ExecutionService::<TerminalFailedRuntime>::submit_execution(
+        &store,
+        "exec-dispatch-terminal-failed-with-output",
+        &spec,
+    )
+    .expect("submit");
+
+    let mut planner = ExecutionService::new(
+        GlobalConfig {
+            max_concurrent_child_runs: 2,
+        },
+        TerminalFailedRuntime::new(None),
+        store.clone(),
+    );
+    planner
+        .plan_execution("exec-dispatch-terminal-failed-with-output")
+        .expect("plan");
+
+    let output = output(
+        "candidate-1",
+        &[
+            ("latency_p99_ms", 90.0),
+            ("error_rate", 0.01),
+            ("cpu_pct", 44.0),
+        ],
+    );
+    let mut worker = ExecutionService::new(
+        GlobalConfig {
+            max_concurrent_child_runs: 2,
+        },
+        TerminalFailedRuntime::new(Some(output)),
+        store.clone(),
+    );
+    let execution = worker
+        .dispatch_execution_once("exec-dispatch-terminal-failed-with-output")
+        .expect("dispatch once");
+
+    assert_eq!(execution.status, ExecutionStatus::Running);
+    let snapshot = store
+        .load_execution("exec-dispatch-terminal-failed-with-output")
+        .expect("reload");
+    assert_eq!(snapshot.candidates[0].status, CandidateStatus::Completed);
+    assert_eq!(snapshot.candidates[0].succeeded, Some(true));
+    assert_eq!(
+        snapshot.candidates[0].metrics.get("latency_p99_ms"),
+        Some(&90.0)
     );
     assert_eq!(
         snapshot
@@ -794,7 +1078,10 @@ fn paused_execution_does_not_block_other_queued_work_in_bridge_scheduler() {
     let running_snapshot = store
         .load_execution("exec-running")
         .expect("reload running");
-    assert_eq!(running_snapshot.execution.status, ExecutionStatus::Running);
+    assert!(matches!(
+        running_snapshot.execution.status,
+        ExecutionStatus::Running | ExecutionStatus::Completed
+    ));
     assert!(running_snapshot
         .candidates
         .iter()
@@ -863,13 +1150,25 @@ fn bridge_scheduler_dispatches_earliest_queued_execution_first() {
 
     let early = store.load_execution("exec-early").expect("reload early");
     let late = store.load_execution("exec-late").expect("reload late");
+    let early_completed = early
+        .candidates
+        .iter()
+        .filter(|candidate| candidate.status == CandidateStatus::Completed)
+        .count();
+    let late_completed = late
+        .candidates
+        .iter()
+        .filter(|candidate| candidate.status == CandidateStatus::Completed)
+        .count();
 
     assert_eq!(early.execution.status, ExecutionStatus::Running);
     assert_eq!(late.execution.status, ExecutionStatus::Running);
     assert_eq!(early.candidates[0].status, CandidateStatus::Completed);
-    assert_eq!(early.candidates[1].status, CandidateStatus::Queued);
     assert_eq!(late.candidates[0].status, CandidateStatus::Completed);
-    assert_eq!(late.candidates[1].status, CandidateStatus::Queued);
+    assert!(
+        early_completed >= late_completed,
+        "earlier execution should not make less progress than later execution in the same bridge tick"
+    );
 }
 
 fn spec(max_iterations: u32) -> ExecutionSpec {
@@ -918,6 +1217,107 @@ fn spec(max_iterations: u32) -> ExecutionSpec {
                     overrides: BTreeMap::from([("agent.prompt".to_string(), "b".to_string())]),
                 },
             ],
+        ),
+        swarm: true,
+    }
+}
+
+fn spec_with_candidate_count(
+    max_iterations: u32,
+    max_concurrent_candidates: u32,
+    candidate_count: usize,
+) -> ExecutionSpec {
+    ExecutionSpec {
+        mode: "swarm".to_string(),
+        goal: "optimize latency".to_string(),
+        workflow: void_control::orchestration::WorkflowTemplateRef {
+            template: "fixtures/sample.vbrun".to_string(),
+        },
+        policy: OrchestrationPolicy {
+            budget: void_control::orchestration::BudgetPolicy {
+                max_iterations: Some(max_iterations),
+                max_child_runs: None,
+                max_wall_clock_secs: Some(60),
+                max_cost_usd_millis: None,
+            },
+            concurrency: void_control::orchestration::ConcurrencyPolicy {
+                max_concurrent_candidates,
+            },
+            convergence: void_control::orchestration::ConvergencePolicy {
+                strategy: "exhaustive".to_string(),
+                min_score: None,
+                max_iterations_without_improvement: None,
+            },
+            max_candidate_failures_per_iteration: 10,
+            missing_output_policy: "mark_failed".to_string(),
+            iteration_failure_policy: "fail_execution".to_string(),
+        },
+        evaluation: void_control::orchestration::EvaluationConfig {
+            scoring_type: "weighted_metrics".to_string(),
+            weights: BTreeMap::from([
+                ("latency_p99_ms".to_string(), -0.6),
+                ("cost_usd".to_string(), -0.4),
+            ]),
+            pass_threshold: Some(0.7),
+            ranking: "highest_score".to_string(),
+            tie_breaking: "cost_usd".to_string(),
+        },
+        variation: VariationConfig::explicit(
+            candidate_count as u32,
+            (0..candidate_count)
+                .map(|idx| VariationProposal {
+                    overrides: BTreeMap::from([(
+                        "agent.prompt".to_string(),
+                        format!("candidate-{idx}"),
+                    )]),
+                })
+                .collect(),
+        ),
+        swarm: true,
+    }
+}
+
+fn single_candidate_spec() -> ExecutionSpec {
+    ExecutionSpec {
+        mode: "swarm".to_string(),
+        goal: "optimize".to_string(),
+        workflow: void_control::orchestration::WorkflowTemplateRef {
+            template: "fixtures/sample.vbrun".to_string(),
+        },
+        policy: OrchestrationPolicy {
+            budget: void_control::orchestration::BudgetPolicy {
+                max_iterations: Some(1),
+                max_child_runs: None,
+                max_wall_clock_secs: Some(60),
+                max_cost_usd_millis: None,
+            },
+            concurrency: void_control::orchestration::ConcurrencyPolicy {
+                max_concurrent_candidates: 1,
+            },
+            convergence: void_control::orchestration::ConvergencePolicy {
+                strategy: "exhaustive".to_string(),
+                min_score: None,
+                max_iterations_without_improvement: None,
+            },
+            max_candidate_failures_per_iteration: 10,
+            missing_output_policy: "mark_failed".to_string(),
+            iteration_failure_policy: "fail_execution".to_string(),
+        },
+        evaluation: void_control::orchestration::EvaluationConfig {
+            scoring_type: "weighted_metrics".to_string(),
+            weights: BTreeMap::from([
+                ("latency_p99_ms".to_string(), -0.6),
+                ("cost_usd".to_string(), -0.4),
+            ]),
+            pass_threshold: Some(0.7),
+            ranking: "highest_score".to_string(),
+            tie_breaking: "cost_usd".to_string(),
+        },
+        variation: VariationConfig::explicit(
+            1,
+            vec![VariationProposal {
+                overrides: BTreeMap::from([("agent.prompt".to_string(), "a".to_string())]),
+            }],
         ),
         swarm: true,
     }
@@ -976,4 +1376,147 @@ fn tick_bridge_worker_until_terminal(root: std::path::PathBuf, execution_id: &st
         }
     }
     panic!("execution did not reach terminal state");
+}
+
+struct StepwiseRuntime {
+    terminal_after_inspects: usize,
+    inspect_counts: RefCell<BTreeMap<String, usize>>,
+    outputs: BTreeMap<String, CandidateOutput>,
+}
+
+struct TerminalFailedRuntime {
+    output: Option<CandidateOutput>,
+}
+
+impl TerminalFailedRuntime {
+    fn new(output: Option<CandidateOutput>) -> Self {
+        Self { output }
+    }
+}
+
+impl StepwiseRuntime {
+    fn new(terminal_after_inspects: usize) -> Self {
+        Self {
+            terminal_after_inspects,
+            inspect_counts: RefCell::new(BTreeMap::new()),
+            outputs: BTreeMap::new(),
+        }
+    }
+
+    fn with_outputs<const N: usize>(
+        terminal_after_inspects: usize,
+        outputs: [(&str, CandidateOutput); N],
+    ) -> Self {
+        Self {
+            terminal_after_inspects,
+            inspect_counts: RefCell::new(BTreeMap::new()),
+            outputs: outputs
+                .into_iter()
+                .map(|(run_id, output)| (run_id.to_string(), output))
+                .collect(),
+        }
+    }
+}
+
+impl void_control::orchestration::service::ExecutionRuntime for StepwiseRuntime {
+    fn start_run(&mut self, request: StartRequest) -> Result<StartResult, ContractError> {
+        Ok(StartResult {
+            handle: format!("step:{}", request.run_id),
+            attempt_id: 1,
+            state: RunState::Running,
+        })
+    }
+
+    fn inspect_run(&self, handle: &str) -> Result<RuntimeInspection, ContractError> {
+        let run_id = handle.strip_prefix("step:").ok_or_else(|| {
+            ContractError::new(
+                ContractErrorCode::NotFound,
+                format!("unknown handle '{handle}'"),
+                false,
+            )
+        })?;
+        let mut counts = self.inspect_counts.borrow_mut();
+        let count = counts.entry(run_id.to_string()).or_insert(0);
+        *count += 1;
+        let terminal = *count > self.terminal_after_inspects;
+        Ok(RuntimeInspection {
+            run_id: run_id.to_string(),
+            attempt_id: 1,
+            state: if terminal {
+                RunState::Succeeded
+            } else {
+                RunState::Running
+            },
+            active_stage_count: if terminal { 0 } else { 1 },
+            active_microvm_count: if terminal { 0 } else { 1 },
+            started_at: "0Z".to_string(),
+            updated_at: "0Z".to_string(),
+            terminal_reason: None,
+            exit_code: None,
+        })
+    }
+
+    fn take_structured_output(
+        &mut self,
+        run_id: &str,
+    ) -> void_control::orchestration::service::StructuredOutputResult {
+        self.outputs
+            .get(run_id)
+            .cloned()
+            .map(void_control::orchestration::service::StructuredOutputResult::Found)
+            .unwrap_or(void_control::orchestration::service::StructuredOutputResult::Missing)
+    }
+
+    fn inline_poll_budget(&self) -> usize {
+        1
+    }
+
+    fn persisted_run_handle(&self, persisted_run_id: &str) -> String {
+        if persisted_run_id.starts_with("step:") {
+            persisted_run_id.to_string()
+        } else {
+            format!("step:{persisted_run_id}")
+        }
+    }
+}
+
+impl void_control::orchestration::service::ExecutionRuntime for TerminalFailedRuntime {
+    fn start_run(&mut self, request: StartRequest) -> Result<StartResult, ContractError> {
+        Ok(StartResult {
+            handle: format!("tf:{}", request.run_id),
+            attempt_id: 1,
+            state: RunState::Running,
+        })
+    }
+
+    fn inspect_run(&self, handle: &str) -> Result<RuntimeInspection, ContractError> {
+        let run_id = handle.strip_prefix("tf:").ok_or_else(|| {
+            ContractError::new(
+                ContractErrorCode::NotFound,
+                format!("unknown handle '{handle}'"),
+                false,
+            )
+        })?;
+        Ok(RuntimeInspection {
+            run_id: run_id.to_string(),
+            attempt_id: 1,
+            state: RunState::Failed,
+            active_stage_count: 0,
+            active_microvm_count: 0,
+            started_at: "0Z".to_string(),
+            updated_at: "0Z".to_string(),
+            terminal_reason: Some("forced terminal failure".to_string()),
+            exit_code: Some(1),
+        })
+    }
+
+    fn take_structured_output(
+        &mut self,
+        _run_id: &str,
+    ) -> void_control::orchestration::service::StructuredOutputResult {
+        self.output
+            .take()
+            .map(void_control::orchestration::service::StructuredOutputResult::Found)
+            .unwrap_or(void_control::orchestration::service::StructuredOutputResult::Missing)
+    }
 }

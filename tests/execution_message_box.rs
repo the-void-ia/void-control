@@ -565,7 +565,7 @@ impl ProviderLaunchAdapter for RecordingLaunchAdapter {
         request: StartRequest,
         candidate: &CandidateSpec,
         inbox: &InboxSnapshot,
-    ) -> StartRequest {
+    ) -> Result<StartRequest, void_control::contract::ContractError> {
         self.calls
             .borrow_mut()
             .push((candidate.candidate_id.clone(), inbox.clone()));

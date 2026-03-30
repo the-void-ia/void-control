@@ -255,13 +255,15 @@ pub fn run_bridge() -> Result<(), String> {
     let worker_config = config.clone();
     thread::spawn(move || loop {
         let runtime = VoidBoxRuntimeClient::new(worker_config.base_url.clone(), 250);
-        let _ = process_pending_executions_once(
+        if let Err(err) = process_pending_executions_once(
             GlobalConfig {
                 max_concurrent_child_runs: 20,
             },
             runtime,
             worker_config.execution_dir.clone(),
-        );
+        ) {
+            eprintln!("bridge worker tick failed: {err}");
+        }
         std::thread::sleep(std::time::Duration::from_millis(500));
     });
     let server = Server::http(&config.listen)
@@ -429,14 +431,14 @@ fn handle_bridge_request(
 
 #[cfg(feature = "serde")]
 fn handle_execution_dry_run(body: &str) -> JsonHttpResponse {
-    let spec_request: ExecutionSpecRequest = match serde_json::from_str(body) {
+    let spec_request: ExecutionSpecRequest = match parse_execution_spec_request(body) {
         Ok(value) => value,
         Err(err) => {
             return json_response(
                 400,
                 &ApiError {
                     code: "INVALID_SPEC",
-                    message: format!("invalid JSON body: {err}"),
+                    message: err,
                     retryable: false,
                 },
             )
@@ -496,14 +498,14 @@ fn handle_execution_create(
     config: &BridgeConfig,
     _use_live_runtime: bool,
 ) -> JsonHttpResponse {
-    let spec_request: ExecutionSpecRequest = match serde_json::from_str(body) {
+    let spec_request: ExecutionSpecRequest = match parse_execution_spec_request(body) {
         Ok(value) => value,
         Err(err) => {
             return json_response(
                 400,
                 &ApiError {
                     code: "INVALID_SPEC",
-                    message: format!("invalid JSON body: {err}"),
+                    message: err,
                     retryable: false,
                 },
             )
@@ -535,6 +537,18 @@ fn handle_execution_create(
                 retryable: true,
             },
         ),
+    }
+}
+
+#[cfg(feature = "serde")]
+fn parse_execution_spec_request(body: &str) -> Result<ExecutionSpecRequest, String> {
+    match serde_json::from_str(body) {
+        Ok(value) => Ok(value),
+        Err(json_err) => serde_yaml::from_str(body).map_err(|yaml_err| {
+            format!(
+                "invalid execution spec body: JSON parse error: {json_err}; YAML parse error: {yaml_err}"
+            )
+        }),
     }
 }
 
@@ -894,6 +908,7 @@ fn process_pending_executions_once<R: ExecutionRuntime>(
 ) -> std::io::Result<()> {
     let store = FsExecutionStore::new(execution_dir);
     let mut service = ExecutionService::new(global.clone(), runtime, store.clone());
+    let mut running_only_execution_ids = Vec::new();
 
     let ids = store.list_execution_ids()?;
     for execution_id in &ids {
@@ -942,22 +957,26 @@ fn process_pending_executions_once<R: ExecutionRuntime>(
             running,
             spec.policy.concurrency.max_concurrent_candidates as usize,
         );
-        if let Some(candidate) = snapshot
+        let queued_candidates: Vec<_> = snapshot
             .candidates
             .iter()
             .filter(|candidate| candidate.status == crate::orchestration::CandidateStatus::Queued)
-            .min_by_key(|candidate| candidate.created_seq)
-        {
-            scheduler.enqueue(QueuedCandidate::new(
-                &execution_id,
-                &candidate.candidate_id,
-                candidate.created_seq,
-            ));
+            .collect();
+        if !queued_candidates.is_empty() {
+            for candidate in queued_candidates {
+                scheduler.enqueue(QueuedCandidate::new(
+                    &execution_id,
+                    &candidate.candidate_id,
+                    candidate.created_seq,
+                ));
+            }
+        } else if snapshot.execution.status == crate::orchestration::ExecutionStatus::Running {
+            running_only_execution_ids.push(execution_id.clone());
         }
     }
 
-    while let Some(grant) = scheduler.next_dispatch() {
-        match service.dispatch_execution_once(&grant.execution_id) {
+    for execution_id in running_only_execution_ids {
+        match service.bridge_dispatch_execution_once(&execution_id) {
             Ok(_) => {}
             Err(err)
                 if matches!(
@@ -966,6 +985,37 @@ fn process_pending_executions_once<R: ExecutionRuntime>(
                 ) => {}
             Err(err) => return Err(err),
         }
+    }
+
+    while let Some(grant) = scheduler.next_dispatch() {
+        scheduler.mark_running(&grant);
+        match service.bridge_dispatch_execution_once(&grant.execution_id) {
+            Ok(_) => {}
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::InvalidInput
+                ) => {}
+            Err(err) => return Err(err),
+        }
+        let snapshot = store.load_execution(&grant.execution_id)?;
+        let spec = match store.load_spec(&grant.execution_id) {
+            Ok(spec) => spec,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(err) => return Err(err),
+        };
+        let paused = snapshot.execution.status == crate::orchestration::ExecutionStatus::Paused;
+        let running = snapshot
+            .candidates
+            .iter()
+            .filter(|candidate| candidate.status == crate::orchestration::CandidateStatus::Running)
+            .count();
+        scheduler.register_execution(
+            &grant.execution_id,
+            paused,
+            running,
+            spec.policy.concurrency.max_concurrent_candidates as usize,
+        );
     }
     Ok(())
 }
@@ -1092,6 +1142,9 @@ fn handle_launch(
 #[cfg(feature = "serde")]
 impl ExecutionSpecRequest {
     fn try_into_spec(self) -> Result<ExecutionSpec, String> {
+        let mode = self.mode.trim().to_string();
+        let goal = self.goal.trim().to_string();
+        let workflow_template = self.workflow.template.trim().to_string();
         let variation = match self.variation.source.as_str() {
             "parameter_space" => VariationConfig::parameter_space(
                 self.variation.candidates_per_iteration,
@@ -1138,10 +1191,10 @@ impl ExecutionSpecRequest {
         };
 
         Ok(ExecutionSpec {
-            mode: self.mode,
-            goal: self.goal,
+            mode,
+            goal,
             workflow: WorkflowTemplateRef {
-                template: self.workflow.template,
+                template: workflow_template,
             },
             policy: OrchestrationPolicy {
                 budget: BudgetPolicy {
