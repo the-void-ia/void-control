@@ -310,6 +310,95 @@ fn bridge_pause_resume_and_cancel_work_against_live_daemon() {
         .any(|event| event["event_type"] == "ExecutionCanceled"));
 }
 
+#[test]
+#[ignore = "requires live void-box daemon with production initramfs and ANTHROPIC_API_KEY"]
+fn bridge_transform_swarm_one_iteration_acceptance_against_live_daemon() {
+    let root = temp_root("bridge-live-transform-one-iteration");
+    let spec_dir = root.join("specs");
+    let execution_dir = root.join("executions");
+    let spec = one_iteration_transform_spec();
+    let body = execution_request_json(&spec);
+    let base_url =
+        std::env::var("VOID_BOX_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:43100".to_string());
+
+    let created = void_control::bridge::handle_bridge_request_with_dirs_for_test(
+        "POST",
+        "/v1/executions",
+        Some(&body),
+        &spec_dir,
+        &execution_dir,
+    )
+    .expect("create execution");
+    assert_eq!(created.status, 200);
+
+    let execution_id = created.json["execution_id"]
+        .as_str()
+        .expect("execution_id")
+        .to_string();
+
+    let mut terminal = None;
+    for _ in 0..240 {
+        void_control::bridge::process_pending_executions_once_for_test(
+            GlobalConfig {
+                max_concurrent_child_runs: 20,
+            },
+            VoidBoxRuntimeClient::new(base_url.clone(), 250),
+            execution_dir.clone(),
+        )
+        .expect("process pending");
+
+        let fetched = void_control::bridge::handle_bridge_request_with_dirs_for_test(
+            "GET",
+            &format!("/v1/executions/{execution_id}"),
+            None,
+            &spec_dir,
+            &execution_dir,
+        )
+        .expect("get execution");
+
+        let status = fetched.json["execution"]["status"]
+            .as_str()
+            .expect("status");
+        if matches!(status, "Completed" | "Failed" | "Canceled") {
+            terminal = Some(fetched);
+            break;
+        }
+
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+
+    let terminal = terminal.expect("execution should reach terminal state");
+    assert_eq!(
+        terminal.json["execution"]["status"],
+        "Completed",
+        "execution payload={}",
+        terminal.json
+    );
+    assert_eq!(terminal.json["result"]["completed_iterations"], 1);
+    assert!(terminal.json["result"]["best_candidate_id"].is_string());
+    assert_eq!(terminal.json["progress"]["candidate_output_count"], 8);
+
+    let events = void_control::bridge::handle_bridge_request_with_dirs_for_test(
+        "GET",
+        &format!("/v1/executions/{execution_id}/events"),
+        None,
+        &spec_dir,
+        &execution_dir,
+    )
+    .expect("get execution events");
+    assert_eq!(events.status, 200);
+    let items = events.json["events"].as_array().expect("events array");
+    assert!(items
+        .iter()
+        .any(|event| event["event_type"] == "CandidateScored"));
+    assert!(items
+        .iter()
+        .any(|event| event["event_type"] == "IterationCompleted"));
+    assert!(items
+        .iter()
+        .any(|event| event["event_type"] == "ExecutionCompleted"));
+}
+
 fn structured_output_spec() -> ExecutionSpec {
     let path = fallback_structured_output_spec_path();
     fs::write(
@@ -455,6 +544,108 @@ workflow:
             }],
         ),
         swarm: true,
+    }
+}
+
+fn one_iteration_transform_spec() -> ExecutionSpec {
+    let template = std::env::current_dir()
+        .expect("cwd")
+        .join("examples/void-box/transform_optimizer_agent.yaml");
+
+    ExecutionSpec {
+        mode: "swarm".to_string(),
+        goal: "Optimize the production Transform-02 stage by exploring eight sibling strategies in parallel, then bias the next round toward the strongest latency, error, and CPU tradeoff.".to_string(),
+        workflow: WorkflowTemplateRef {
+            template: template.to_string_lossy().to_string(),
+        },
+        policy: OrchestrationPolicy {
+            budget: BudgetPolicy {
+                max_iterations: Some(1),
+                max_child_runs: Some(8),
+                max_wall_clock_secs: Some(1800),
+                max_cost_usd_millis: None,
+            },
+            concurrency: ConcurrencyPolicy {
+                max_concurrent_candidates: 8,
+            },
+            convergence: ConvergencePolicy {
+                strategy: "exhaustive".to_string(),
+                min_score: None,
+                max_iterations_without_improvement: None,
+            },
+            max_candidate_failures_per_iteration: 8,
+            missing_output_policy: "mark_failed".to_string(),
+            iteration_failure_policy: "continue".to_string(),
+        },
+        evaluation: EvaluationConfig {
+            scoring_type: "weighted_metrics".to_string(),
+            weights: BTreeMap::from([
+                ("latency_p99_ms".to_string(), -0.50),
+                ("error_rate".to_string(), -0.35),
+                ("cpu_pct".to_string(), -0.15),
+            ]),
+            pass_threshold: Some(0.82),
+            ranking: "highest_score".to_string(),
+            tie_breaking: "latency_p99_ms".to_string(),
+        },
+        variation: VariationConfig {
+            source: "signal_reactive".to_string(),
+            candidates_per_iteration: 8,
+            selection: None,
+            parameter_space: BTreeMap::new(),
+            explicit: vec![
+                proposal(&[
+                    ("sandbox.env.TRANSFORM_STRATEGY", "baseline"),
+                    ("sandbox.env.TRANSFORM_PARALLELISM", "2"),
+                    ("sandbox.env.TRANSFORM_ROLE", "latency-baseline"),
+                ]),
+                proposal(&[
+                    ("sandbox.env.TRANSFORM_STRATEGY", "vectorized-parse"),
+                    ("sandbox.env.TRANSFORM_PARALLELISM", "4"),
+                    ("sandbox.env.TRANSFORM_ROLE", "parser-throughput"),
+                ]),
+                proposal(&[
+                    ("sandbox.env.TRANSFORM_STRATEGY", "batch-fusion"),
+                    ("sandbox.env.TRANSFORM_BATCH_SIZE", "32"),
+                    ("sandbox.env.TRANSFORM_ROLE", "batching-efficiency"),
+                ]),
+                proposal(&[
+                    ("sandbox.env.TRANSFORM_STRATEGY", "cache-aware"),
+                    ("sandbox.env.TRANSFORM_CACHE_MODE", "hot-path"),
+                    ("sandbox.env.TRANSFORM_ROLE", "cache-locality"),
+                ]),
+                proposal(&[
+                    ("sandbox.env.TRANSFORM_STRATEGY", "conservative-validation"),
+                    ("sandbox.env.TRANSFORM_VALIDATION_MODE", "strict"),
+                    ("sandbox.env.TRANSFORM_ROLE", "validation-risk"),
+                ]),
+                proposal(&[
+                    ("sandbox.env.TRANSFORM_STRATEGY", "speculative-prefetch"),
+                    ("sandbox.env.TRANSFORM_PREFETCH", "enabled"),
+                    ("sandbox.env.TRANSFORM_ROLE", "prefetch-behavior"),
+                ]),
+                proposal(&[
+                    ("sandbox.env.TRANSFORM_STRATEGY", "low-cpu"),
+                    ("sandbox.env.TRANSFORM_CPU_BUDGET", "55"),
+                    ("sandbox.env.TRANSFORM_ROLE", "cpu-budget"),
+                ]),
+                proposal(&[
+                    ("sandbox.env.TRANSFORM_STRATEGY", "high-throughput"),
+                    ("sandbox.env.TRANSFORM_PARALLELISM", "8"),
+                    ("sandbox.env.TRANSFORM_ROLE", "max-throughput"),
+                ]),
+            ],
+        },
+        swarm: true,
+    }
+}
+
+fn proposal(entries: &[(&str, &str)]) -> VariationProposal {
+    VariationProposal {
+        overrides: entries
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect(),
     }
 }
 
