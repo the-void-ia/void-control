@@ -119,6 +119,37 @@ fn bridge_worker_resumes_running_candidate_even_without_queued_candidates() {
 }
 
 #[test]
+fn bridge_worker_collects_output_from_running_service_candidate() {
+    let root = temp_store_dir("bridge-worker-running-output-ready");
+    let store = FsExecutionStore::new(root.clone());
+    let spec = single_candidate_spec();
+    ExecutionService::<RunningOutputReadyRuntime>::submit_execution(
+        &store,
+        "exec-bridge-running-output-ready",
+        &spec,
+    )
+    .expect("submit");
+
+    void_control::bridge::process_pending_executions_once_for_test(
+        GlobalConfig {
+            max_concurrent_child_runs: 2,
+        },
+        RunningOutputReadyRuntime::new(output(
+            "candidate-1",
+            &[("latency_p99_ms", 90.0), ("cost_usd", 0.03)],
+        )),
+        root.clone(),
+    )
+    .expect("first bridge tick");
+
+    let first = store
+        .load_execution("exec-bridge-running-output-ready")
+        .expect("reload");
+    assert_eq!(first.candidates[0].status, CandidateStatus::Completed);
+    assert_eq!(first.execution.status, ExecutionStatus::Completed);
+}
+
+#[test]
 fn bridge_worker_dispatches_multiple_candidates_up_to_execution_concurrency() {
     let root = temp_store_dir("bridge-worker-parallel");
     let store = FsExecutionStore::new(root.clone());
@@ -1384,8 +1415,20 @@ struct StepwiseRuntime {
     outputs: BTreeMap<String, CandidateOutput>,
 }
 
+struct RunningOutputReadyRuntime {
+    output: Option<CandidateOutput>,
+}
+
 struct TerminalFailedRuntime {
     output: Option<CandidateOutput>,
+}
+
+impl RunningOutputReadyRuntime {
+    fn new(output: CandidateOutput) -> Self {
+        Self {
+            output: Some(output),
+        }
+    }
 }
 
 impl TerminalFailedRuntime {
@@ -1518,5 +1561,58 @@ impl void_control::orchestration::service::ExecutionRuntime for TerminalFailedRu
             .take()
             .map(void_control::orchestration::service::StructuredOutputResult::Found)
             .unwrap_or(void_control::orchestration::service::StructuredOutputResult::Missing)
+    }
+}
+
+impl void_control::orchestration::service::ExecutionRuntime for RunningOutputReadyRuntime {
+    fn start_run(&mut self, request: StartRequest) -> Result<StartResult, ContractError> {
+        Ok(StartResult {
+            handle: format!("ready:{}", request.run_id),
+            attempt_id: 1,
+            state: RunState::Running,
+        })
+    }
+
+    fn inspect_run(&self, handle: &str) -> Result<RuntimeInspection, ContractError> {
+        let run_id = handle.strip_prefix("ready:").ok_or_else(|| {
+            ContractError::new(
+                ContractErrorCode::NotFound,
+                format!("unknown handle '{handle}'"),
+                false,
+            )
+        })?;
+        Ok(RuntimeInspection {
+            run_id: run_id.to_string(),
+            attempt_id: 1,
+            state: RunState::Running,
+            active_stage_count: 0,
+            active_microvm_count: 0,
+            started_at: "0Z".to_string(),
+            updated_at: "0Z".to_string(),
+            terminal_reason: None,
+            exit_code: None,
+        })
+    }
+
+    fn take_structured_output(
+        &mut self,
+        _run_id: &str,
+    ) -> void_control::orchestration::service::StructuredOutputResult {
+        self.output
+            .take()
+            .map(void_control::orchestration::service::StructuredOutputResult::Found)
+            .unwrap_or(void_control::orchestration::service::StructuredOutputResult::Missing)
+    }
+
+    fn inline_poll_budget(&self) -> usize {
+        1
+    }
+
+    fn persisted_run_handle(&self, persisted_run_id: &str) -> String {
+        if persisted_run_id.starts_with("ready:") {
+            persisted_run_id.to_string()
+        } else {
+            format!("ready:{persisted_run_id}")
+        }
     }
 }

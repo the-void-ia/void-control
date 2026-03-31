@@ -75,6 +75,12 @@ enum ExecutionControl {
     Canceled,
 }
 
+enum RunPollOutcome {
+    Terminal(RuntimeInspection),
+    InFlight(RuntimeInspection),
+    Canceled,
+}
+
 enum DispatchOutcome {
     Output {
         output: CandidateOutput,
@@ -282,7 +288,7 @@ where
         execution_id: &str,
         worker_id: &str,
         handle: &str,
-    ) -> io::Result<Option<crate::contract::RuntimeInspection>> {
+    ) -> io::Result<RunPollOutcome> {
         let max_polls = self.runtime.inline_poll_budget().max(1);
         let poll_sleep_ms = self.runtime.inline_poll_sleep_ms();
 
@@ -296,29 +302,23 @@ where
                         "execution paused",
                     ));
                 }
-                ExecutionControl::Canceled => return Ok(None),
+                ExecutionControl::Canceled => return Ok(RunPollOutcome::Canceled),
             }
             let inspection = self
                 .runtime
                 .inspect_run(handle)
                 .map_err(|err| io::Error::other(err.message.clone()))?;
             if inspection.state.is_terminal() {
-                return Ok(Some(inspection));
+                return Ok(RunPollOutcome::Terminal(inspection));
             }
             last = Some(inspection);
             if poll_idx + 1 < max_polls && poll_sleep_ms > 0 {
                 std::thread::sleep(std::time::Duration::from_millis(poll_sleep_ms));
             }
         }
-
-        let message = match last {
-            Some(inspection) => format!(
-                "run '{}' did not reach terminal state, last state was {:?}",
-                inspection.run_id, inspection.state
-            ),
-            None => "run did not reach terminal state".to_string(),
-        };
-        Err(io::Error::new(io::ErrorKind::WouldBlock, message))
+        last.map(RunPollOutcome::InFlight).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::WouldBlock, "run did not reach terminal state")
+        })
     }
 
     fn worker_id() -> String {
@@ -874,8 +874,8 @@ where
 
         let inspection =
             match self.wait_for_terminal_run(&execution.execution_id, worker_id, &started.handle) {
-                Ok(Some(inspection)) => inspection,
-                Ok(None) => {
+                Ok(RunPollOutcome::Terminal(inspection)) => inspection,
+                Ok(RunPollOutcome::Canceled) => {
                     self.save_candidate_state(CandidateStateUpdate {
                         execution_id: &execution.execution_id,
                         candidate_id: &candidate.candidate_id,
@@ -889,8 +889,17 @@ where
                     })?;
                     return Ok(DispatchOutcome::Canceled);
                 }
-                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
-                    return Ok(DispatchOutcome::InFlight);
+                Ok(RunPollOutcome::InFlight(inspection)) => {
+                    return self
+                        .try_finalize_candidate_from_ready_output(
+                            execution,
+                            spec,
+                            candidate,
+                            created_seq,
+                            &started.handle,
+                            inspection,
+                        )?
+                        .map_or(Ok(DispatchOutcome::InFlight), Ok);
                 }
                 Err(err) => return Err(err),
             };
@@ -924,8 +933,8 @@ where
         let handle = self.runtime.persisted_run_handle(persisted_run_id);
         let inspection =
             match self.wait_for_terminal_run(&execution.execution_id, worker_id, &handle) {
-                Ok(Some(inspection)) => inspection,
-                Ok(None) => {
+                Ok(RunPollOutcome::Terminal(inspection)) => inspection,
+                Ok(RunPollOutcome::Canceled) => {
                     self.save_candidate_state(CandidateStateUpdate {
                         execution_id: &execution.execution_id,
                         candidate_id: &candidate.candidate_id,
@@ -939,8 +948,20 @@ where
                     })?;
                     return Ok(DispatchOutcome::Canceled);
                 }
-                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
-                    return Ok(DispatchOutcome::InFlight);
+                Ok(RunPollOutcome::InFlight(inspection)) => {
+                    return self
+                        .try_finalize_candidate_from_ready_output(
+                            execution,
+                            spec,
+                            &CandidateSpec {
+                                candidate_id: candidate.candidate_id.clone(),
+                                overrides: candidate.overrides.clone(),
+                            },
+                            candidate.created_seq,
+                            &handle,
+                            inspection,
+                        )?
+                        .map_or(Ok(DispatchOutcome::InFlight), Ok);
                 }
                 Err(err) => return Err(err),
             };
@@ -957,6 +978,105 @@ where
             &handle,
             inspection,
         )
+    }
+
+    fn try_finalize_candidate_from_ready_output(
+        &mut self,
+        execution: &mut Execution,
+        spec: &ExecutionSpec,
+        candidate: &CandidateSpec,
+        created_seq: u64,
+        handle: &str,
+        inspection: RuntimeInspection,
+    ) -> io::Result<Option<DispatchOutcome>> {
+        if inspection.state.is_terminal() {
+            return self
+                .finalize_candidate_after_terminal_inspection(
+                    execution,
+                    spec,
+                    candidate,
+                    created_seq,
+                    handle,
+                    inspection,
+                )
+                .map(Some);
+        }
+        if inspection.active_stage_count > 0 || inspection.active_microvm_count > 0 {
+            return Ok(None);
+        }
+
+        match self.runtime.take_structured_output(&inspection.run_id) {
+            StructuredOutputResult::Found(mut output) => {
+                #[cfg(feature = "serde")]
+                let intents =
+                    self.collect_candidate_intents_best_effort(handle, &output.intents);
+                self.save_candidate_state(CandidateStateUpdate {
+                    execution_id: &execution.execution_id,
+                    candidate_id: &candidate.candidate_id,
+                    created_seq,
+                    iteration: execution.completed_iterations,
+                    status: CandidateStatus::Completed,
+                    runtime_run_id: Some(inspection.run_id.clone()),
+                    overrides: &candidate.overrides,
+                    succeeded: Some(output.succeeded),
+                    metrics: &output.metrics,
+                })?;
+                output.candidate_id = candidate.candidate_id.clone();
+                self.append_event(
+                    &execution.execution_id,
+                    ControlEventType::CandidateOutputCollected,
+                )?;
+                #[cfg(feature = "serde")]
+                self.persist_candidate_intents(
+                    &execution.execution_id,
+                    execution.completed_iterations,
+                    &candidate.candidate_id,
+                    &intents,
+                )?;
+                Ok(Some(DispatchOutcome::Output {
+                    output,
+                    failed: false,
+                }))
+            }
+            StructuredOutputResult::Missing => Ok(None),
+            StructuredOutputResult::Error(err) => match err.code {
+                crate::contract::ContractErrorCode::ArtifactPublicationIncomplete
+                | crate::contract::ContractErrorCode::ArtifactStoreUnavailable
+                | crate::contract::ContractErrorCode::RetrievalTimeout
+                    if err.retryable =>
+                {
+                    Ok(Some(DispatchOutcome::Retryable(io::Error::new(
+                        io::ErrorKind::WouldBlock,
+                        err.message,
+                    ))))
+                }
+                _ => {
+                    self.save_candidate_state(CandidateStateUpdate {
+                        execution_id: &execution.execution_id,
+                        candidate_id: &candidate.candidate_id,
+                        created_seq,
+                        iteration: execution.completed_iterations,
+                        status: CandidateStatus::Failed,
+                        runtime_run_id: Some(inspection.run_id.clone()),
+                        overrides: &candidate.overrides,
+                        succeeded: Some(false),
+                        metrics: &Default::default(),
+                    })?;
+                    self.append_event(
+                        &execution.execution_id,
+                        ControlEventType::CandidateOutputCollected,
+                    )?;
+                    Ok(Some(DispatchOutcome::Output {
+                        output: CandidateOutput::new(
+                            candidate.candidate_id.clone(),
+                            false,
+                            Default::default(),
+                        ),
+                        failed: true,
+                    }))
+                }
+            },
+        }
     }
 
     fn finalize_candidate_after_terminal_inspection(

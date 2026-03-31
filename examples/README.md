@@ -26,6 +26,49 @@ Boundary:
 - `void-box/rate_limit_optimizer_agent.yaml`
   - plain runtime template used by the search example
 
+## Transform Swarm Example
+
+`swarm-transform-optimization.yaml` now uses measured metrics from a local
+fixture replay, not prompt-invented values.
+
+Flow:
+
+```text
+examples/swarm-transform-optimization.yaml
+    ->
+void-control creates 8 sibling candidates
+    ->
+void-box launches 8 service-mode runs
+    ->
+each run mounts examples/void-box read-only
+    ->
+python3 /workspace/transform-example/transform_benchmark.py
+    ->
+benchmark processes the same transform_02 fixture corpus
+    ->
+benchmark writes /workspace/output.json
+    ->
+void-control collects latency_p99_ms, error_rate, cpu_pct
+    ->
+weighted scoring picks the best candidate
+```
+
+Baseline:
+
+- candidate 1 in `swarm-transform-optimization.yaml` is the baseline
+- it uses `TRANSFORM_STRATEGY=baseline`
+- every other candidate runs the same fixture corpus with different strategy
+  env overrides
+
+Metric source of truth:
+
+- `examples/void-box/transform_benchmark.py` computes the metrics
+- `latency_p99_ms` comes from measured per-record timings
+- `error_rate` comes from actual validation/transform failures on the fixtures
+- `cpu_pct` comes from measured process CPU time versus wall-clock time
+- the agent reads the measured result and may summarize it, but it must not
+  invent or overwrite the metrics
+
 ## Prerequisites
 
 Build the production `void-box` rootfs in the sibling repo:
@@ -45,6 +88,13 @@ export VOID_BOX_INITRAMFS=$PWD/target/void-box-rootfs.cpio.gz
 cargo run --bin voidbox -- serve --listen 127.0.0.1:43100
 ```
 
+The transform example also assumes the daemon is started from the sibling
+`void-box` repo root so this runtime template mount resolves correctly:
+
+```yaml
+../../void-control/examples/void-box -> /workspace/transform-example
+```
+
 Start the `void-control` bridge:
 
 ```bash
@@ -58,14 +108,18 @@ Swarm:
 
 ```bash
 cd /home/diego/github/void-control
-cargo run --features serde --bin voidctl -- execution create examples/swarm-transform-optimization.yaml
+curl -sS -X POST http://127.0.0.1:43210/v1/executions \
+  -H 'Content-Type: text/yaml' \
+  --data-binary @examples/swarm-transform-optimization.yaml
 ```
 
 Search:
 
 ```bash
 cd /home/diego/github/void-control
-cargo run --features serde --bin voidctl -- execution create examples/search-rate-limit-optimization.yaml
+curl -sS -X POST http://127.0.0.1:43210/v1/executions \
+  -H 'Content-Type: text/yaml' \
+  --data-binary @examples/search-rate-limit-optimization.yaml
 ```
 
 ## Launch From UI
@@ -83,8 +137,14 @@ npm run dev -- --host 127.0.0.1 --port 3000
 
 ## Notes
 
-- The runtime templates use `agent.output_file: /workspace/result.json` so
-  `void-control` can collect structured metrics directly.
+- The transform runtime template uses `agent.output_file: /workspace/output.json`
+  so `void-control` can collect structured metrics directly.
+- `examples/void-box/transform_optimizer_agent.yaml` uses
+  `sandbox.image: "python:3.12-slim"` because the production Claude rootfs does
+  not include `python3`.
+- The transform benchmark and fixtures are mounted into the guest read-only from
+  the host repo. Keep the canonical sibling repo layout unless you also update
+  the mount path in the template.
 - Candidate variation is applied by `void-control` by patching fields such as
   `agent.prompt` and `sandbox.env.*` before launch.
 - The strategy labels in env vars are only inputs for the prompt/runtime

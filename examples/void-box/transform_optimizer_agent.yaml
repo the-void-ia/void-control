@@ -7,6 +7,11 @@ sandbox:
   memory_mb: 3072
   vcpus: 2
   network: true
+  image: "python:3.12-slim"
+  mounts:
+    - host: "../../void-control/examples/void-box"
+      guest: "/workspace/transform-example"
+      mode: "ro"
   env:
     TRANSFORM_STAGE: Transform-02
     TRANSFORM_STRATEGY: baseline
@@ -41,19 +46,9 @@ agent:
     - reading peer inbox messages
     - sending short messages to peers or the leader
 
-    Before writing your final result:
-    1. Review the shared context for this execution.
-    2. Evaluate this candidate through the lens of `TRANSFORM_ROLE`.
-    3. Check whether peers have already reported useful observations from other
-       investigation roles.
-    4. Share one concise `broadcast` observation that could help sibling
-       candidates compare or refine their own findings.
-    5. Send one concise recommendation to the leader describing whether this
-       candidate should be promoted, refined, or rejected after considering
-       both your role-specific findings and any useful peer context.
-
-    Keep collaboration messages concise and operational. Use them to share
-    evidence, tradeoffs, or risks that another role would plausibly need.
+    The benchmark metrics must come from measured execution, not from your own
+    invented estimates. The benchmark code and fixtures are mounted read-only at
+    `/workspace/transform-example`.
 
     Read the candidate configuration from these environment variables only:
     - TRANSFORM_STRATEGY
@@ -65,23 +60,21 @@ agent:
     - TRANSFORM_CPU_BUDGET
     - TRANSFORM_ROLE
 
-    Write JSON to /workspace/output.json with exactly this schema:
-    {
-      "status": "success",
-      "summary": "short one-line assessment",
-      "metrics": {
-        "latency_p99_ms": 0,
-        "error_rate": 0,
-        "cpu_pct": 0
-      },
-      "artifacts": []
-    }
+    Do these steps exactly:
 
-    Requirements:
-    - latency_p99_ms must be a positive number.
-    - error_rate must be between 0 and 1.
-    - cpu_pct must be between 0 and 100.
-    - Lower values are better for all metrics.
-    - The metrics must reflect the provided strategy configuration.
-    - The summary must mention the assigned `TRANSFORM_ROLE`.
-    - Collaboration messages should be short and relevant to sibling decision-making.
+    1. Verify that `python3` exists.
+    2. Run `python3 /workspace/transform-example/transform_benchmark.py`.
+    3. Read `/workspace/output.json` and use the measured result as the source
+       of truth.
+    4. Review the shared context for this execution and check whether peers have
+       already reported useful observations.
+    5. Send one concise `broadcast` observation that references the measured
+       outcome or tradeoff of this candidate.
+    6. Send one concise recommendation to the leader describing whether this
+       candidate should be promoted, refined, or rejected after considering the
+       measured output and any useful peer context.
+    7. Do not overwrite `/workspace/output.json` after the benchmark has written
+       it.
+
+    Keep collaboration messages concise and operational. Use them to share
+    evidence, tradeoffs, or risks that another role would plausibly need.
