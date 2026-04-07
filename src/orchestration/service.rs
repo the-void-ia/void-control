@@ -1040,6 +1040,9 @@ where
             }
             StructuredOutputResult::Missing => Ok(None),
             StructuredOutputResult::Error(err) => match err.code {
+                crate::contract::ContractErrorCode::StructuredOutputMissing
+                | crate::contract::ContractErrorCode::ArtifactNotFound
+                | crate::contract::ContractErrorCode::NotFound => Ok(None),
                 crate::contract::ContractErrorCode::ArtifactPublicationIncomplete
                 | crate::contract::ContractErrorCode::ArtifactStoreUnavailable
                 | crate::contract::ContractErrorCode::RetrievalTimeout

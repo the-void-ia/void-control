@@ -332,6 +332,12 @@ fn get_execution_route_reports_current_candidate_status_counts() {
     assert_eq!(fetched.json["progress"]["completed_candidate_count"], 0);
     assert_eq!(fetched.json["progress"]["failed_candidate_count"], 0);
     assert_eq!(fetched.json["progress"]["canceled_candidate_count"], 0);
+    let candidates = fetched.json["candidates"].as_array().expect("candidates array");
+    assert_eq!(candidates.len(), 2);
+    assert_eq!(candidates[0]["candidate_id"], "candidate-1");
+    assert_eq!(candidates[0]["iteration"], 0);
+    assert_eq!(candidates[0]["status"], "Queued");
+    assert!(candidates[0]["metrics"].is_object());
 }
 
 #[test]

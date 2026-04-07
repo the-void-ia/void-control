@@ -31,6 +31,7 @@ Click the preview above for the full-quality MP4, or use the direct file link: [
 - Architecture: [docs/architecture.md](docs/architecture.md)
 - Contributor and agent guide: [AGENTS.md](AGENTS.md)
 - Release and compatibility process: [docs/release-process.md](docs/release-process.md)
+- Execution examples and live swarm workflow: [examples/README.md](examples/README.md)
 
 ## Project Components
 
@@ -85,6 +86,19 @@ VITE_VOID_BOX_BASE_URL=http://127.0.0.1:43100 \
 VITE_VOID_CONTROL_BASE_URL=http://127.0.0.1:43210 \
 npm run dev
 ```
+
+### 6) Run the canonical live swarm test
+
+Use the three-candidate swarm as the default validation path:
+
+```bash
+curl -sS -X POST http://127.0.0.1:43210/v1/executions \
+  -H 'Content-Type: text/yaml' \
+  --data-binary @examples/swarm-transform-optimization-3way.yaml
+```
+
+`examples/swarm-transform-optimization.yaml` remains available as the wider
+eight-candidate stress case, but it is less reliable for routine validation.
 
 ## Development
 

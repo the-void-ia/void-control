@@ -150,6 +150,75 @@ fn bridge_worker_collects_output_from_running_service_candidate() {
 }
 
 #[test]
+fn bridge_worker_keeps_running_service_candidate_when_output_not_ready_yet() {
+    let root = temp_store_dir("bridge-worker-running-output-missing");
+    let store = FsExecutionStore::new(root.clone());
+    let spec = single_candidate_spec();
+    ExecutionService::<RunningOutputMissingRuntime>::submit_execution(
+        &store,
+        "exec-bridge-running-output-missing",
+        &spec,
+    )
+    .expect("submit");
+
+    void_control::bridge::process_pending_executions_once_for_test(
+        GlobalConfig {
+            max_concurrent_child_runs: 2,
+        },
+        RunningOutputMissingRuntime,
+        root,
+    )
+    .expect("bridge tick");
+
+    let snapshot = store
+        .load_execution("exec-bridge-running-output-missing")
+        .expect("reload");
+    assert_eq!(snapshot.execution.status, ExecutionStatus::Running);
+    assert_eq!(snapshot.candidates.len(), 1);
+    assert_eq!(snapshot.candidates[0].status, CandidateStatus::Running);
+    assert_eq!(
+        snapshot
+            .events
+            .iter()
+            .filter(|event| {
+                event.event_type
+                    == void_control::orchestration::ControlEventType::CandidateOutputCollected
+            })
+            .count(),
+        0
+    );
+}
+
+#[test]
+fn bridge_worker_keeps_running_service_candidate_when_output_path_is_not_found_yet() {
+    let root = temp_store_dir("bridge-worker-running-output-not-found");
+    let store = FsExecutionStore::new(root.clone());
+    let spec = single_candidate_spec();
+    ExecutionService::<RunningOutputNotFoundRuntime>::submit_execution(
+        &store,
+        "exec-bridge-running-output-not-found",
+        &spec,
+    )
+    .expect("submit");
+
+    void_control::bridge::process_pending_executions_once_for_test(
+        GlobalConfig {
+            max_concurrent_child_runs: 2,
+        },
+        RunningOutputNotFoundRuntime,
+        root,
+    )
+    .expect("bridge tick");
+
+    let snapshot = store
+        .load_execution("exec-bridge-running-output-not-found")
+        .expect("reload");
+    assert_eq!(snapshot.execution.status, ExecutionStatus::Running);
+    assert_eq!(snapshot.candidates.len(), 1);
+    assert_eq!(snapshot.candidates[0].status, CandidateStatus::Running);
+}
+
+#[test]
 fn bridge_worker_dispatches_multiple_candidates_up_to_execution_concurrency() {
     let root = temp_store_dir("bridge-worker-parallel");
     let store = FsExecutionStore::new(root.clone());
@@ -1419,6 +1488,10 @@ struct RunningOutputReadyRuntime {
     output: Option<CandidateOutput>,
 }
 
+struct RunningOutputMissingRuntime;
+
+struct RunningOutputNotFoundRuntime;
+
 struct TerminalFailedRuntime {
     output: Option<CandidateOutput>,
 }
@@ -1613,6 +1686,114 @@ impl void_control::orchestration::service::ExecutionRuntime for RunningOutputRea
             persisted_run_id.to_string()
         } else {
             format!("ready:{persisted_run_id}")
+        }
+    }
+}
+
+impl void_control::orchestration::service::ExecutionRuntime for RunningOutputMissingRuntime {
+    fn start_run(&mut self, request: StartRequest) -> Result<StartResult, ContractError> {
+        Ok(StartResult {
+            handle: format!("missing:{}", request.run_id),
+            attempt_id: 1,
+            state: RunState::Running,
+        })
+    }
+
+    fn inspect_run(&self, handle: &str) -> Result<RuntimeInspection, ContractError> {
+        let run_id = handle.strip_prefix("missing:").ok_or_else(|| {
+            ContractError::new(
+                ContractErrorCode::NotFound,
+                format!("unknown handle '{handle}'"),
+                false,
+            )
+        })?;
+        Ok(RuntimeInspection {
+            run_id: run_id.to_string(),
+            attempt_id: 1,
+            state: RunState::Running,
+            active_stage_count: 0,
+            active_microvm_count: 0,
+            started_at: "0Z".to_string(),
+            updated_at: "0Z".to_string(),
+            terminal_reason: None,
+            exit_code: None,
+        })
+    }
+
+    fn take_structured_output(
+        &mut self,
+        _run_id: &str,
+    ) -> void_control::orchestration::service::StructuredOutputResult {
+        void_control::orchestration::service::StructuredOutputResult::Error(ContractError::new(
+            ContractErrorCode::StructuredOutputMissing,
+            "output not ready yet",
+            false,
+        ))
+    }
+
+    fn inline_poll_budget(&self) -> usize {
+        1
+    }
+
+    fn persisted_run_handle(&self, persisted_run_id: &str) -> String {
+        if persisted_run_id.starts_with("missing:") {
+            persisted_run_id.to_string()
+        } else {
+            format!("missing:{persisted_run_id}")
+        }
+    }
+}
+
+impl void_control::orchestration::service::ExecutionRuntime for RunningOutputNotFoundRuntime {
+    fn start_run(&mut self, request: StartRequest) -> Result<StartResult, ContractError> {
+        Ok(StartResult {
+            handle: format!("notfound:{}", request.run_id),
+            attempt_id: 1,
+            state: RunState::Running,
+        })
+    }
+
+    fn inspect_run(&self, handle: &str) -> Result<RuntimeInspection, ContractError> {
+        let run_id = handle.strip_prefix("notfound:").ok_or_else(|| {
+            ContractError::new(
+                ContractErrorCode::NotFound,
+                format!("unknown handle '{handle}'"),
+                false,
+            )
+        })?;
+        Ok(RuntimeInspection {
+            run_id: run_id.to_string(),
+            attempt_id: 1,
+            state: RunState::Running,
+            active_stage_count: 0,
+            active_microvm_count: 0,
+            started_at: "0Z".to_string(),
+            updated_at: "0Z".to_string(),
+            terminal_reason: None,
+            exit_code: None,
+        })
+    }
+
+    fn take_structured_output(
+        &mut self,
+        _run_id: &str,
+    ) -> void_control::orchestration::service::StructuredOutputResult {
+        void_control::orchestration::service::StructuredOutputResult::Error(ContractError::new(
+            ContractErrorCode::NotFound,
+            "output path not published yet",
+            false,
+        ))
+    }
+
+    fn inline_poll_budget(&self) -> usize {
+        1
+    }
+
+    fn persisted_run_handle(&self, persisted_run_id: &str) -> String {
+        if persisted_run_id.starts_with("notfound:") {
+            persisted_run_id.to_string()
+        } else {
+            format!("notfound:{persisted_run_id}")
         }
     }
 }

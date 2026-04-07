@@ -50,6 +50,7 @@ struct ExecutionDetailResponse {
     execution: crate::orchestration::Execution,
     progress: ExecutionProgressResponse,
     result: ExecutionResultResponse,
+    candidates: Vec<crate::orchestration::ExecutionCandidate>,
 }
 
 #[cfg(feature = "serde")]
@@ -605,6 +606,7 @@ fn handle_execution_get(path: &str, config: &BridgeConfig) -> JsonHttpResponse {
                     execution: snapshot.execution,
                     progress,
                     result,
+                    candidates: snapshot.candidates,
                 },
             )
         }

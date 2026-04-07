@@ -122,8 +122,13 @@ Submit the swarm execution from a third terminal:
 cd /home/diego/github/void-control
 curl -sS -X POST http://127.0.0.1:43210/v1/executions \
   -H 'Content-Type: text/yaml' \
-  --data-binary @examples/swarm-transform-optimization.yaml
+  --data-binary @examples/swarm-transform-optimization-3way.yaml
 ```
+
+Use `examples/swarm-transform-optimization-3way.yaml` as the default live
+validation path. It is the more reliable three-candidate version of the
+Transform-02 swarm example. Keep `examples/swarm-transform-optimization.yaml`
+as the wider eight-candidate stress case.
 
 Monitor progress from the bridge:
 
@@ -148,6 +153,10 @@ curl -sS http://127.0.0.1:43100/v1/health
 Execution examples:
 
 ```bash
+curl -sS -X POST http://127.0.0.1:43210/v1/executions \
+  -H 'Content-Type: text/yaml' \
+  --data-binary @examples/swarm-transform-optimization-3way.yaml
+
 curl -sS -X POST http://127.0.0.1:43210/v1/executions \
   -H 'Content-Type: text/yaml' \
   --data-binary @examples/swarm-transform-optimization.yaml

@@ -14,8 +14,12 @@ Boundary:
 
 ## Files
 
+- `swarm-transform-optimization-3way.yaml`
+  - canonical Transform-02 swarm test
+  - launches 3 sibling candidates in parallel
+  - most reliable live validation path today
 - `swarm-transform-optimization.yaml`
-  - wide swarm example for `Transform-02`
+  - wide Transform-02 swarm stress example
   - launches 8 sibling candidates in parallel
   - scores `latency_p99_ms`, `error_rate`, and `cpu_pct`
 - `search-rate-limit-optimization.yaml`
@@ -26,19 +30,25 @@ Boundary:
 - `void-box/rate_limit_optimizer_agent.yaml`
   - plain runtime template used by the search example
 
-## Transform Swarm Example
+## Transform Swarm Examples
 
-`swarm-transform-optimization.yaml` now uses measured metrics from a local
-fixture replay, not prompt-invented values.
+Both Transform-02 swarm examples use measured metrics from a local fixture
+replay, not prompt-invented values.
+
+Recommended test path:
+
+- use `swarm-transform-optimization-3way.yaml` for routine live validation
+- use `swarm-transform-optimization.yaml` only when you explicitly want the
+  wider 8-candidate stress case
 
 Flow:
 
 ```text
-examples/swarm-transform-optimization.yaml
+examples/swarm-transform-optimization-3way.yaml
     ->
-void-control creates 8 sibling candidates
+void-control creates sibling candidates
     ->
-void-box launches 8 service-mode runs
+void-box launches service-mode runs
     ->
 each run mounts examples/void-box read-only
     ->
@@ -55,7 +65,7 @@ weighted scoring picks the best candidate
 
 Baseline:
 
-- candidate 1 in `swarm-transform-optimization.yaml` is the baseline
+- candidate 1 in both Transform-02 swarm specs is the baseline
 - it uses `TRANSFORM_STRATEGY=baseline`
 - every other candidate runs the same fixture corpus with different strategy
   env overrides
@@ -110,6 +120,15 @@ Swarm:
 cd /home/diego/github/void-control
 curl -sS -X POST http://127.0.0.1:43210/v1/executions \
   -H 'Content-Type: text/yaml' \
+  --data-binary @examples/swarm-transform-optimization-3way.yaml
+```
+
+Stress swarm:
+
+```bash
+cd /home/diego/github/void-control
+curl -sS -X POST http://127.0.0.1:43210/v1/executions \
+  -H 'Content-Type: text/yaml' \
   --data-binary @examples/swarm-transform-optimization.yaml
 ```
 
@@ -149,3 +168,6 @@ npm run dev -- --host 127.0.0.1 --port 3000
   `agent.prompt` and `sandbox.env.*` before launch.
 - The strategy labels in env vars are only inputs for the prompt/runtime
   template. `void-box` does not interpret them semantically.
+- The 3-agent swarm is the preferred test target because it currently completes
+  more reliably than the 8-agent stress variant while exercising the same
+  control-plane and service-mode primitives.

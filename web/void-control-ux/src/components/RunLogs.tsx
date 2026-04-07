@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
-import type { RunEvent } from '../lib/types';
+import type { ExecutionEvent, RunEvent } from '../lib/types';
 
 interface RunLogsProps {
-  events: RunEvent[];
+  events: Array<RunEvent | ExecutionEvent>;
   selectedEventRef?: string | null;
-  onSelectEvent?: (event: RunEvent) => void;
+  onSelectEvent?: (event: RunEvent | ExecutionEvent) => void;
 }
 
 function formatTime(ts?: string): string {
@@ -13,6 +13,25 @@ function formatTime(ts?: string): string {
   const d = new Date(ts);
   if (Number.isNaN(d.getTime())) return '--:--:--';
   return d.toLocaleTimeString();
+}
+
+function isRuntimeEvent(event: RunEvent | ExecutionEvent): event is RunEvent {
+  return 'run_id' in event;
+}
+
+function eventRef(event: RunEvent | ExecutionEvent): string {
+  if (isRuntimeEvent(event)) return event.event_id || `${event.seq}`;
+  return `${event.seq}`;
+}
+
+function eventTypeLabel(event: RunEvent | ExecutionEvent): string {
+  if (isRuntimeEvent(event)) return event.event_type_v2 ?? event.event_type;
+  return event.event_type;
+}
+
+function eventMessage(event: RunEvent | ExecutionEvent): string {
+  if (isRuntimeEvent(event)) return event.message ?? '';
+  return event.message ?? event.event_type.replace(/([a-z0-9])([A-Z])/g, '$1 $2');
 }
 
 export function RunLogs({ events, selectedEventRef = null, onSelectEvent }: RunLogsProps) {
@@ -57,17 +76,18 @@ export function RunLogs({ events, selectedEventRef = null, onSelectEvent }: RunL
       <div className="run-logs-track" />
       <div className="run-logs-table">
         {rows.map((event, idx) => {
-          const type = event.event_type_v2 ?? event.event_type;
-          const isError = event.level === 'error' || /failed|error/i.test(type);
+          const type = eventTypeLabel(event);
+          const isError = ('level' in event && event.level === 'error') || /failed|error/i.test(type);
+          const ref = eventRef(event);
           return (
             <button
-              className={`run-log-row ${(selectedEventRef && (event.event_id === selectedEventRef || `${event.seq}` === selectedEventRef)) ? 'run-log-row-selected' : ''}`}
-              key={`${event.event_id || event.seq}-${idx}`}
+              className={`run-log-row ${(selectedEventRef && ref === selectedEventRef) ? 'run-log-row-selected' : ''}`}
+              key={`${ref}-${idx}`}
               onClick={() => onSelectEvent?.(event)}
             >
-              <span className="run-log-time">{formatTime(event.timestamp)}</span>
+              <span className="run-log-time">{isRuntimeEvent(event) ? formatTime(event.timestamp) : `#${event.seq}`}</span>
               <span className={`run-log-type ${isError ? 'run-log-type-error' : ''}`}>{type}</span>
-              <span className="run-log-msg">{event.message ?? ''}</span>
+              <span className="run-log-msg">{eventMessage(event)}</span>
             </button>
           );
         })}

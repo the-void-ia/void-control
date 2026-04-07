@@ -1,0 +1,47 @@
+mode: swarm
+goal: >
+  Debug the production Transform-02 swarm with only three sibling strategies
+  in parallel so service-mode startup issues are easier to isolate while still
+  comparing distinct optimization approaches.
+workflow:
+  template: examples/void-box/transform_optimizer_agent.yaml
+policy:
+  budget:
+    max_iterations: 3
+    max_child_runs: 9
+    max_wall_clock_secs: 1800
+  concurrency:
+    max_concurrent_candidates: 3
+  convergence:
+    strategy: threshold
+    min_score: 0.82
+    max_iterations_without_improvement: 1
+  max_candidate_failures_per_iteration: 3
+  missing_output_policy: mark_failed
+  iteration_failure_policy: continue
+evaluation:
+  scoring_type: weighted_metrics
+  weights:
+    latency_p99_ms: -0.50
+    error_rate: -0.35
+    cpu_pct: -0.15
+  pass_threshold: 0.82
+  ranking: highest_score
+  tie_breaking: latency_p99_ms
+variation:
+  source: signal_reactive
+  candidates_per_iteration: 3
+  explicit:
+    - overrides:
+        sandbox.env.TRANSFORM_STRATEGY: baseline
+        sandbox.env.TRANSFORM_PARALLELISM: "2"
+        sandbox.env.TRANSFORM_ROLE: latency-baseline
+    - overrides:
+        sandbox.env.TRANSFORM_STRATEGY: cache-aware
+        sandbox.env.TRANSFORM_CACHE_MODE: hot-path
+        sandbox.env.TRANSFORM_ROLE: cache-locality
+    - overrides:
+        sandbox.env.TRANSFORM_STRATEGY: high-throughput
+        sandbox.env.TRANSFORM_PARALLELISM: "8"
+        sandbox.env.TRANSFORM_ROLE: max-throughput
+swarm: true

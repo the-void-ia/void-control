@@ -5,7 +5,11 @@ import { RunGraph } from './components/RunGraph';
 import { NodeInspector } from './components/NodeInspector';
 import { RunLogs } from './components/RunLogs';
 import { LaunchRunModal } from './components/LaunchRunModal';
-import { baseUrl, cancelRun, getRun, getRunEvents, getRunStages, getRunTelemetrySamples, getRuns, launchRunFromSpecText, startRun } from './lib/api';
+import { SwarmOverview } from './components/SwarmOverview';
+import { SwarmGraph } from './components/SwarmGraph';
+import { SwarmInspector } from './components/SwarmInspector';
+import { baseUrl, cancelRun, getExecution, getExecutionEvents, getExecutions, getRun, getRunEvents, getRunStages, getRunTelemetrySamples, getRuns, getRuntimeHealth, launchRunFromSpecText, startRun } from './lib/api';
+import { deriveCandidateCards, deriveIterationSummaries, deriveSwarmExecutionSummary } from './lib/orchestration';
 import { useUiStore } from './store/ui';
 import { defaultStageSelection, eventNodeId, filterEventsForStage, parseNodeId, resolveSelectedStage, runNodeId } from './lib/selectors';
 import type { StageView } from './lib/types';
@@ -35,6 +39,9 @@ export function App() {
   const [isLaunchOpen, setIsLaunchOpen] = useState(false);
   const [launchError, setLaunchError] = useState<string | null>(null);
   const [launchPending, setLaunchPending] = useState(false);
+  const [selectedExecutionId, setSelectedExecutionId] = useState<string | null>(null);
+  const [selectedSwarmIteration, setSelectedSwarmIteration] = useState<number>(0);
+  const [selectedSwarmCandidateId, setSelectedSwarmCandidateId] = useState<string | null>(null);
   const selectedRunId = useUiStore((s) => s.selectedRunId);
   const selectedNodeId = useUiStore((s) => s.selectedNodeId);
   const selectedNodeType = useUiStore((s) => s.selectedNodeType);
@@ -46,16 +53,30 @@ export function App() {
   const setLastSeen = useUiStore((s) => s.setLastSeenEvent);
   const prevRunRef = useRef<string | null>(null);
 
+  const runtimeHealth = useQuery({
+    queryKey: ['runtime-health'],
+    queryFn: () => getRuntimeHealth(),
+    refetchInterval: 5000
+  });
+
   const activeRuns = useQuery({
     queryKey: ['runs', 'active'],
     queryFn: () => getRuns('active'),
-    refetchInterval: 2500
+    refetchInterval: 2500,
+    enabled: runtimeHealth.data === true
   });
 
   const terminalRuns = useQuery({
     queryKey: ['runs', 'terminal'],
     queryFn: () => getRuns('terminal'),
-    refetchInterval: 5000
+    refetchInterval: 5000,
+    enabled: runtimeHealth.data === true
+  });
+
+  const executions = useQuery({
+    queryKey: ['executions'],
+    queryFn: () => getExecutions(),
+    refetchInterval: 2500
   });
 
   const runDetail = useQuery({
@@ -63,6 +84,20 @@ export function App() {
     queryFn: () => getRun(selectedRunId as string),
     enabled: !!selectedRunId,
     refetchInterval: 2000
+  });
+
+  const executionDetail = useQuery({
+    queryKey: ['execution', selectedExecutionId],
+    queryFn: () => getExecution(selectedExecutionId as string),
+    enabled: !!selectedExecutionId,
+    refetchInterval: 2000
+  });
+
+  const executionEvents = useQuery({
+    queryKey: ['execution-events', selectedExecutionId],
+    queryFn: () => getExecutionEvents(selectedExecutionId as string),
+    enabled: !!selectedExecutionId,
+    refetchInterval: 1500
   });
 
   const events = useQuery({
@@ -135,18 +170,30 @@ export function App() {
   );
 
   const resolvedRunId = useMemo(() => {
+    if (selectedExecutionId) return null;
     if (selectedRunId) return selectedRunId;
     const firstActive = visibleActiveRuns[0];
     const firstTerminal = visibleTerminalRuns[0];
     return (firstActive?.id ?? firstActive?.run_id ?? firstTerminal?.id ?? firstTerminal?.run_id ?? null) as string | null;
-  }, [selectedRunId, visibleActiveRuns, visibleTerminalRuns]);
+  }, [selectedExecutionId, selectedRunId, visibleActiveRuns, visibleTerminalRuns]);
+
+  const resolvedExecutionId = useMemo(() => {
+    if (selectedExecutionId) return selectedExecutionId;
+    if (selectedRunId) return null;
+    return executions.data?.[0]?.execution_id ?? null;
+  }, [executions.data, selectedExecutionId, selectedRunId]);
 
   const eventList = events.data ?? [];
-  const listError = (activeRuns.error as Error | null)?.message ?? (terminalRuns.error as Error | null)?.message;
-  const detailError = (runDetail.error as Error | null)?.message
+  const executionError =
+    (executions.error as Error | null)?.message
+    ?? (executionDetail.error as Error | null)?.message
+    ?? (executionEvents.error as Error | null)?.message;
+  const runtimeDetailError =
+    (runDetail.error as Error | null)?.message
     ?? (events.error as Error | null)?.message
     ?? (stages.error as Error | null)?.message
     ?? (telemetry.error as Error | null)?.message;
+  const detailError = resolvedExecutionId ? executionError : runtimeDetailError;
 
   const normalizedStages = useMemo(
     () => normalizeStageStatuses(stages.data ?? [], (runDetail.data?.status ?? runDetail.data?.state)?.toString()),
@@ -165,11 +212,61 @@ export function App() {
     return eventList;
   }, [parsedSelected?.type, selectedStage, eventList]);
 
+  const swarmSummary = useMemo(
+    () => (executionDetail.data ? deriveSwarmExecutionSummary(executionDetail.data) : null),
+    [executionDetail.data]
+  );
+  const swarmIterations = useMemo(
+    () => (executionDetail.data ? deriveIterationSummaries(executionDetail.data) : []),
+    [executionDetail.data]
+  );
+  const selectedIterationIndex = useMemo(() => {
+    if (swarmIterations.length === 0) return 0;
+    if (swarmIterations.some((iteration) => iteration.iterationIndex === selectedSwarmIteration)) {
+      return selectedSwarmIteration;
+    }
+    return swarmIterations[swarmIterations.length - 1]?.iterationIndex ?? 0;
+  }, [swarmIterations, selectedSwarmIteration]);
+  const swarmCandidates = useMemo(
+    () => (executionDetail.data ? deriveCandidateCards(executionDetail.data, selectedIterationIndex) : []),
+    [executionDetail.data, selectedIterationIndex]
+  );
+  const selectedSwarmCandidate = useMemo(
+    () => swarmCandidates.find((candidate) => candidate.candidateId === selectedSwarmCandidateId) ?? swarmCandidates[0] ?? null,
+    [swarmCandidates, selectedSwarmCandidateId]
+  );
+
   useEffect(() => {
-    if (!selectedRunId && resolvedRunId) {
+    if (!selectedExecutionId && !selectedRunId && resolvedExecutionId) {
+      setSelectedExecutionId(resolvedExecutionId);
+      return;
+    }
+    if (!selectedExecutionId && !selectedRunId && resolvedRunId) {
       setSelectedRunId(resolvedRunId);
     }
-  }, [selectedRunId, resolvedRunId, setSelectedRunId]);
+  }, [selectedExecutionId, selectedRunId, resolvedExecutionId, resolvedRunId, setSelectedRunId]);
+
+  useEffect(() => {
+    if (!resolvedExecutionId) return;
+    setSelectedSwarmIteration((current) => {
+      if (swarmIterations.some((iteration) => iteration.iterationIndex === current)) return current;
+      return swarmIterations[swarmIterations.length - 1]?.iterationIndex ?? 0;
+    });
+  }, [resolvedExecutionId, swarmIterations]);
+
+  useEffect(() => {
+    if (!selectedSwarmCandidate && swarmCandidates.length > 0) {
+      setSelectedSwarmCandidateId(swarmCandidates[0].candidateId);
+      return;
+    }
+    if (
+      selectedSwarmCandidateId &&
+      swarmCandidates.length > 0 &&
+      !swarmCandidates.some((candidate) => candidate.candidateId === selectedSwarmCandidateId)
+    ) {
+      setSelectedSwarmCandidateId(swarmCandidates[0].candidateId);
+    }
+  }, [selectedSwarmCandidate, selectedSwarmCandidateId, swarmCandidates]);
 
   useEffect(() => {
     if (resolvedRunId && eventList.length > 0) {
@@ -189,18 +286,27 @@ export function App() {
     const runChanged = prevRunRef.current !== resolvedRunId;
     const nodeMatchesRun = parsed?.runId === resolvedRunId;
     const stageList = normalizedStages;
+    const runState = (runDetail.data?.status ?? runDetail.data?.state ?? '').toString().toLowerCase();
+    const failedTerminalEvent = runState === 'failed'
+      ? [...eventList].reverse().find((event) =>
+          event.level === 'error'
+          || (event.event_type_v2 ?? event.event_type).toLowerCase().includes('failed')
+        ) ?? null
+      : null;
     const promoteRunRoot = parsed?.type === 'run' && stageList.length > 0;
     const needsDefault = runChanged || !selectedNodeId || !nodeMatchesRun || promoteRunRoot;
 
     if (needsDefault) {
       const latestEvent = eventList.length > 0 ? eventList[eventList.length - 1] : null;
       setSelectedNode(
-        stageList.length > 0
+        failedTerminalEvent
+          ? eventNodeId(resolvedRunId, failedTerminalEvent.event_id || `${failedTerminalEvent.seq}`)
+          : stageList.length > 0
           ? defaultStageSelection(resolvedRunId, stageList)
           : latestEvent
             ? eventNodeId(resolvedRunId, latestEvent.event_id || `${latestEvent.seq}-latest`)
             : runNodeId(resolvedRunId),
-        stageList.length > 0 ? 'stage' : (latestEvent ? 'event' : 'run')
+        failedTerminalEvent ? 'event' : stageList.length > 0 ? 'stage' : (latestEvent ? 'event' : 'run')
       );
     }
     prevRunRef.current = resolvedRunId;
@@ -208,6 +314,8 @@ export function App() {
     resolvedRunId,
     selectedNodeId,
     isSelectionPinned,
+    runDetail.data?.status,
+    runDetail.data?.state,
     stages.data,
     normalizedStages,
     eventList,
@@ -244,7 +352,7 @@ export function App() {
       }
       const createdRunId = result.run_id ?? ('runId' in result ? result.runId : undefined) ?? params.runId;
       await Promise.all([activeRuns.refetch(), terminalRuns.refetch()]);
-      if (createdRunId) {
+            if (createdRunId) {
         setSelectedRunId(createdRunId);
       }
       setIsLaunchOpen(false);
@@ -256,8 +364,9 @@ export function App() {
     }
   };
 
-  const onSelectEvent = (event: { event_id: string; seq: number }) => {
+  const onSelectEvent = (event: { event_id?: string; seq: number; run_id?: string }) => {
     if (!resolvedRunId) return;
+    if (!('run_id' in event)) return;
     const ref = (event.event_id ?? '').trim();
     setSelectedNode(eventNodeId(resolvedRunId, ref.length > 0 ? ref : `${event.seq}`), 'event');
   };
@@ -307,10 +416,21 @@ export function App() {
 
       <main className="layout">
         <RunsList
+          executions={executions.data ?? []}
           activeRuns={visibleActiveRuns}
           terminalRuns={visibleTerminalRuns}
-          selectedRunId={resolvedRunId}
-          onSelect={setSelectedRunId}
+          runtimeUnavailable={runtimeHealth.data === false}
+          selectedId={resolvedExecutionId ?? resolvedRunId}
+          selectedKind={resolvedExecutionId ? 'execution' : resolvedRunId ? 'run' : null}
+          onSelectExecution={(executionId) => {
+            setSelectedExecutionId(executionId);
+            setSelectedRunId(null);
+            clearSelectedNode();
+          }}
+          onSelectRun={(runId) => {
+            setSelectedExecutionId(null);
+            setSelectedRunId(runId);
+          }}
           onLaunch={() => {
             setLaunchError(null);
             setIsLaunchOpen(true);
@@ -322,20 +442,24 @@ export function App() {
         />
 
         <section className="detail-panel">
-          {(listError || detailError) && (
+          {detailError && (
             <div className="error-banner">
-              <strong>Connection error:</strong> {listError ?? detailError}
+              <strong>Connection error:</strong> {detailError}
             </div>
           )}
           <div className="toolbar">
             <div>
-              <strong>Run:</strong> {resolvedRunId ?? '-'}
-              <span className="state-pill">{(runDetail.data?.status ?? runDetail.data?.state ?? 'unknown').toString()}</span>
+              <strong>{resolvedExecutionId ? 'Execution' : 'Run'}:</strong> {resolvedExecutionId ?? resolvedRunId ?? '-'}
+              <span className="state-pill">
+                {resolvedExecutionId
+                  ? (executionDetail.data?.execution.status ?? 'unknown').toString()
+                  : (runDetail.data?.status ?? runDetail.data?.state ?? 'unknown').toString()}
+              </span>
             </div>
             <div className="ops-actions">
               <button
                 className="danger"
-                disabled={!resolvedRunId || cancelMutation.isPending}
+                disabled={!resolvedRunId || cancelMutation.isPending || !!resolvedExecutionId}
                 onClick={() => cancelMutation.mutate()}
               >
                 Cancel Run
@@ -343,34 +467,73 @@ export function App() {
             </div>
           </div>
 
-          {!resolvedRunId ? (
+          {!resolvedRunId && !resolvedExecutionId ? (
             <div className="empty">No runs yet. Start one from terminal and refresh.</div>
+          ) : resolvedExecutionId ? (
+            <div className="detail-grid swarm-detail-grid">
+              {swarmSummary ? (
+                <>
+                  <div className="center-panel">
+                    <SwarmGraph
+                      summary={swarmSummary}
+                      iterations={swarmIterations}
+                      candidates={swarmCandidates}
+                      selectedCandidateId={selectedSwarmCandidate?.candidateId ?? null}
+                      onSelectCandidate={setSelectedSwarmCandidateId}
+                    />
+                    <RunLogs
+                      events={executionEvents.data ?? []}
+                      selectedEventRef={null}
+                    />
+                  </div>
+                  <SwarmInspector
+                    summary={swarmSummary}
+                    iteration={swarmIterations.find((iteration) => iteration.iterationIndex === selectedIterationIndex) ?? null}
+                    candidate={selectedSwarmCandidate}
+                    events={executionEvents.data ?? []}
+                    onOpenRuntime={(runtimeRunId) => {
+                      setSelectedExecutionId(null);
+                      setSelectedRunId(runtimeRunId);
+                    }}
+                  />
+                </>
+              ) : (
+                <div className="empty">Loading execution graph.</div>
+              )}
+            </div>
           ) : (
             <div className="detail-grid">
               <div className="center-panel">
                 {(eventList.length === 0 && (stages.data ?? []).length === 0) ? (
-                  <div className="graph-box graph-empty">
-                    <div className="panel-title">Execution Graph</div>
-                    <div className="empty">No stages/events found for this run yet.</div>
+                  <div className="graph-box graph-empty runtime-empty-state">
+                    <div className="panel-title">Runtime Pending</div>
+                    <div className="runtime-empty-copy">
+                      No stages or events are available for this run yet.
+                    </div>
+                    <div className="empty">
+                      The runtime graph and event log will appear after the daemon reports stage or event data.
+                    </div>
                   </div>
                 ) : (
-                  <RunGraph
-                    runId={resolvedRunId}
-                    events={scopedEvents}
-                    stages={normalizedStages}
-                    selectedNodeId={selectedNodeId}
-                    onSelectNode={setSelectedNode}
-                  />
+                  <>
+                    <RunGraph
+                      runId={resolvedRunId as string}
+                      events={scopedEvents}
+                      stages={normalizedStages}
+                      selectedNodeId={selectedNodeId}
+                      onSelectNode={setSelectedNode}
+                    />
+                    <RunLogs
+                      events={scopedEvents}
+                      selectedEventRef={selectedEventRef}
+                      onSelectEvent={onSelectEvent}
+                    />
+                  </>
                 )}
-                <RunLogs
-                  events={scopedEvents}
-                  selectedEventRef={selectedEventRef}
-                  onSelectEvent={onSelectEvent}
-                />
               </div>
 
               <NodeInspector
-                runId={resolvedRunId}
+                runId={resolvedRunId as string}
                 selectedNodeId={selectedNodeId}
                 selectedNodeType={selectedNodeType}
                 isPinned={isSelectionPinned}
@@ -379,7 +542,7 @@ export function App() {
                 telemetry={telemetry.data ?? []}
                 onClearSelection={() => {
                   clearSelectedNode();
-                  setSelectedNode(runNodeId(resolvedRunId), 'run');
+                  setSelectedNode(runNodeId(resolvedRunId as string), 'run');
                 }}
                 onTogglePinned={() => setSelectionPinned(!isSelectionPinned)}
               />

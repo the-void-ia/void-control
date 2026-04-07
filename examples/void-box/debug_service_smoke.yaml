@@ -1,0 +1,29 @@
+api_version: v1
+kind: agent
+name: debug_service_smoke
+
+sandbox:
+  mode: auto
+  memory_mb: 3072
+  vcpus: 2
+  network: true
+
+llm:
+  provider: claude
+
+agent:
+  mode: service
+  skills:
+    - "agent:claude-code"
+  messaging:
+    enabled: true
+  output_file: /workspace/output.json
+  prompt: |
+    Do these steps exactly:
+
+    1. Verify that `python3` exists.
+    2. Write this exact JSON object to `/workspace/output.json`:
+       {"status":"success","summary":"service smoke","metrics":{"latency_p99_ms":1.0,"error_rate":0.0,"cpu_pct":1.0},"artifacts":[]}
+    3. Read `/workspace/output.json` to confirm it exists.
+    4. Sleep for 60 seconds.
+    5. Do not delete or rewrite `/workspace/output.json`.
