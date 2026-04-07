@@ -1,0 +1,4 @@
+{"id":"evt-201","kind":"order","payload":{"account":"","region":"us-east","amount":10.0,"items":[1,2]},"expected_valid":false}
+{"id":"evt-202","kind":"order","payload":{"account":"E11","region":"us-east","amount":"not-a-number","items":[3,4,5]},"expected_valid":false}
+{"id":"evt-203","kind":"order","payload":{"account":"E11","region":"us-east","amount":22.0,"items":[]},"expected_valid":false}
+{"id":"evt-204","kind":"refund","payload":{"account":"C33","region":"eu-central","amount":5.0,"items":[6],"reason":"customer approved refund"},"expected_valid":true}

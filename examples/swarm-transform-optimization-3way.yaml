@@ -4,7 +4,7 @@ goal: >
   in parallel so service-mode startup issues are easier to isolate while still
   comparing distinct optimization approaches.
 workflow:
-  template: examples/void-box/transform_optimizer_agent.yaml
+  template: examples/runtime-templates/transform_optimizer_agent.yaml
 policy:
   budget:
     max_iterations: 3

@@ -550,7 +550,7 @@ workflow:
 fn one_iteration_transform_spec() -> ExecutionSpec {
     let template = std::env::current_dir()
         .expect("cwd")
-        .join("examples/void-box/transform_optimizer_agent.yaml");
+        .join("examples/runtime-templates/transform_optimizer_agent.yaml");
 
     ExecutionSpec {
         mode: "swarm".to_string(),

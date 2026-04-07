@@ -204,7 +204,7 @@ fn create_execution_route_accepts_yaml_specs() {
 mode: swarm
 goal: optimize transform latency
 workflow:
-  template: examples/void-box/transform_optimizer_agent.yaml
+  template: examples/runtime-templates/transform_optimizer_agent.yaml
 policy:
   budget:
     max_iterations: 2

@@ -54,7 +54,7 @@ fn transform_benchmark_produces_measured_metrics_and_strategy_tradeoffs() {
 fn run_benchmark(envs: &[(&str, &str)]) -> Value {
     let output_path = temp_output_path();
     let mut command = Command::new("python3");
-    command.arg("examples/void-box/transform_benchmark.py");
+    command.arg("examples/runtime-assets/transform_benchmark.py");
     command.current_dir(repo_root());
     command.env("OUTPUT_FILE", &output_path);
     for (key, value) in envs {

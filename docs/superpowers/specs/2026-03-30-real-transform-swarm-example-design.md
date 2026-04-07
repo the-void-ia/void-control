@@ -72,7 +72,7 @@ examples/
   - metric production
   - writing `/workspace/output.json`
 
-The benchmark runner belongs under `examples/void-box/` because that is the
+The benchmark runner belongs under `examples/runtime-assets/` because that is the
 workload the candidate run actually executes.
 
 ## Fixture Design
@@ -281,9 +281,9 @@ The updated example should:
 
 ## Implementation Order
 
-1. Add deterministic fixture corpus under `examples/void-box/fixtures/transform_02/`
-2. Add `examples/void-box/transform_benchmark.py`
-3. Update `examples/void-box/transform_optimizer_agent.yaml` to execute the runner
+1. Add deterministic fixture corpus under `examples/runtime-assets/fixtures/transform_02/`
+2. Add `examples/runtime-assets/transform_benchmark.py`
+3. Update `examples/runtime-templates/transform_optimizer_agent.yaml` to execute the runner
 4. Keep `examples/swarm-transform-optimization.yaml` as the top-level swarm spec
 5. Update `examples/README.md` with an ASCII run/metrics diagram
 6. Run a live swarm and verify that the winner is derived from measured output

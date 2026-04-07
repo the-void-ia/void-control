@@ -1,0 +1,52 @@
+api_version: v1
+kind: agent
+name: claude_mcp_diagnostic
+
+sandbox:
+  mode: auto
+  memory_mb: 2048
+  vcpus: 2
+  network: true
+  env:
+    MCP_DIAGNOSTIC_ROLE: force-mcp
+
+llm:
+  provider: claude
+
+agent:
+  skills:
+    - "agent:claude-code"
+  messaging:
+    enabled: true
+  output_file: /workspace/output.json
+  timeout_secs: 180
+  prompt: |
+    This is a diagnostic run for collaboration tooling.
+
+    Before writing any result, use the collaboration tools to do all of the
+    following:
+
+    1. Read the shared execution context.
+    2. Read peer messages.
+    3. Send one short broadcast observation saying this is a diagnostic
+       collaboration check.
+    4. Send one short recommendation to the leader saying whether the
+       collaboration bridge appears usable.
+
+    Do not simulate these actions in plain text. Perform them through the
+    available collaboration tools before writing the final result.
+
+    After completing those steps, write JSON to /workspace/output.json with
+    exactly this schema:
+    {
+      "status": "success",
+      "summary": "one-line diagnostic result",
+      "metrics": {
+        "latency_p99_ms": 1
+      },
+      "artifacts": []
+    }
+
+    Requirements:
+    - `summary` must mention whether the collaboration tools were usable.
+    - `latency_p99_ms` may be any positive number for this diagnostic run.

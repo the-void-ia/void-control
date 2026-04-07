@@ -4,7 +4,7 @@ goal: >
   incumbent by testing tighter window control, jitter, and adaptive window
   variants until the best latency and error profile stabilizes.
 workflow:
-  template: examples/void-box/rate_limit_optimizer_agent.yaml
+  template: examples/runtime-templates/rate_limit_optimizer_agent.yaml
 policy:
   budget:
     max_iterations: 4

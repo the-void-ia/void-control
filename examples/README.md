@@ -3,7 +3,8 @@
 These examples are intentionally split across two layers:
 
 - `examples/*.yaml`: `void-control` execution specs
-- `examples/void-box/*.yaml`: runtime workflow templates launched by `void-box`
+- `examples/runtime-templates/*.yaml`: runtime workflow templates launched by `void-box`
+- `examples/runtime-assets/`: helper scripts and data mounted into runtime templates
 
 Boundary:
 
@@ -25,9 +26,9 @@ Boundary:
 - `search-rate-limit-optimization.yaml`
   - incumbent-centered search example for `Transform-02`
   - mutates around a promising rate-limit policy
-- `void-box/transform_optimizer_agent.yaml`
+- `runtime-templates/transform_optimizer_agent.yaml`
   - plain runtime template used by the swarm example
-- `void-box/rate_limit_optimizer_agent.yaml`
+- `runtime-templates/rate_limit_optimizer_agent.yaml`
   - plain runtime template used by the search example
 
 ## Transform Swarm Examples
@@ -50,9 +51,9 @@ void-control creates sibling candidates
     ->
 void-box launches service-mode runs
     ->
-each run mounts examples/void-box read-only
+each run mounts examples/runtime-assets read-only
     ->
-python3 /workspace/transform-example/transform_benchmark.py
+python3 /workspace/runtime-assets/transform_benchmark.py
     ->
 benchmark processes the same transform_02 fixture corpus
     ->
@@ -72,7 +73,7 @@ Baseline:
 
 Metric source of truth:
 
-- `examples/void-box/transform_benchmark.py` computes the metrics
+- `examples/runtime-assets/transform_benchmark.py` computes the metrics
 - `latency_p99_ms` comes from measured per-record timings
 - `error_rate` comes from actual validation/transform failures on the fixtures
 - `cpu_pct` comes from measured process CPU time versus wall-clock time
@@ -102,7 +103,7 @@ The transform example also assumes the daemon is started from the sibling
 `void-box` repo root so this runtime template mount resolves correctly:
 
 ```yaml
-../../void-control/examples/void-box -> /workspace/transform-example
+../../void-control/examples/runtime-assets -> /workspace/runtime-assets
 ```
 
 Start the `void-control` bridge:
@@ -158,7 +159,7 @@ npm run dev -- --host 127.0.0.1 --port 3000
 
 - The transform runtime template uses `agent.output_file: /workspace/output.json`
   so `void-control` can collect structured metrics directly.
-- `examples/void-box/transform_optimizer_agent.yaml` uses
+- `examples/runtime-templates/transform_optimizer_agent.yaml` uses
   `sandbox.image: "python:3.12-slim"` because the production Claude rootfs does
   not include `python3`.
 - The transform benchmark and fixtures are mounted into the guest read-only from

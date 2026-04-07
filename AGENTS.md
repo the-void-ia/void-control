@@ -169,7 +169,7 @@ curl -sS -X POST http://127.0.0.1:43210/v1/executions \
 Important:
 
 - top-level execution specs in `examples/*.yaml` are `void-control` documents
-- referenced files under `examples/void-box/*.yaml` are runtime templates for `void-box`
+- referenced files under `examples/runtime-templates/*.yaml` are runtime templates for `void-box`
 - non-interactive `voidctl` currently exposes `serve` and `help`; use the bridge
   HTTP API or UI for execution create/dry-run flows
 - quote URLs that contain `?` when using `curl` from `zsh`

@@ -4,7 +4,7 @@ goal: >
   strategies in parallel, then bias the next round toward the strongest latency,
   error, and CPU tradeoff.
 workflow:
-  template: examples/void-box/transform_optimizer_agent.yaml
+  template: examples/runtime-templates/transform_optimizer_agent.yaml
 policy:
   budget:
     max_iterations: 3

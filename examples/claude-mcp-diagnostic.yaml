@@ -3,7 +3,7 @@ goal: >
   Diagnostic run to verify that a Claude-backed candidate can actually use the
   void-mcp collaboration bridge and emit canonical sidecar intents.
 workflow:
-  template: examples/void-box/claude_mcp_diagnostic_agent.yaml
+  template: examples/runtime-templates/claude_mcp_diagnostic_agent.yaml
 policy:
   budget:
     max_iterations: 1

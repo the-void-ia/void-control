@@ -1,0 +1,4 @@
+{"id":"evt-101","kind":"order","payload":{"account":"B07","region":"us-west","amount":7.5,"items":[1,2,3,4,5,6,7,8]},"expected_valid":true}
+{"id":"evt-102","kind":"refund","payload":{"account":"B07","region":"us-west","amount":3.25,"items":{"first":9,"second":10},"reason":"duplicate charge"},"expected_valid":false}
+{"id":"evt-103","kind":"order","payload":{"account":"D48","region":"ap-south","amount":123.45,"items":[11,12,13,14,15],"flags":["expedite","gift"]},"expected_valid":true}
+{"id":"evt-104","kind":"order","payload":{"account":"C33","region":"eu-central","amount":64.0,"items":[16,17,18,19,20,21],"metadata":{"source":"api","priority":"normal"}},"expected_valid":true}

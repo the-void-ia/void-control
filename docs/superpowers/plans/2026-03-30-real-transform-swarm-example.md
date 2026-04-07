@@ -4,7 +4,7 @@
 
 **Goal:** Replace the synthetic metric generation in `examples/swarm-transform-optimization.yaml` with a self-contained measured benchmark that writes real latency, error-rate, and CPU metrics to `/workspace/output.json`.
 
-**Architecture:** Keep `void-control` unchanged as the orchestrator and scorer. Move metric truth into a deterministic benchmark runner under `examples/void-box/` that processes a local fixture corpus, writes structured output directly, and is launched by the existing service-mode `void-box` template.
+**Architecture:** Keep `void-control` unchanged as the orchestrator and scorer. Move metric truth into a deterministic benchmark runner under `examples/runtime-assets/` that processes a local fixture corpus, writes structured output directly, and is launched by the existing service-mode `void-box` template.
 
 **Tech Stack:** Rust orchestration already in repo, YAML runtime templates, Python benchmark runner, JSONL fixtures, serde-based bridge/runtime collection.
 
@@ -17,18 +17,18 @@
 - Modify: `examples/README.md`
   - explain that the transform swarm now uses measured metrics from a local fixture replay
   - add an ASCII run/metrics diagram
-- Modify: `examples/void-box/transform_optimizer_agent.yaml`
+- Modify: `examples/runtime-templates/transform_optimizer_agent.yaml`
   - replace metric invention instructions with benchmark-runner execution flow
   - keep service-mode output contract compatible with `void-control`
 
 ### New files to create
 
-- Create: `examples/void-box/transform_benchmark.py`
+- Create: `examples/runtime-assets/transform_benchmark.py`
   - benchmark runner and metric writer
-- Create: `examples/void-box/fixtures/transform_02/batch_01.jsonl`
-- Create: `examples/void-box/fixtures/transform_02/batch_02.jsonl`
-- Create: `examples/void-box/fixtures/transform_02/batch_03.jsonl`
-- Create: `examples/void-box/fixtures/transform_02/expected_summary.json`
+- Create: `examples/runtime-assets/fixtures/transform_02/batch_01.jsonl`
+- Create: `examples/runtime-assets/fixtures/transform_02/batch_02.jsonl`
+- Create: `examples/runtime-assets/fixtures/transform_02/batch_03.jsonl`
+- Create: `examples/runtime-assets/fixtures/transform_02/expected_summary.json`
   - deterministic corpus metadata and validation expectations
 
 ### Existing tests/docs to review while implementing
@@ -44,7 +44,7 @@
 ### Task 1: Create the fixture directory and metadata file
 
 **Files:**
-- Create: `examples/void-box/fixtures/transform_02/expected_summary.json`
+- Create: `examples/runtime-assets/fixtures/transform_02/expected_summary.json`
 
 - [ ] **Step 1: Write the corpus metadata file**
 
@@ -70,14 +70,14 @@ No command yet. Update the numbers only after Tasks 2-4 are complete.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add examples/void-box/fixtures/transform_02/expected_summary.json
+git add examples/runtime-assets/fixtures/transform_02/expected_summary.json
 git commit -m "examples: add transform fixture metadata"
 ```
 
 ### Task 2: Add first batch of valid repeated-key records
 
 **Files:**
-- Create: `examples/void-box/fixtures/transform_02/batch_01.jsonl`
+- Create: `examples/runtime-assets/fixtures/transform_02/batch_01.jsonl`
 
 - [ ] **Step 1: Write a small JSONL batch with repeated keys**
 
@@ -99,7 +99,7 @@ Run:
 ```bash
 python3 - <<'PY'
 import json, pathlib
-path = pathlib.Path("examples/void-box/fixtures/transform_02/batch_01.jsonl")
+path = pathlib.Path("examples/runtime-assets/fixtures/transform_02/batch_01.jsonl")
 for idx, line in enumerate(path.read_text().splitlines(), 1):
     json.loads(line)
 print("ok")
@@ -111,15 +111,15 @@ Expected: `ok`
 - [ ] **Step 3: Commit**
 
 ```bash
-git add examples/void-box/fixtures/transform_02/batch_01.jsonl
+git add examples/runtime-assets/fixtures/transform_02/batch_01.jsonl
 git commit -m "examples: add first transform fixture batch"
 ```
 
 ### Task 3: Add mixed-size and malformed edge-case records
 
 **Files:**
-- Create: `examples/void-box/fixtures/transform_02/batch_02.jsonl`
-- Create: `examples/void-box/fixtures/transform_02/batch_03.jsonl`
+- Create: `examples/runtime-assets/fixtures/transform_02/batch_02.jsonl`
+- Create: `examples/runtime-assets/fixtures/transform_02/batch_03.jsonl`
 
 - [ ] **Step 1: Write the second batch with mixed payload sizes**
 
@@ -144,7 +144,7 @@ Run:
 ```bash
 python3 - <<'PY'
 import json, pathlib
-root = pathlib.Path("examples/void-box/fixtures/transform_02")
+root = pathlib.Path("examples/runtime-assets/fixtures/transform_02")
 for name in ("batch_02.jsonl", "batch_03.jsonl"):
     for idx, line in enumerate((root / name).read_text().splitlines(), 1):
         json.loads(line)
@@ -163,7 +163,7 @@ Set:
 - [ ] **Step 5: Commit**
 
 ```bash
-git add examples/void-box/fixtures/transform_02/batch_02.jsonl examples/void-box/fixtures/transform_02/batch_03.jsonl examples/void-box/fixtures/transform_02/expected_summary.json
+git add examples/runtime-assets/fixtures/transform_02/batch_02.jsonl examples/runtime-assets/fixtures/transform_02/batch_03.jsonl examples/runtime-assets/fixtures/transform_02/expected_summary.json
 git commit -m "examples: add transform edge-case fixtures"
 ```
 
@@ -172,7 +172,7 @@ git commit -m "examples: add transform edge-case fixtures"
 ### Task 4: Write a failing runner smoke test command manually
 
 **Files:**
-- Create: `examples/void-box/transform_benchmark.py`
+- Create: `examples/runtime-assets/transform_benchmark.py`
 
 - [ ] **Step 1: Create the runner file with a stub main that exits non-zero**
 
@@ -188,7 +188,7 @@ raise SystemExit("not implemented")
 Run:
 
 ```bash
-python3 examples/void-box/transform_benchmark.py
+python3 examples/runtime-assets/transform_benchmark.py
 ```
 
 Expected: non-zero exit with `not implemented`
@@ -196,14 +196,14 @@ Expected: non-zero exit with `not implemented`
 - [ ] **Step 3: Commit**
 
 ```bash
-git add examples/void-box/transform_benchmark.py
+git add examples/runtime-assets/transform_benchmark.py
 git commit -m "examples: scaffold transform benchmark runner"
 ```
 
 ### Task 5: Implement fixture loading and baseline processing
 
 **Files:**
-- Modify: `examples/void-box/transform_benchmark.py`
+- Modify: `examples/runtime-assets/transform_benchmark.py`
 
 - [ ] **Step 1: Add a failing direct-run smoke path**
 
@@ -217,7 +217,7 @@ Expected behavior:
 Run:
 
 ```bash
-python3 examples/void-box/transform_benchmark.py
+python3 examples/runtime-assets/transform_benchmark.py
 ```
 
 Expected: FAIL because processing/output writing is not implemented yet
@@ -225,7 +225,7 @@ Expected: FAIL because processing/output writing is not implemented yet
 - [ ] **Step 3: Implement minimal fixture loading and baseline transform behavior**
 
 Implementation responsibilities:
-- read fixture files from `examples/void-box/fixtures/transform_02/`
+- read fixture files from `examples/runtime-assets/fixtures/transform_02/`
 - implement default baseline processing path
 - record per-record timing
 - compute invalid vs valid counts
@@ -241,8 +241,8 @@ Support:
 Run:
 
 ```bash
-OUTPUT_FILE=/tmp/transform-example-output.json python3 examples/void-box/transform_benchmark.py
-cat /tmp/transform-example-output.json
+OUTPUT_FILE=/tmp/transform-output.json python3 examples/runtime-assets/transform_benchmark.py
+cat /tmp/transform-output.json
 ```
 
 Expected:
@@ -253,22 +253,22 @@ Expected:
 - [ ] **Step 6: Commit**
 
 ```bash
-git add examples/void-box/transform_benchmark.py
+git add examples/runtime-assets/transform_benchmark.py
 git commit -m "examples: implement baseline transform benchmark"
 ```
 
 ### Task 6: Implement candidate strategy branches
 
 **Files:**
-- Modify: `examples/void-box/transform_benchmark.py`
+- Modify: `examples/runtime-assets/transform_benchmark.py`
 
 - [ ] **Step 1: Add a failing local comparison check**
 
 Run two local commands with different env vars and confirm they currently produce identical behavior:
 
 ```bash
-OUTPUT_FILE=/tmp/baseline.json TRANSFORM_STRATEGY=baseline python3 examples/void-box/transform_benchmark.py
-OUTPUT_FILE=/tmp/cache.json TRANSFORM_STRATEGY=cache-aware TRANSFORM_CACHE_MODE=hot-path python3 examples/void-box/transform_benchmark.py
+OUTPUT_FILE=/tmp/baseline.json TRANSFORM_STRATEGY=baseline python3 examples/runtime-assets/transform_benchmark.py
+OUTPUT_FILE=/tmp/cache.json TRANSFORM_STRATEGY=cache-aware TRANSFORM_CACHE_MODE=hot-path python3 examples/runtime-assets/transform_benchmark.py
 ```
 
 Expected before implementation:
@@ -293,9 +293,9 @@ The implementation should avoid fake constants. Strategy differences should come
 Run:
 
 ```bash
-OUTPUT_FILE=/tmp/baseline.json TRANSFORM_STRATEGY=baseline python3 examples/void-box/transform_benchmark.py
-OUTPUT_FILE=/tmp/cache.json TRANSFORM_STRATEGY=cache-aware TRANSFORM_CACHE_MODE=hot-path python3 examples/void-box/transform_benchmark.py
-OUTPUT_FILE=/tmp/strict.json TRANSFORM_STRATEGY=conservative-validation TRANSFORM_VALIDATION_MODE=strict python3 examples/void-box/transform_benchmark.py
+OUTPUT_FILE=/tmp/baseline.json TRANSFORM_STRATEGY=baseline python3 examples/runtime-assets/transform_benchmark.py
+OUTPUT_FILE=/tmp/cache.json TRANSFORM_STRATEGY=cache-aware TRANSFORM_CACHE_MODE=hot-path python3 examples/runtime-assets/transform_benchmark.py
+OUTPUT_FILE=/tmp/strict.json TRANSFORM_STRATEGY=conservative-validation TRANSFORM_VALIDATION_MODE=strict python3 examples/runtime-assets/transform_benchmark.py
 ```
 
 Expected:
@@ -305,14 +305,14 @@ Expected:
 - [ ] **Step 4: Commit**
 
 ```bash
-git add examples/void-box/transform_benchmark.py
+git add examples/runtime-assets/transform_benchmark.py
 git commit -m "examples: add transform strategy benchmark variants"
 ```
 
 ### Task 7: Implement metric calculations explicitly
 
 **Files:**
-- Modify: `examples/void-box/transform_benchmark.py`
+- Modify: `examples/runtime-assets/transform_benchmark.py`
 
 - [ ] **Step 1: Add or refine metric helpers**
 
@@ -326,10 +326,10 @@ Implement helpers for:
 Run:
 
 ```bash
-OUTPUT_FILE=/tmp/transform-example-output.json python3 examples/void-box/transform_benchmark.py
+OUTPUT_FILE=/tmp/transform-output.json python3 examples/runtime-assets/transform_benchmark.py
 python3 - <<'PY'
 import json
-data = json.load(open('/tmp/transform-example-output.json'))
+data = json.load(open('/tmp/transform-output.json'))
 assert data["status"] == "success"
 metrics = data["metrics"]
 assert metrics["latency_p99_ms"] > 0
@@ -344,7 +344,7 @@ Expected: `ok`
 - [ ] **Step 3: Commit**
 
 ```bash
-git add examples/void-box/transform_benchmark.py
+git add examples/runtime-assets/transform_benchmark.py
 git commit -m "examples: finalize measured transform metrics"
 ```
 
@@ -353,7 +353,7 @@ git commit -m "examples: finalize measured transform metrics"
 ### Task 8: Update the runtime template to execute the benchmark runner
 
 **Files:**
-- Modify: `examples/void-box/transform_optimizer_agent.yaml`
+- Modify: `examples/runtime-templates/transform_optimizer_agent.yaml`
 
 - [ ] **Step 1: Write the failing expectation down**
 
@@ -375,7 +375,7 @@ Required changes:
 Run:
 
 ```bash
-sed -n '1,260p' examples/void-box/transform_optimizer_agent.yaml
+sed -n '1,260p' examples/runtime-templates/transform_optimizer_agent.yaml
 ```
 
 Expected:
@@ -386,7 +386,7 @@ Expected:
 - [ ] **Step 4: Commit**
 
 ```bash
-git add examples/void-box/transform_optimizer_agent.yaml
+git add examples/runtime-templates/transform_optimizer_agent.yaml
 git commit -m "examples: wire transform benchmark into service template"
 ```
 
@@ -435,16 +435,16 @@ git commit -m "docs: explain real transform swarm benchmark"
 ### Task 10: Run local non-live benchmark smoke checks
 
 **Files:**
-- Test: `examples/void-box/transform_benchmark.py`
+- Test: `examples/runtime-assets/transform_benchmark.py`
 
 - [ ] **Step 1: Run the benchmark locally under several strategies**
 
 Run:
 
 ```bash
-OUTPUT_FILE=/tmp/baseline.json TRANSFORM_STRATEGY=baseline python3 examples/void-box/transform_benchmark.py
-OUTPUT_FILE=/tmp/cache.json TRANSFORM_STRATEGY=cache-aware TRANSFORM_CACHE_MODE=hot-path python3 examples/void-box/transform_benchmark.py
-OUTPUT_FILE=/tmp/strict.json TRANSFORM_STRATEGY=conservative-validation TRANSFORM_VALIDATION_MODE=strict python3 examples/void-box/transform_benchmark.py
+OUTPUT_FILE=/tmp/baseline.json TRANSFORM_STRATEGY=baseline python3 examples/runtime-assets/transform_benchmark.py
+OUTPUT_FILE=/tmp/cache.json TRANSFORM_STRATEGY=cache-aware TRANSFORM_CACHE_MODE=hot-path python3 examples/runtime-assets/transform_benchmark.py
+OUTPUT_FILE=/tmp/strict.json TRANSFORM_STRATEGY=conservative-validation TRANSFORM_VALIDATION_MODE=strict python3 examples/runtime-assets/transform_benchmark.py
 ```
 
 Expected:
@@ -469,7 +469,7 @@ Expected:
 - [ ] **Step 3: Commit if code changed during smoke-fix iteration**
 
 ```bash
-git add examples/void-box/transform_benchmark.py examples/void-box/transform_optimizer_agent.yaml examples/README.md
+git add examples/runtime-assets/transform_benchmark.py examples/runtime-templates/transform_optimizer_agent.yaml examples/README.md
 git commit -m "examples: polish transform benchmark smoke path"
 ```
 
@@ -477,8 +477,8 @@ git commit -m "examples: polish transform benchmark smoke path"
 
 **Files:**
 - Test: `examples/swarm-transform-optimization.yaml`
-- Test: `examples/void-box/transform_optimizer_agent.yaml`
-- Test: `examples/void-box/transform_benchmark.py`
+- Test: `examples/runtime-templates/transform_optimizer_agent.yaml`
+- Test: `examples/runtime-assets/transform_benchmark.py`
 
 - [ ] **Step 1: Build the production `void-box` rootfs**
 
@@ -547,6 +547,6 @@ Expected:
 - [ ] **Step 6: Final commit**
 
 ```bash
-git add examples/README.md examples/void-box/transform_optimizer_agent.yaml examples/void-box/transform_benchmark.py examples/void-box/fixtures/transform_02
+git add examples/README.md examples/runtime-templates/transform_optimizer_agent.yaml examples/runtime-assets/transform_benchmark.py examples/runtime-assets/fixtures/transform_02
 git commit -m "examples: make transform swarm metrics real"
 ```
