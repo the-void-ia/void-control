@@ -8,7 +8,7 @@ import { LaunchRunModal } from './components/LaunchRunModal';
 import { SwarmOverview } from './components/SwarmOverview';
 import { SwarmGraph } from './components/SwarmGraph';
 import { SwarmInspector } from './components/SwarmInspector';
-import { baseUrl, cancelRun, getExecution, getExecutionEvents, getExecutions, getRun, getRunEvents, getRunStages, getRunTelemetrySamples, getRuns, getRuntimeHealth, launchRunFromSpecText, startRun } from './lib/api';
+import { baseUrl, cancelRun, createExecutionFromSpecText, getExecution, getExecutionEvents, getExecutions, getRun, getRunEvents, getRunStages, getRunTelemetrySamples, getRuns, getRuntimeHealth, launchRunFromSpecText, startRun } from './lib/api';
 import { deriveCandidateCards, deriveIterationSummaries, deriveSwarmExecutionSummary } from './lib/orchestration';
 import { useUiStore } from './store/ui';
 import { defaultStageSelection, eventNodeId, filterEventsForStage, parseNodeId, resolveSelectedStage, runNodeId } from './lib/selectors';
@@ -40,6 +40,7 @@ export function App() {
   const [launchError, setLaunchError] = useState<string | null>(null);
   const [launchPending, setLaunchPending] = useState(false);
   const [selectedExecutionId, setSelectedExecutionId] = useState<string | null>(null);
+  const [pendingLaunchedExecutionId, setPendingLaunchedExecutionId] = useState<string | null>(null);
   const [selectedSwarmIteration, setSelectedSwarmIteration] = useState<number>(0);
   const [selectedSwarmCandidateId, setSelectedSwarmCandidateId] = useState<string | null>(null);
   const selectedRunId = useUiStore((s) => s.selectedRunId);
@@ -247,6 +248,17 @@ export function App() {
   }, [selectedExecutionId, selectedRunId, resolvedExecutionId, resolvedRunId, setSelectedRunId]);
 
   useEffect(() => {
+    if (!pendingLaunchedExecutionId) return;
+    if (!(executions.data ?? []).some((execution) => execution.execution_id === pendingLaunchedExecutionId)) return;
+    clearSelectedNode();
+    setSelectedRunId(null);
+    setSelectedSwarmIteration(0);
+    setSelectedSwarmCandidateId(null);
+    setSelectedExecutionId(pendingLaunchedExecutionId);
+    setPendingLaunchedExecutionId(null);
+  }, [pendingLaunchedExecutionId, executions.data, clearSelectedNode, setSelectedRunId]);
+
+  useEffect(() => {
     if (!resolvedExecutionId) return;
     setSelectedSwarmIteration((current) => {
       if (swarmIterations.some((iteration) => iteration.iterationIndex === current)) return current;
@@ -327,15 +339,33 @@ export function App() {
     setLaunchError(null);
     setLaunchPending(true);
     try {
-      let result: { run_id?: string; runId?: string; attempt_id?: number; state?: string };
+      let result: { run_id?: string; runId?: string; attempt_id?: number; state?: string } | null = null;
       const hasSpecText = Boolean(params.specText && params.specText.trim().length > 0);
       if (hasSpecText) {
+        const specText = params.specText as string;
+        const looksLikeExecutionSpec =
+          /^\s*mode\s*:\s*/m.test(specText)
+          && /^\s*goal\s*:\s*/m.test(specText);
+
         try {
+          if (looksLikeExecutionSpec) {
+            const execution = await createExecutionFromSpecText({ specText });
+            setPendingLaunchedExecutionId(execution.execution_id);
+            await executions.refetch();
+            clearSelectedNode();
+            setSelectedRunId(null);
+            setSelectedSwarmIteration(0);
+            setSelectedSwarmCandidateId(null);
+            setSelectedExecutionId(execution.execution_id);
+            setIsLaunchOpen(false);
+            return;
+          }
+
           result = await launchRunFromSpecText({
-            specText: params.specText as string,
+            specText,
             runId: params.runId,
             file: params.file,
-            specFormat: (params.specText as string).trimStart().startsWith('{') ? 'json' : 'yaml'
+            specFormat: specText.trimStart().startsWith('{') ? 'json' : 'yaml'
           });
         } catch (error) {
           const msg = error instanceof Error ? error.message : String(error);
@@ -344,8 +374,19 @@ export function App() {
             msg.includes('ECONNREFUSED') ||
             msg.includes('HTTP 404') ||
             msg.includes('HTTP 405');
-          if (!bridgeUnavailable) throw error;
-          result = await launchMutation.mutateAsync({ file: params.file, runId: params.runId });
+          if (!bridgeUnavailable && looksLikeExecutionSpec) {
+            throw error;
+          }
+          if (!bridgeUnavailable) {
+            result = await launchRunFromSpecText({
+              specText,
+              runId: params.runId,
+              file: params.file,
+              specFormat: specText.trimStart().startsWith('{') ? 'json' : 'yaml'
+            });
+          } else {
+            result = await launchMutation.mutateAsync({ file: params.file, runId: params.runId });
+          }
         }
       } else {
         result = await launchMutation.mutateAsync({ file: params.file, runId: params.runId });

@@ -175,4 +175,26 @@ export async function launchRunFromSpecText(params: {
   });
 }
 
+export async function createExecutionFromSpecText(params: {
+  specText: string;
+}): Promise<ExecutionInspection> {
+  const res = await fetch(`${controlBaseUrl}/v1/executions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/yaml' },
+    body: params.specText
+  });
+
+  if (!res.ok) {
+    let body = '';
+    try {
+      body = await res.text();
+    } catch {
+      body = '<no-body>';
+    }
+    throw new Error(`HTTP ${res.status} ${res.statusText}: ${body}`);
+  }
+
+  return (await res.json()) as ExecutionInspection;
+}
+
 export { runtimeBaseUrl as baseUrl, controlBaseUrl };

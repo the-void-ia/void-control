@@ -1,4 +1,0 @@
-{"id":"evt-001","kind":"order","payload":{"account":"A12","region":"us-east","amount":42.1,"items":[1,2,3]},"expected_valid":true}
-{"id":"evt-002","kind":"order","payload":{"account":"A12","region":"us-east","amount":18.75,"items":[4,5]},"expected_valid":true}
-{"id":"evt-003","kind":"order","payload":{"account":"A12","region":"us-east","amount":99.9,"items":[6,7,8,9]},"expected_valid":true}
-{"id":"evt-004","kind":"order","payload":{"account":"B07","region":"us-west","amount":12.5,"items":[10,11]},"expected_valid":true}

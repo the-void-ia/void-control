@@ -67,7 +67,7 @@ export function RunsList({
           {hideTestRuns ? 'Show Tests' : 'Hide Tests'}
         </button>
       </div>
-      <button className="launch-box-btn" type="button" onClick={onLaunch}>+ Launch Box</button>
+      <button className="launch-box-btn" type="button" onClick={onLaunch}>+ Launch Spec</button>
       <div className="runs-state-pills" role="tablist" aria-label="Filter runs by state">
         {statePills.map((pill) => (
           <button
