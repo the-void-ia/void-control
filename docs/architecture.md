@@ -10,7 +10,7 @@ operator-facing and programmatic interfaces.
 At a high level:
 
 ```text
-void-control = contract normalization + orchestration + persistence + bridge/UI
+void-control = contract normalization + orchestration strategies + persistence + bridge/UI
 ```
 
 ## System boundary
@@ -23,6 +23,16 @@ belongs to `void-box`. `void-control` assumes a runtime provider that can:
 - return structured output or a typed failure
 
 The default live provider is `VoidBoxRuntimeClient`. Tests use `MockRuntime`.
+
+`void-control` does not interpret itself as a runtime. It is the orchestration
+control plane that sits above runtime execution.
+
+That distinction matters for first release:
+
+- runtime execution belongs to `void-box`
+- orchestration strategy belongs to `void-control`
+- graph/UI inspection belongs to `void-control`
+- collaboration transport and event persistence belong to `void-control`
 
 ## Component diagram
 
@@ -129,7 +139,37 @@ Supporting modules:
 - `src/orchestration/scheduler.rs`: global dispatch fairness and queueing
 - `src/orchestration/reconcile.rs`: restart/reload handling
 
-### Message box and signal-reactive planning
+## Orchestration strategy model
+
+`void-control` should be read as a strategy host.
+
+Implemented or active:
+
+- `swarm`: breadth-oriented sibling candidate exploration with reduction
+- `search`: incumbent-centered refinement using the same execution primitives
+
+Planned next:
+
+- `supervision`: a higher-level orchestration strategy that uses the same
+  execution, event, message-box, and UI primitives while changing the planner
+  semantics
+
+Strategy responsibilities:
+
+- decide how candidates are proposed
+- decide how iteration outcomes are reduced
+- interpret advisory collaboration state
+- stop, continue, or converge under policy
+
+Shared strategy substrate:
+
+- `ExecutionSpec`
+- persisted execution and candidate records
+- control-plane event log
+- message-box / MCP-backed collaboration transport
+- bridge APIs and graph-first inspection UI
+
+### Message box, MCP, and signal-reactive planning
 
 The message-box model gives candidates a structured communication channel across
 iterations.
@@ -140,6 +180,14 @@ Responsibilities:
 - route intents into `RoutedMessage` records
 - build per-candidate inbox snapshots
 - derive `MessageStats` for planning iteration `N`
+
+In practice this is the collaboration/event layer used by orchestration-aware
+agents and tools:
+
+- runtime workloads can emit collaboration intents
+- MCP-backed tools can expose or consume the same execution context primitives
+- the control plane persists those intents as first-class orchestration records
+- strategies consume the routed/persisted view, not arbitrary terminal text
 
 Current signal-reactive behavior is metadata-driven:
 
@@ -153,6 +201,106 @@ Key files:
 - `src/orchestration/types.rs`
 - `src/orchestration/variation.rs`
 - `src/orchestration/strategy.rs`
+
+## Event architecture
+
+The system has two event planes that must stay distinct.
+
+### 1. Runtime event plane
+
+Produced by `void-box` and normalized by `void-control`.
+
+Examples:
+
+- run lifecycle events
+- stage lifecycle events
+- telemetry and artifact readiness
+- terminal runtime failures
+
+Properties:
+
+- runtime truth source is `void-box`
+- `void-control` normalizes these into stable contract types
+- runtime events describe what happened inside a specific run
+
+### 2. Control-plane orchestration event plane
+
+Produced by `void-control`.
+
+Examples:
+
+- `ExecutionCreated`
+- `ExecutionSubmitted`
+- `CandidateQueued`
+- `CandidateDispatched`
+- `CandidateOutputCollected`
+- `CandidateScored`
+- `IterationCompleted`
+- `ExecutionCompleted`
+- communication/message-box persistence and routing outcomes
+
+Properties:
+
+- truth source is the orchestration service and store
+- these events describe how the control plane planned, routed, reduced, and
+  persisted the execution
+- they remain stable even if runtime transport/provider details change
+
+### MCP and collaboration events
+
+MCP is not a replacement event plane. It is a collaboration/tooling surface
+that can participate in orchestration through the same persisted control-plane
+primitives.
+
+Flow:
+
+```text
+┌──────────────────────────┐
+│ candidate run / MCP tool │
+└─────────────┬────────────┘
+              v
+┌──────────────────────────┐
+│ CommunicationIntent      │
+│ audience / kind / body   │
+└─────────────┬────────────┘
+              v
+┌──────────────────────────┐
+│ message-box validation   │
+│ schema / limits / dedup  │
+└─────────────┬────────────┘
+              v
+┌──────────────────────────┐
+│ RoutedMessage            │
+└───────┬───────────┬──────┘
+        │           │
+        v           v
+┌──────────────┐  ┌──────────────────┐
+│ leader inbox │  │ broadcast fanout │
+│ snapshot     │  │ future inboxes   │
+└──────┬───────┘  └────────┬─────────┘
+       └──────────┬────────┘
+                  v
+        ┌──────────────────────┐
+        │ MessageStats         │
+        └──────────┬───────────┘
+                   v
+        ┌──────────────────────┐
+        │ strategy planner     │
+        │ swarm now            │
+        │ supervision later    │
+        └──────────────────────┘
+```
+
+The architectural rule is:
+
+- free-form tool traffic is not the canonical contract
+- persisted `CommunicationIntent`, `RoutedMessage`, and inbox snapshots are
+  the canonical collaboration records
+- audiences such as `leader` and `broadcast` are orchestration semantics owned
+  by `void-control`
+
+This keeps collaboration inspectable in the UI and reusable across future
+strategies such as `supervision`.
 
 ### Persistence and replay
 
@@ -202,6 +350,7 @@ Planning inputs depend on strategy:
 
 - swarm: breadth-oriented candidate planning
 - search: incumbent-centered neighborhood refinement
+- supervision: planned next strategy on the same execution substrate
 
 ### 3. Candidate dispatch
 
@@ -245,6 +394,22 @@ CommunicationIntent[]
 
 The planner uses the stats as advisory metadata. It does not treat message
 payloads as direct candidate-authoring commands.
+
+## UI and API implications
+
+The operator UI and bridge APIs should expose one execution model regardless of
+strategy.
+
+That means:
+
+- one launcher for runtime specs and orchestration specs
+- one graph-first execution surface
+- one persisted execution/event model
+- strategy-specific semantics rendered through the same shell
+
+For first release, `swarm` is the concrete orchestration strategy that proves
+this model. `supervision` should extend the same primitives, not introduce a
+parallel stack.
 
 ## Persistence and replay model
 

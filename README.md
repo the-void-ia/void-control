@@ -1,6 +1,6 @@
 # void-control
 
-Orchestration layer for `void-box` runtime execution.
+Control-plane orchestration for `void-box` runtime execution.
 
 ![void-control hero](docs/assets/void-control-hero.png)
 
@@ -9,6 +9,19 @@ Orchestration layer for `void-box` runtime execution.
 [![void-control demo](docs/assets/void-control-demo.gif)](docs/assets/void-control-demo.mp4)
 
 Click the preview above for the full-quality MP4, or use the direct file link: [void-control demo video](docs/assets/void-control-demo.mp4).
+
+## Swarm Execution Demo
+
+[![void-control swarm demo](docs/assets/void-control-swarm-demo.gif)](docs/assets/void-control-swarm-demo.mp4)
+
+This recording shows the canonical first-release flow:
+
+- a live 3-agent swarm execution
+- graph-first orchestration inspection
+- right-side metrics and event inspection
+- runtime drill-down through `Open Runtime Graph`
+
+Direct link: [void-control swarm execution demo](docs/assets/void-control-swarm-demo.mp4).
 
 ## Release
 
@@ -21,10 +34,33 @@ Click the preview above for the full-quality MP4, or use the direct file link: [
 
 `void-control` is the control-plane side of the stack:
 
-- Launches and manages runs on `void-box`.
-- Tracks run/stage/event lifecycle.
-- Provides terminal-first and graph-first operator UX.
-- Enforces runtime contract compatibility with `void-box`.
+- launches and manages runtime work on `void-box`
+- normalizes runtime payloads into a stable control-plane contract
+- plans and tracks orchestration executions across multiple candidates
+- persists execution, event, candidate, and message-box state
+- provides terminal-first and graph-first operator UX
+- enforces runtime contract compatibility with `void-box`
+
+## Orchestration Strategies
+
+`void-control` should be understood as a host for orchestration strategies, not
+as a single-purpose swarm console.
+
+Current direction:
+
+- `swarm`: first implemented orchestration strategy
+- `supervision`: planned next strategy
+
+Shared control-plane primitives across strategies:
+
+- execution specs and policies
+- candidate planning and reduction
+- persisted control-plane events
+- message-box / MCP-backed collaboration state
+- graph-first execution inspection in the UI
+
+The strategy changes the orchestration semantics. It should not require a
+different product surface or a different backend contract family.
 
 ## Documentation
 
@@ -100,6 +136,13 @@ curl -sS -X POST http://127.0.0.1:43210/v1/executions \
 `examples/swarm-transform-optimization.yaml` remains available as the wider
 eight-candidate stress case, but it is less reliable for routine validation.
 
+This is also the canonical first-release orchestration workflow:
+
+- load a top-level orchestration YAML
+- launch through the bridge or UI
+- inspect the execution graph, inspector, and event stream
+- follow candidate metrics and `leader` / `broadcast` collaboration events
+
 ## Development
 
 Rust validation:
@@ -137,6 +180,7 @@ cargo run --features serde --bin voidctl
 ## Notes
 
 - Dashboard uses daemon APIs (`/v1/runs`, `/v1/runs/{id}/events`, `/v1/runs/{id}/stages`, `/v1/runs/{id}/telemetry`).
-- `+ Launch Box` supports:
-  - editor/upload launch through bridge (`POST /v1/launch`)
-  - path-only fallback launch (`POST /v1/runs`) when no spec text is provided.
+- `+ Launch Spec` supports:
+  - orchestration YAML through bridge execution create (`POST /v1/executions`)
+  - raw runtime spec upload through bridge launch (`POST /v1/launch`)
+  - path-only fallback launch (`POST /v1/runs`) when no spec text is provided
