@@ -210,6 +210,41 @@ voidctl execution result <execution-id>
 voidctl execution runtime <execution-id>
 ```
 
+Example execution:
+
+```text
+problem:
+  optimize Transform-02 with multiple competing approaches in parallel
+
+generated flow:
+  voidctl execution submit --stdin
+
+execution_id: exec-1775679556549
+status: Completed
+winner: candidate-2
+strategy: vectorized-parse
+runtime_run_id: run-1775679567037
+```
+
+Final candidate scores from that run:
+
+```text
+candidate-1  baseline          latency_p99_ms=3.027  cpu_pct=93.4  error_rate=0.333
+candidate-2  vectorized-parse  latency_p99_ms=1.740  cpu_pct=75.8  error_rate=0.333
+candidate-3  cache-aware       latency_p99_ms=3.287  cpu_pct=91.0  error_rate=0.333
+candidate-4  high-throughput   latency_p99_ms=2.110  cpu_pct=97.0  error_rate=0.333
+```
+
+Follow-up commands for the same execution:
+
+```bash
+voidctl execution inspect exec-1775679556549
+voidctl execution events exec-1775679556549
+voidctl execution result exec-1775679556549
+voidctl execution runtime exec-1775679556549
+voidctl execution runtime exec-1775679556549 candidate-2
+```
+
 ## Install The `void-control` Skill
 
 The repo packages a `void-control` skill so Claude or Codex can operate the
