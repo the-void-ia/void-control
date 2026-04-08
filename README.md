@@ -230,6 +230,24 @@ Codex install entrypoint:
 Codex follows the same install pattern used by Superpowers: tell Codex to fetch
 and follow the repo-hosted `.codex/INSTALL.md` file.
 
+Example prompts after installation:
+
+- `Use the void-control skill to optimize this workload with a swarm.`
+- `Use the void-control skill to run this snapshot pipeline and summarize the result.`
+- `Use the void-control skill to inspect why this execution failed and resolve the runtime run behind it.`
+- `Use the void-control skill to generate a spec from this problem statement and submit it through voidctl.`
+- `Use the void-control skill to dispatch a swarm of agents for a complex problem, let it continue in the background, and later summarize the result.`
+
+For Claude-backed swarm/service runs, the skill should prefer the validated
+service pattern:
+
+- `agent.mode: service`
+- `llm.provider: claude`
+- `sandbox.network: true`
+- `agent.output_file` set
+- runtime-assets directory mount when possible
+- `agent.messaging.enabled: true` for sibling swarm candidates
+
 ## Notes
 
 - Dashboard uses daemon APIs (`/v1/runs`, `/v1/runs/{id}/events`, `/v1/runs/{id}/stages`, `/v1/runs/{id}/telemetry`).
