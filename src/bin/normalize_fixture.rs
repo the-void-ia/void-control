@@ -109,9 +109,10 @@ fn parse_event_line(value: &str, line_no: usize) -> Result<VoidBoxRunEventRaw, S
 
         match key {
             "ts_ms" => {
-                ts_ms = Some(raw.parse::<u64>().map_err(|_| {
-                    format!("line {}: invalid ts_ms '{}'", line_no, raw)
-                })?);
+                ts_ms = Some(
+                    raw.parse::<u64>()
+                        .map_err(|_| format!("line {}: invalid ts_ms '{}'", line_no, raw))?,
+                );
             }
             "event_type" => event_type = Some(raw.to_string()),
             "run_id" => {
@@ -121,9 +122,10 @@ fn parse_event_line(value: &str, line_no: usize) -> Result<VoidBoxRunEventRaw, S
             }
             "seq" => {
                 if !raw.is_empty() {
-                    seq = Some(raw.parse::<u64>().map_err(|_| {
-                        format!("line {}: invalid seq '{}'", line_no, raw)
-                    })?);
+                    seq = Some(
+                        raw.parse::<u64>()
+                            .map_err(|_| format!("line {}: invalid seq '{}'", line_no, raw))?,
+                    );
                 }
             }
             "payload" => {
@@ -141,8 +143,7 @@ fn parse_event_line(value: &str, line_no: usize) -> Result<VoidBoxRunEventRaw, S
     }
 
     Ok(VoidBoxRunEventRaw {
-        ts_ms: ts_ms
-            .ok_or_else(|| format!("line {}: event missing ts_ms", line_no))?,
+        ts_ms: ts_ms.ok_or_else(|| format!("line {}: event missing ts_ms", line_no))?,
         event_type: event_type
             .ok_or_else(|| format!("line {}: event missing event_type", line_no))?,
         run_id,
@@ -157,9 +158,9 @@ fn parse_payload(
 ) -> Result<BTreeMap<String, VoidBoxPayloadValue>, String> {
     let mut map = BTreeMap::new();
     for pair in value.split(',') {
-        let (key, raw) = pair.split_once(':').ok_or_else(|| {
-            format!("line {}: invalid payload pair '{}'", line_no, pair)
-        })?;
+        let (key, raw) = pair
+            .split_once(':')
+            .ok_or_else(|| format!("line {}: invalid payload pair '{}'", line_no, pair))?;
         map.insert(key.to_string(), parse_payload_value(raw));
     }
     Ok(map)
@@ -186,4 +187,3 @@ fn parse_payload_value(raw: &str) -> VoidBoxPayloadValue {
     }
     VoidBoxPayloadValue::String(raw.to_string())
 }
-

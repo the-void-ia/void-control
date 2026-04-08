@@ -1,120 +1,244 @@
-# Repository Guidelines
+# AGENTS.md — void-control
 
-## Project Structure & Module Organization
-This repository currently contains architecture and runtime-contract documentation for Void Control.
+`void-control` is the control-plane side of the Void stack. It owns runtime
+contract normalization, orchestration planning, persistence, bridge APIs, and
+the operator UI. It does not implement VM isolation or guest execution; that
+belongs to `void-box`.
 
-- `spec/`: Canonical specifications (for example, `spec/void-control-runtime-spec-v0.1.md`).
-- `LICENSE`: Project license.
+## System boundary
 
-When adding implementation code, keep the same separation of concerns defined in the spec:
-- Control-plane orchestration logic should be separate from runtime execution logic.
-- Add new specs to `spec/` and version them in the filename (for example, `*-v0.2.md`).
+- `void-control`:
+  - normalizes `void-box` daemon responses into a stable contract
+  - plans and tracks multi-candidate executions
+  - persists execution state, events, candidate records, and message-box data
+  - exposes bridge APIs for launch, dry-run, and policy operations
+  - provides the graph-first web UI
+- `void-box`:
+  - launches isolated runtime execution
+  - produces run, event, stage, and artifact data
+  - enforces sandbox/runtime behavior
 
-## Build, Test, and Development Commands
-Use Cargo for local development and validation:
+When changing code here, preserve that boundary. Control-plane orchestration and
+runtime transport concerns should stay separate.
 
-- `cargo test`: Run core unit tests (no optional JSON compatibility feature).
-- `cargo test --features serde`: Run JSON compatibility tests and fixture-based checks.
-- `cargo test --features serde runtime::void_box::`: Run live-daemon client contract tests (mocked transport).
-- `VOID_BOX_BASE_URL=http://127.0.0.1:3000 cargo test --features serde --test void_box_contract -- --ignored --nocapture`: Run live daemon contract gate tests (tests auto-generate fallback specs under `/tmp`).
-- Optional spec overrides for policy behavior checks:
-  - `VOID_BOX_TIMEOUT_SPEC_FILE`
-  - `VOID_BOX_PARALLEL_SPEC_FILE`
-  - `VOID_BOX_RETRY_SPEC_FILE`
-  - `VOID_BOX_NO_POLICY_SPEC_FILE`
-- `cargo run --example normalize_void_box_run`: Run the typed normalization example.
-- `cargo run --bin normalize_fixture -- fixtures/sample.vbrun`: Normalize from local fixture format.
+## Repository layout
 
-### Void-Box Production Image (for UI/real Claude runs)
+- `spec/`: canonical specifications and design contracts
+- `src/contract/`: runtime contract types, normalization, and compatibility logic
+- `src/runtime/`: runtime adapter implementations (`MockRuntime`, `VoidBoxRuntimeClient`)
+- `src/orchestration/`: planning, persistence, scheduling, reduction, strategies
+- `src/bridge.rs`: HTTP bridge for launch, dry-run, execution inspection, and policy patching
+- `src/bin/voidctl.rs`: CLI entrypoint and bridge server
+- `tests/`: orchestration, bridge, runtime, and compatibility coverage
+- `web/void-control-ux/`: React/Vite operator dashboard
+- `docs/`: architecture notes, release process, and internal plans/specs
 
-When validating real pipeline execution from `void-control` UI, use the production
-void-box rootfs from the sibling repository:
+## Module map
+
+### Rust library
+
+- `src/contract/`
+  - contract-facing API and normalization layer
+  - converts raw `void-box` payloads into stable `void-control` views
+- `src/runtime/`
+  - execution runtime abstraction plus mock and live `void-box` client
+  - provider launch injection for message-box inbox delivery
+- `src/orchestration/spec.rs`
+  - execution spec parsing and validation
+- `src/orchestration/variation.rs`
+  - candidate-generation sources such as `parameter_space`, `explicit`,
+    `leader_directed`, and `signal_reactive`
+- `src/orchestration/strategy.rs`
+  - swarm/search planning and reduction logic
+- `src/orchestration/message_box.rs`
+  - communication intent routing, inbox snapshots, and `MessageStats` extraction
+- `src/orchestration/store/`
+  - persisted execution, event, candidate, and message-box data
+- `src/orchestration/service.rs`
+  - orchestration coordinator; plans, dispatches, reduces, and persists
+- `src/orchestration/scheduler.rs`
+  - global execution/candidate dispatch ordering
+- `src/orchestration/reconcile.rs`
+  - restart/reload of persisted active work
+- `src/bridge.rs`
+  - serde-gated HTTP routes for UI/bridge workflows
+
+### Web UI
+
+- `web/void-control-ux/`
+  - graph-first operator dashboard
+  - reads daemon and bridge APIs
+  - build is the current validation gate for frontend changes
+
+## Core local commands
+
+Rust validation:
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test
+cargo test --features serde
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
+```
+
+UI validation:
+
+```bash
+cd web/void-control-ux
+npm ci
+npm run build
+```
+
+Bridge and UI local run:
+
+```bash
+cargo run --features serde --bin voidctl -- serve
+cd web/void-control-ux
+npm run dev -- --host 127.0.0.1 --port 3000
+```
+
+Canonical live swarm workflow:
 
 ```bash
 cd /home/diego/github/agent-infra/void-box
 TMPDIR=$PWD/target/tmp scripts/build_claude_rootfs.sh
-```
-
-Start daemon with production kernel/initramfs:
-
-```bash
-cd /home/diego/github/agent-infra/void-box
-export ANTHROPIC_API_KEY=sk-ant-...
 export VOID_BOX_KERNEL=/boot/vmlinuz-$(uname -r)
 export VOID_BOX_INITRAMFS=$PWD/target/void-box-rootfs.cpio.gz
+export ANTHROPIC_API_KEY=sk-ant-...
 cargo run --bin voidbox -- serve --listen 127.0.0.1:43100
 ```
 
-Start bridge (required for Launch modal spec upload/content mode):
+In a second terminal:
 
 ```bash
 cd /home/diego/github/void-control
 cargo run --features serde --bin voidctl -- serve
 ```
 
-Start UI:
+Submit the swarm execution from a third terminal:
 
 ```bash
-cd /home/diego/github/void-control/web/void-control-ux
-npm run dev -- --host 127.0.0.1 --port 3000
+cd /home/diego/github/void-control
+curl -sS -X POST http://127.0.0.1:43210/v1/executions \
+  -H 'Content-Type: text/yaml' \
+  --data-binary @examples/swarm-transform-optimization-3way.yaml
+```
+
+Use `examples/swarm-transform-optimization-3way.yaml` as the default live
+validation path. It is the more reliable three-candidate version of the
+Transform-02 swarm example. Keep `examples/swarm-transform-optimization.yaml`
+as the wider eight-candidate stress case.
+
+Monitor progress from the bridge:
+
+```bash
+curl -sS http://127.0.0.1:43210/v1/executions/<execution_id>
+```
+
+Swarm/service template requirements:
+
+- use the production `void-box` initramfs from `scripts/build_claude_rootfs.sh`
+- do not use `/tmp/void-box-test-rootfs.cpio.gz` for Claude-backed swarm runs
+- swarm runtime templates must set `agent.mode: service`
+- `agent.mode: service` requires `agent.output_file`
+- `agent.mode: service` must not set `agent.timeout_secs`
+
+Health check:
+
+```bash
+curl -sS http://127.0.0.1:43100/v1/health
+```
+
+Execution examples:
+
+```bash
+curl -sS -X POST http://127.0.0.1:43210/v1/executions \
+  -H 'Content-Type: text/yaml' \
+  --data-binary @examples/swarm-transform-optimization-3way.yaml
+
+curl -sS -X POST http://127.0.0.1:43210/v1/executions \
+  -H 'Content-Type: text/yaml' \
+  --data-binary @examples/swarm-transform-optimization.yaml
+
+curl -sS -X POST http://127.0.0.1:43210/v1/executions \
+  -H 'Content-Type: text/yaml' \
+  --data-binary @examples/search-rate-limit-optimization.yaml
 ```
 
 Important:
-- Do not use `/tmp/void-box-test-rootfs.cpio.gz` for production/runtime UI validation.
-- `target/void-box-rootfs.cpio.gz` is the expected production image path.
 
-### UI Debugging Requirement
+- top-level execution specs in `examples/*.yaml` are `void-control` documents
+- referenced files under `examples/runtime-templates/*.yaml` are runtime templates for `void-box`
+- non-interactive `voidctl` currently exposes `serve` and `help`; use the bridge
+  HTTP API or UI for execution create/dry-run flows
+- quote URLs that contain `?` when using `curl` from `zsh`
 
-For UI work in `web/void-control-ux`, browser automation/inspection is required.
-Do not rely on screenshot-only iteration when layout, DOM state, resize behavior,
-or graph rendering need verification.
+## Runtime compatibility commands
+
+Live daemon contract gate:
+
+```bash
+VOID_BOX_BASE_URL=http://127.0.0.1:43100 \
+cargo test --features serde --test void_box_contract -- --ignored --nocapture
+```
+
+Optional policy fixture overrides:
+
+- `VOID_BOX_TIMEOUT_SPEC_FILE`
+- `VOID_BOX_PARALLEL_SPEC_FILE`
+- `VOID_BOX_RETRY_SPEC_FILE`
+- `VOID_BOX_NO_POLICY_SPEC_FILE`
+
+## UI workflow expectations
+
+For UI work in `web/void-control-ux`, use browser automation/inspection for DOM,
+layout, resize, console, and network validation. Screenshots are fallback only.
 
 Preferred order:
 
-- Use configured browser MCP first.
-- If browser MCP is unavailable, install and use Playwright locally.
-- Screenshots are a fallback only, not the primary workflow.
+- configured browser MCP
+- local Playwright if browser MCP is unavailable
+- screenshots only when interactive inspection is impossible
 
-Current local browser MCP:
+## Documentation expectations
 
-- `chrome-devtools` is already configured in `~/.codex/config.toml`.
-- This should be the default tool for DOM inspection, layout debugging, console
-  errors, network checks, and viewport validation.
+- add new specs under `spec/` with versioned filenames
+- keep implementation-facing architecture notes in `docs/`
+- update `README.md`, `AGENTS.md`, or `docs/architecture.md` when behavior or
+  workflows change materially
 
-Playwright install fallback:
+## Testing expectations
 
-```bash
-cd /home/diego/github/void-control/web/void-control-ux
-npm install -D playwright
-npx playwright install chromium
-```
-
-If Playwright MCP is later added, prefer that over manual screenshots for UI
-inspection. No dedicated local skill currently exists in this repo for
-Playwright setup; use browser MCP or direct Playwright commands.
-
-## Coding Style & Naming Conventions
-For documentation and future code contributions:
-
-- Use clear, boundary-focused naming aligned with the spec (`Run`, `Stage`, `Attempt`, `Runtime`, `Controller`).
-- Keep Markdown headings hierarchical and concise.
-- Prefer short sections and bullet lists over long prose blocks.
-- Use ASCII unless a symbol is required for technical clarity.
-
-## Testing Guidelines
-- Keep contract tests in module `#[cfg(test)]` blocks close to conversion/runtime logic.
-- Add fixture-based tests for compatibility behavior under `--features serde`.
-- Validate both paths before PRs:
+- keep unit/contract tests close to the relevant Rust logic where practical
+- use integration tests in `tests/` for orchestration, bridge, and acceptance flows
+- before merging Rust changes, run:
+  - `cargo fmt --all -- --check`
+  - `cargo clippy --all-targets --all-features -- -D warnings`
   - `cargo test`
   - `cargo test --features serde`
+- before merging UI changes, also run:
+  - `npm run build` in `web/void-control-ux`
 
-## Commit & Pull Request Guidelines
-Git history is minimal (`Initial commit`), so adopt a consistent imperative style now:
+## Pre-commit
 
-- Commit format: `area: concise action` (example: `spec: clarify cancellation semantics`).
-- Keep commits focused to one concern.
+This repo uses a checked-in `.pre-commit-config.yaml` for local validation.
+
+Typical setup:
+
+```bash
+pip install pre-commit
+pre-commit install
+pre-commit run --all-files
+```
+
+## Commit and PR guidance
+
+- commit format: `area: concise action`
+- keep commits scoped to one concern
 - PRs should include:
-  - A short problem statement.
-  - A summary of what changed.
-  - Any spec sections affected (file paths + headings).
-  - Follow-up work, if intentionally deferred.
+  - problem statement
+  - summary of changes
+  - affected specs/docs
+  - verification commands run
+  - follow-up work, if intentionally deferred

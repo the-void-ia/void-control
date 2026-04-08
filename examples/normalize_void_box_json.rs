@@ -20,4 +20,3 @@ fn main() {
 fn main() {
     eprintln!("re-run with: cargo run --features serde --example normalize_void_box_json");
 }
-

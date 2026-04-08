@@ -47,10 +47,7 @@ fn run() -> Result<(), String> {
             println!("  voidctl help            # show this help");
             return Ok(());
         }
-        return Err(format!(
-            "unknown command '{}'. supported: serve, help",
-            cmd
-        ));
+        return Err(format!("unknown command '{}'. supported: serve, help", cmd));
     }
 
     #[derive(Debug, Default, Serialize, Deserialize)]
@@ -84,8 +81,17 @@ fn run() -> Result<(), String> {
             let tokens = head.split_whitespace().collect::<Vec<_>>();
 
             let command_candidates = [
-                "/run", "/status", "/events", "/logs", "/cancel", "/list", "/watch", "/resume",
-                "/help", "/exit",
+                "/run",
+                "/status",
+                "/events",
+                "/logs",
+                "/cancel",
+                "/list",
+                "/watch",
+                "/resume",
+                "/execution",
+                "/help",
+                "/exit",
             ];
 
             let mut out = Vec::new();
@@ -114,16 +120,19 @@ fn run() -> Result<(), String> {
             match cmd {
                 "/run" => {
                     options.extend(["--run-id", "--policy"]);
-                    if tokens.iter().any(|t| *t == "--policy") {
+                    if tokens.contains(&"--policy") {
                         options.extend(["fast", "balanced", "safe"]);
                     }
                 }
+                "/execution" => options.extend([
+                    "create", "dry-run", "list", "status", "pause", "resume", "cancel", "patch",
+                ]),
                 "/events" => options.push("--from"),
                 "/logs" => options.push("--follow"),
                 "/cancel" => options.push("--reason"),
                 "/list" => {
                     options.push("--state");
-                    if tokens.iter().any(|t| *t == "--state") {
+                    if tokens.contains(&"--state") {
                         options.extend(["active", "terminal"]);
                     }
                 }
@@ -173,6 +182,30 @@ fn run() -> Result<(), String> {
         },
         Resume {
             run_id: String,
+        },
+        ExecutionCreate {
+            spec: String,
+        },
+        ExecutionDryRun {
+            spec: String,
+        },
+        ExecutionList,
+        ExecutionStatus {
+            execution_id: String,
+        },
+        ExecutionPause {
+            execution_id: String,
+        },
+        ExecutionResume {
+            execution_id: String,
+        },
+        ExecutionCancel {
+            execution_id: String,
+        },
+        ExecutionPatch {
+            execution_id: String,
+            max_iterations: Option<u32>,
+            max_concurrent_candidates: Option<u32>,
         },
         Help,
         Exit,
@@ -251,7 +284,10 @@ fn run() -> Result<(), String> {
             "/run" => {
                 let spec = tokens
                     .next()
-                    .ok_or_else(|| "usage: /run <spec_file> [--run-id <id>] [--policy <preset|json>]".to_string())?
+                    .ok_or_else(|| {
+                        "usage: /run <spec_file> [--run-id <id>] [--policy <preset|json>]"
+                            .to_string()
+                    })?
                     .to_string();
                 let mut run_id = None;
                 let mut policy = None;
@@ -375,6 +411,110 @@ fn run() -> Result<(), String> {
                     .ok_or_else(|| "usage: /resume <run_id>".to_string())?
                     .to_string(),
             }),
+            "/execution" => {
+                let action = tokens.next().ok_or_else(|| {
+                    "usage: /execution <create|dry-run|list|status> [args]".to_string()
+                })?;
+                match action {
+                    "create" => Ok(Command::ExecutionCreate {
+                        spec: tokens
+                            .next()
+                            .ok_or_else(|| "usage: /execution create <spec_file>".to_string())?
+                            .to_string(),
+                    }),
+                    "dry-run" => Ok(Command::ExecutionDryRun {
+                        spec: tokens
+                            .next()
+                            .ok_or_else(|| "usage: /execution dry-run <spec_file>".to_string())?
+                            .to_string(),
+                    }),
+                    "list" => Ok(Command::ExecutionList),
+                    "status" => Ok(Command::ExecutionStatus {
+                        execution_id: tokens
+                            .next()
+                            .ok_or_else(|| "usage: /execution status <execution_id>".to_string())?
+                            .to_string(),
+                    }),
+                    "pause" => Ok(Command::ExecutionPause {
+                        execution_id: tokens
+                            .next()
+                            .ok_or_else(|| "usage: /execution pause <execution_id>".to_string())?
+                            .to_string(),
+                    }),
+                    "resume" => Ok(Command::ExecutionResume {
+                        execution_id: tokens
+                            .next()
+                            .ok_or_else(|| "usage: /execution resume <execution_id>".to_string())?
+                            .to_string(),
+                    }),
+                    "cancel" => Ok(Command::ExecutionCancel {
+                        execution_id: tokens
+                            .next()
+                            .ok_or_else(|| "usage: /execution cancel <execution_id>".to_string())?
+                            .to_string(),
+                    }),
+                    "patch" => {
+                        let execution_id = tokens
+                            .next()
+                            .ok_or_else(|| {
+                                "usage: /execution patch <execution_id> [--max-iterations N] [--max-concurrent-candidates N]".to_string()
+                            })?
+                            .to_string();
+                        let rest = tokens.collect::<Vec<_>>();
+                        let mut idx = 0usize;
+                        let mut max_iterations = None;
+                        let mut max_concurrent_candidates = None;
+                        while idx < rest.len() {
+                            match rest[idx] {
+                                "--max-iterations" => {
+                                    idx += 1;
+                                    if idx >= rest.len() {
+                                        return Err(
+                                            "missing value for --max-iterations".to_string()
+                                        );
+                                    }
+                                    max_iterations =
+                                        Some(rest[idx].parse::<u32>().map_err(|_| {
+                                            "invalid integer for --max-iterations".to_string()
+                                        })?);
+                                }
+                                "--max-concurrent-candidates" => {
+                                    idx += 1;
+                                    if idx >= rest.len() {
+                                        return Err(
+                                            "missing value for --max-concurrent-candidates"
+                                                .to_string(),
+                                        );
+                                    }
+                                    max_concurrent_candidates =
+                                        Some(rest[idx].parse::<u32>().map_err(|_| {
+                                            "invalid integer for --max-concurrent-candidates"
+                                                .to_string()
+                                        })?);
+                                }
+                                other => {
+                                    return Err(format!(
+                                        "unknown /execution patch option '{other}'"
+                                    ));
+                                }
+                            }
+                            idx += 1;
+                        }
+                        if max_iterations.is_none() && max_concurrent_candidates.is_none() {
+                            return Err(
+                                "usage: /execution patch <execution_id> [--max-iterations N] [--max-concurrent-candidates N]"
+                                    .to_string(),
+                            );
+                        }
+                        Ok(Command::ExecutionPatch {
+                            execution_id,
+                            max_iterations,
+                            max_concurrent_candidates,
+                        })
+                    }
+                    other => Err(format!("unknown /execution action '{other}'")),
+                }
+            }
             "/help" => Ok(Command::Help),
             "/exit" | "/quit" => Ok(Command::Exit),
             other => Err(format!("unknown command '{other}'")),
@@ -391,6 +531,14 @@ fn run() -> Result<(), String> {
   /list [--state active|terminal]
   /watch <run_id>
   /resume <run_id>
+  /execution create <spec_file>
+  /execution dry-run <spec_file>
+  /execution list
+  /execution status <execution_id>
+  /execution pause <execution_id>
+  /execution resume <execution_id>
+  /execution cancel <execution_id>
+  /execution patch <execution_id> [--max-iterations N] [--max-concurrent-candidates N]
   /help
   /exit
 
@@ -487,8 +635,8 @@ Policy presets: fast | balanced | safe"
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|e| format!("create session dir failed: {e}"))?;
         }
-        let serialized =
-            serde_json::to_string_pretty(session).map_err(|e| format!("serialize session failed: {e}"))?;
+        let serialized = serde_json::to_string_pretty(session)
+            .map_err(|e| format!("serialize session failed: {e}"))?;
         fs::write(path, serialized).map_err(|e| format!("write session failed: {e}"))
     }
 
@@ -601,8 +749,59 @@ Policy presets: fast | balanced | safe"
         let _ = io::stdout().flush();
     }
 
+    fn parse_host_port(base_url: &str) -> Result<(String, u16), String> {
+        let stripped = base_url
+            .strip_prefix("http://")
+            .ok_or_else(|| format!("bridge URL must start with http://, got '{base_url}'"))?;
+        let host_port = stripped.split('/').next().unwrap_or(stripped);
+        match host_port.split_once(':') {
+            Some((host, port)) => port
+                .parse::<u16>()
+                .map(|port| (host.to_string(), port))
+                .map_err(|_| format!("invalid port in bridge URL '{base_url}'")),
+            None => Ok((host_port.to_string(), 80)),
+        }
+    }
+
+    fn bridge_request(
+        base_url: &str,
+        method: &str,
+        path: &str,
+        body: Option<&str>,
+    ) -> Result<serde_json::Value, String> {
+        use std::io::{Read, Write};
+        use std::net::TcpStream;
+
+        let (host, port) = parse_host_port(base_url)?;
+        let mut stream = TcpStream::connect(format!("{host}:{port}"))
+            .map_err(|e| format!("connect failed: {e}"))?;
+        let body = body.unwrap_or("");
+        let request = format!(
+            "{method} {path} HTTP/1.1\r\nHost: {host}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream
+            .write_all(request.as_bytes())
+            .map_err(|e| format!("request write failed: {e}"))?;
+        let mut response = String::new();
+        stream
+            .read_to_string(&mut response)
+            .map_err(|e| format!("response read failed: {e}"))?;
+        let (_, body) = response
+            .split_once("\r\n\r\n")
+            .ok_or_else(|| "invalid HTTP response".to_string())?;
+        serde_json::from_str(body).map_err(|e| format!("invalid JSON response: {e}"))
+    }
+
+    fn load_execution_spec_file(path: &str) -> Result<String, String> {
+        fs::read_to_string(path).map_err(|e| format!("read execution spec failed: {e}"))
+    }
+
     let base_url =
         env::var("VOID_BOX_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:43100".to_string());
+    let bridge_base_url = env::var("VOID_CONTROL_BRIDGE_BASE_URL")
+        .unwrap_or_else(|_| "http://127.0.0.1:43210".to_string());
     let client = VoidBoxRuntimeClient::new(base_url.clone(), 250);
     let session_file = session_path();
     let mut session = load_session(&session_file);
@@ -672,6 +871,7 @@ Policy presets: fast | balanced | safe"
                 match client.start(StartRequest {
                     run_id: run_id.clone(),
                     workflow_spec: spec,
+                    launch_context: None,
                     policy,
                 }) {
                     Ok(started) => {
@@ -762,10 +962,9 @@ Policy presets: fast | balanced | safe"
                             run_id, stopped.state, stopped.terminal_event_id
                         );
                         session.last_selected_run = Some(run_id.clone());
-                        session.last_seen_event_id_by_run.insert(
-                            run_id,
-                            stopped.terminal_event_id,
-                        );
+                        session
+                            .last_seen_event_id_by_run
+                            .insert(run_id, stopped.terminal_event_id);
                     }
                     Err(err) => print_contract_error(&err),
                 }
@@ -799,6 +998,202 @@ Policy presets: fast | balanced | safe"
             Command::Resume { run_id } => {
                 session.last_selected_run = Some(run_id.clone());
                 stream_run(&client, &mut session, &run_id, false, true);
+            }
+            Command::ExecutionCreate { spec } => {
+                match load_execution_spec_file(&spec).and_then(|spec_text| {
+                    bridge_request(&bridge_base_url, "POST", "/v1/executions", Some(&spec_text))
+                }) {
+                    Ok(json) => println!(
+                        "execution_id={} status={} iterations={} best_candidate={}",
+                        json.get("execution_id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("-"),
+                        json.get("status")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown"),
+                        json.get("completed_iterations")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0),
+                        json.get("result_best_candidate_id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("-")
+                    ),
+                    Err(err) => println!("error: {err}"),
+                }
+            }
+            Command::ExecutionDryRun { spec } => {
+                match load_execution_spec_file(&spec).and_then(|spec_text| {
+                    bridge_request(
+                        &bridge_base_url,
+                        "POST",
+                        "/v1/executions/dry-run",
+                        Some(&spec_text),
+                    )
+                }) {
+                    Ok(json) => println!(
+                        "valid={} candidates_per_iteration={} max_iterations={} max_child_runs={}",
+                        json.get("valid").and_then(|v| v.as_bool()).unwrap_or(false),
+                        json.get("plan")
+                            .and_then(|v| v.get("candidates_per_iteration"))
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0),
+                        json.get("plan")
+                            .and_then(|v| v.get("max_iterations"))
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0),
+                        json.get("plan")
+                            .and_then(|v| v.get("max_child_runs"))
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0)
+                    ),
+                    Err(err) => println!("error: {err}"),
+                }
+            }
+            Command::ExecutionList => {
+                match bridge_request(&bridge_base_url, "GET", "/v1/executions", None) {
+                    Ok(json) => {
+                        let executions = json
+                            .get("executions")
+                            .and_then(|v| v.as_array())
+                            .cloned()
+                            .unwrap_or_default();
+                        if executions.is_empty() {
+                            println!("no executions");
+                        } else {
+                            for execution in executions {
+                                println!(
+                                    "execution_id={} status={} iterations={} best_candidate={}",
+                                    execution
+                                        .get("execution_id")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("-"),
+                                    execution
+                                        .get("status")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("unknown"),
+                                    execution
+                                        .get("completed_iterations")
+                                        .and_then(|v| v.as_u64())
+                                        .unwrap_or(0),
+                                    execution
+                                        .get("result_best_candidate_id")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("-")
+                                );
+                            }
+                        }
+                    }
+                    Err(err) => println!("error: {err}"),
+                }
+            }
+            Command::ExecutionStatus { execution_id } => match bridge_request(
+                &bridge_base_url,
+                "GET",
+                &format!("/v1/executions/{execution_id}"),
+                None,
+            ) {
+                Ok(json) => println!(
+                    "execution_id={} status={} iterations={} best_candidate={}",
+                    json.get("execution_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("-"),
+                    json.get("status")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown"),
+                    json.get("completed_iterations")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0),
+                    json.get("result_best_candidate_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("-")
+                ),
+                Err(err) => println!("error: {err}"),
+            },
+            Command::ExecutionPause { execution_id } => match bridge_request(
+                &bridge_base_url,
+                "POST",
+                &format!("/v1/executions/{execution_id}/pause"),
+                None,
+            ) {
+                Ok(json) => println!(
+                    "execution_id={} status={}",
+                    json.get("execution_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("-"),
+                    json.get("status")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown"),
+                ),
+                Err(err) => println!("error: {err}"),
+            },
+            Command::ExecutionResume { execution_id } => match bridge_request(
+                &bridge_base_url,
+                "POST",
+                &format!("/v1/executions/{execution_id}/resume"),
+                None,
+            ) {
+                Ok(json) => println!(
+                    "execution_id={} status={}",
+                    json.get("execution_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("-"),
+                    json.get("status")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown"),
+                ),
+                Err(err) => println!("error: {err}"),
+            },
+            Command::ExecutionCancel { execution_id } => match bridge_request(
+                &bridge_base_url,
+                "POST",
+                &format!("/v1/executions/{execution_id}/cancel"),
+                None,
+            ) {
+                Ok(json) => println!(
+                    "execution_id={} status={}",
+                    json.get("execution_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("-"),
+                    json.get("status")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown"),
+                ),
+                Err(err) => println!("error: {err}"),
+            },
+            Command::ExecutionPatch {
+                execution_id,
+                max_iterations,
+                max_concurrent_candidates,
+            } => {
+                let body = serde_json::json!({
+                    "budget": {
+                        "max_iterations": max_iterations
+                    },
+                    "concurrency": {
+                        "max_concurrent_candidates": max_concurrent_candidates
+                    }
+                })
+                .to_string();
+                match bridge_request(
+                    &bridge_base_url,
+                    "PATCH",
+                    &format!("/v1/executions/{execution_id}/policy"),
+                    Some(&body),
+                ) {
+                    Ok(json) => println!(
+                        "execution_id={} max_iterations={} max_concurrent_candidates={}",
+                        json.get("execution_id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("-"),
+                        json.get("max_iterations")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0),
+                        json.get("max_concurrent_candidates")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0)
+                    ),
+                    Err(err) => println!("error: {err}"),
+                }
             }
         }
 

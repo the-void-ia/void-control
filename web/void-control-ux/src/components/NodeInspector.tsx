@@ -347,7 +347,17 @@ export function NodeInspector({
     () => candidateStageNames(selectedEvent, events),
     [selectedEvent, events]
   );
-  const canProbeOutputFile = selectedEventPath === '/workspace/output.json';
+  const referencesStructuredOutputFailure = useMemo(
+    () =>
+      Boolean(
+        selectedEvent
+        && /structured output malformed|structured output missing|result\.json/i.test(selectedEventMessage)
+      ),
+    [selectedEvent, selectedEventMessage]
+  );
+  const canProbeOutputFile =
+    selectedEventPath === '/workspace/output.json'
+    || (referencesStructuredOutputFailure && outputStageCandidates.length > 0);
   const canOpenOutputFile = outputAvailabilityState === 'available' && Boolean(resolvedOutputStageName);
 
   useEffect(() => {

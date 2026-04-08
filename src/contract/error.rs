@@ -5,6 +5,12 @@ pub enum ContractErrorCode {
     NotFound,
     AlreadyTerminal,
     ResourceLimitExceeded,
+    StructuredOutputMissing,
+    StructuredOutputMalformed,
+    ArtifactNotFound,
+    ArtifactPublicationIncomplete,
+    ArtifactStoreUnavailable,
+    RetrievalTimeout,
     InternalError,
 }
 
@@ -16,11 +22,7 @@ pub struct ContractError {
 }
 
 impl ContractError {
-    pub fn new(
-        code: ContractErrorCode,
-        message: impl Into<String>,
-        retryable: bool,
-    ) -> Self {
+    pub fn new(code: ContractErrorCode, message: impl Into<String>, retryable: bool) -> Self {
         Self {
             code,
             message: message.into(),

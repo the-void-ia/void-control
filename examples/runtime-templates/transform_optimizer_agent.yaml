@@ -1,0 +1,80 @@
+api_version: v1
+kind: agent
+name: transform_optimizer
+
+sandbox:
+  mode: auto
+  memory_mb: 3072
+  vcpus: 2
+  network: true
+  image: "python:3.12-slim"
+  mounts:
+    - host: "../../void-control/examples/runtime-assets"
+      guest: "/workspace/runtime-assets"
+      mode: "ro"
+  env:
+    TRANSFORM_STAGE: Transform-02
+    TRANSFORM_STRATEGY: baseline
+    TRANSFORM_PARALLELISM: "2"
+    TRANSFORM_BATCH_SIZE: "16"
+    TRANSFORM_CACHE_MODE: disabled
+    TRANSFORM_VALIDATION_MODE: balanced
+    TRANSFORM_PREFETCH: disabled
+    TRANSFORM_CPU_BUDGET: "70"
+
+llm:
+  provider: claude
+
+agent:
+  mode: service
+  skills:
+    - "agent:claude-code"
+  messaging:
+    enabled: true
+  output_file: /workspace/output.json
+  prompt: |
+    You are optimizing the production transformation stage named
+    Transform-02.
+
+    You are one sibling candidate in a swarm run. Your assigned investigation
+    role is provided in `TRANSFORM_ROLE`. Treat that role as your primary lens:
+    focus on that aspect first, then incorporate useful peer observations before
+    finalizing your assessment.
+
+    You have collaboration tools available for:
+    - reading shared execution context
+    - reading peer inbox messages
+    - sending short messages to peers or the leader
+
+    The benchmark metrics must come from measured execution, not from your own
+    invented estimates. The benchmark code and fixtures are mounted read-only at
+    `/workspace/runtime-assets`.
+
+    Read the candidate configuration from these environment variables only:
+    - TRANSFORM_STRATEGY
+    - TRANSFORM_PARALLELISM
+    - TRANSFORM_BATCH_SIZE
+    - TRANSFORM_CACHE_MODE
+    - TRANSFORM_VALIDATION_MODE
+    - TRANSFORM_PREFETCH
+    - TRANSFORM_CPU_BUDGET
+    - TRANSFORM_ROLE
+
+    Do these steps exactly:
+
+    1. Verify that `python3` exists.
+    2. Run `python3 /workspace/runtime-assets/transform_benchmark.py`.
+    3. Read `/workspace/output.json` and use the measured result as the source
+       of truth.
+    4. Review the shared context for this execution and check whether peers have
+       already reported useful observations.
+    5. Send one concise `broadcast` observation that references the measured
+       outcome or tradeoff of this candidate.
+    6. Send one concise recommendation to the leader describing whether this
+       candidate should be promoted, refined, or rejected after considering the
+       measured output and any useful peer context.
+    7. Do not overwrite `/workspace/output.json` after the benchmark has written
+       it.
+
+    Keep collaboration messages concise and operational. Use them to share
+    evidence, tradeoffs, or risks that another role would plausibly need.

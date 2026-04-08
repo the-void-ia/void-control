@@ -227,11 +227,23 @@ Runtime MUST NOT:
 
 # 9. Mental Model
 
-`Run` = atomic orchestration unit (control plane scope)
+This specification defines the run-level contract between
+`void-control` and `void-box`.
 
-`Stage` = atomic isolation unit (runtime scope)
+At this boundary:
+
+`Run` = atomic runtime dispatch and tracking unit
+
+`Stage` = atomic isolation unit inside one run
 
 `microVM` = execution isolation boundary
 
-Controller orchestrates runs.
-Runtime orchestrates stages.
+Controller orchestrates runs at the runtime boundary.
+Runtime orchestrates stages inside a run.
+
+This does not prevent `void-control` from introducing a higher-level
+control-plane resource above `Run`, such as `Execution`, as long as:
+
+- `void-box` continues to accept and execute one run per runtime request,
+- stage orchestration remains inside `void-box`,
+- cross-run composition remains a control-plane concern.

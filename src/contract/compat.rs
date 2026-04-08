@@ -49,8 +49,10 @@ pub struct ConvertedRunView {
 
 pub fn map_void_box_status(status: &str) -> Option<RunState> {
     match status.to_ascii_lowercase().as_str() {
+        "pending" => Some(RunState::Pending),
+        "starting" => Some(RunState::Starting),
         "running" => Some(RunState::Running),
-        "completed" => Some(RunState::Succeeded),
+        "completed" | "succeeded" | "success" => Some(RunState::Succeeded),
         "failed" => Some(RunState::Failed),
         "cancelled" | "canceled" => Some(RunState::Canceled),
         _ => None,
@@ -112,14 +114,13 @@ pub fn from_void_box_run(run: &VoidBoxRunRaw) -> Result<ConvertedRunView, Contra
             seq,
             payload: flatten_payload(raw.payload.as_ref()),
         });
-
     }
 
     let mut tracker = EventSequenceTracker::default();
     for event in &events {
-        tracker.observe(event).map_err(|e| {
-            ContractError::new(ContractErrorCode::InvalidSpec, e, false)
-        })?;
+        tracker
+            .observe(event)
+            .map_err(|e| ContractError::new(ContractErrorCode::InvalidSpec, e, false))?;
     }
 
     let (started_at, updated_at) = derive_started_updated(&events);
@@ -222,8 +223,11 @@ mod tests {
 
     #[test]
     fn maps_void_box_status_values() {
+        assert_eq!(map_void_box_status("Pending"), Some(RunState::Pending));
+        assert_eq!(map_void_box_status("Starting"), Some(RunState::Starting));
         assert_eq!(map_void_box_status("Running"), Some(RunState::Running));
         assert_eq!(map_void_box_status("Completed"), Some(RunState::Succeeded));
+        assert_eq!(map_void_box_status("Succeeded"), Some(RunState::Succeeded));
         assert_eq!(map_void_box_status("Failed"), Some(RunState::Failed));
         assert_eq!(map_void_box_status("Cancelled"), Some(RunState::Canceled));
     }
@@ -381,7 +385,10 @@ mod tests {
         };
 
         let converted = from_void_box_run(&run).expect("conversion");
-        assert_eq!(converted.inspection.terminal_reason.as_deref(), Some("boom"));
+        assert_eq!(
+            converted.inspection.terminal_reason.as_deref(),
+            Some("boom")
+        );
     }
 
     #[test]
@@ -404,9 +411,15 @@ mod tests {
     #[test]
     fn flattens_scalar_payload_values() {
         let mut payload = BTreeMap::new();
-        payload.insert("a".to_string(), VoidBoxPayloadValue::String("x".to_string()));
+        payload.insert(
+            "a".to_string(),
+            VoidBoxPayloadValue::String("x".to_string()),
+        );
         payload.insert("b".to_string(), VoidBoxPayloadValue::Bool(true));
-        payload.insert("c".to_string(), VoidBoxPayloadValue::Unsupported("{}".to_string()));
+        payload.insert(
+            "c".to_string(),
+            VoidBoxPayloadValue::Unsupported("{}".to_string()),
+        );
 
         let run = VoidBoxRunRaw {
             id: "run-1".to_string(),
@@ -423,7 +436,10 @@ mod tests {
 
         let converted = from_void_box_run(&run).expect("conversion");
         assert_eq!(converted.events[0].payload.get("a"), Some(&"x".to_string()));
-        assert_eq!(converted.events[0].payload.get("b"), Some(&"true".to_string()));
+        assert_eq!(
+            converted.events[0].payload.get("b"),
+            Some(&"true".to_string())
+        );
         assert!(!converted.events[0].payload.contains_key("c"));
     }
 }

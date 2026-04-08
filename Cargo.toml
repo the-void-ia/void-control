@@ -6,10 +6,11 @@ license = "Apache-2.0"
 
 [features]
 default = []
-serde = ["dep:serde", "dep:serde_json", "dep:rustyline", "dep:tiny_http"]
+serde = ["dep:serde", "dep:serde_json", "dep:serde_yaml", "dep:rustyline", "dep:tiny_http"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"], optional = true }
 serde_json = { version = "1", optional = true }
+serde_yaml = { version = "0.9", optional = true }
 rustyline = { version = "14", optional = true }
 tiny_http = { version = "0.12", optional = true }

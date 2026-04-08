@@ -1,0 +1,32 @@
+repos:
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt
+        entry: cargo fmt --all -- --check
+        language: system
+        pass_filenames: false
+
+      - id: cargo-clippy
+        name: cargo clippy
+        entry: cargo clippy --all-targets --all-features -- -D warnings
+        language: system
+        pass_filenames: false
+
+      - id: cargo-test
+        name: cargo test
+        entry: cargo test
+        language: system
+        pass_filenames: false
+
+      - id: cargo-test-serde
+        name: cargo test --features serde
+        entry: cargo test --features serde
+        language: system
+        pass_filenames: false
+
+      - id: ui-build
+        name: ui build
+        entry: sh -c 'cd web/void-control-ux && npm run build'
+        language: system
+        pass_filenames: false

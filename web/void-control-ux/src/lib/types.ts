@@ -98,3 +98,132 @@ export interface StageOutputFile {
   contentType: string;
   sizeBytes: number;
 }
+
+export interface ExecutionInspection {
+  execution_id: string;
+  mode: string;
+  goal: string;
+  status: string;
+  result_best_candidate_id?: string | null;
+  completed_iterations?: number;
+  failure_counts?: {
+    total_candidate_failures?: number;
+  } | null;
+}
+
+export interface ExecutionProgress {
+  completed_iterations?: number;
+  scoring_history_len?: number;
+  event_count?: number;
+  last_event?: string | null;
+  candidate_queue_count?: number;
+  candidate_dispatch_count?: number;
+  candidate_output_count?: number;
+  queued_candidate_count?: number;
+  running_candidate_count?: number;
+  completed_candidate_count?: number;
+  failed_candidate_count?: number;
+  canceled_candidate_count?: number;
+  event_type_counts?: Record<string, number>;
+}
+
+export interface ExecutionResult {
+  best_candidate_id?: string | null;
+  completed_iterations?: number;
+  total_candidate_failures?: number;
+}
+
+export interface ExecutionDetailResponse {
+  execution: ExecutionInspection;
+  progress?: ExecutionProgress;
+  result?: ExecutionResult;
+  candidates: ExecutionCandidate[];
+}
+
+export interface ExecutionsListResponse {
+  executions: ExecutionInspection[];
+}
+
+export interface ExecutionEvent {
+  seq: number;
+  event_type: string;
+  timestamp?: string | null;
+  message?: string | null;
+  payload?: Record<string, unknown> | null;
+}
+
+export interface ExecutionEventsResponse {
+  execution_id: string;
+  events: ExecutionEvent[];
+}
+
+export interface ExecutionCandidate {
+  execution_id: string;
+  candidate_id: string;
+  created_seq: number;
+  iteration: number;
+  status: 'Queued' | 'Running' | 'Completed' | 'Failed' | 'Canceled' | string;
+  runtime_run_id?: string | null;
+  overrides?: Record<string, string>;
+  succeeded?: boolean | null;
+  metrics: Record<string, number>;
+}
+
+export interface SwarmHealthChip {
+  label: string;
+  tone: 'neutral' | 'good' | 'warn' | 'bad';
+}
+
+export interface SwarmIterationSummary {
+  iterationIndex: number;
+  iterationLabel: number;
+  candidateCount: number;
+  queued: number;
+  running: number;
+  outputReady: number;
+  scored: number;
+  failed: number;
+  completed: number;
+  bestCandidateId?: string | null;
+}
+
+export interface SwarmCandidateCard {
+  candidateId: string;
+  iterationIndex: number;
+  iterationLabel: number;
+  runtimeRunId?: string | null;
+  state:
+    | 'queued'
+    | 'running'
+    | 'output_ready'
+    | 'scored'
+    | 'failed'
+    | 'best'
+    | 'rejected'
+    | 'canceled';
+  metrics: {
+    latency?: string | null;
+    errorRate?: string | null;
+    cpu?: string | null;
+  };
+  reason?: string | null;
+}
+
+export interface SwarmExecutionSummary {
+  executionId: string;
+  mode: string;
+  goal: string;
+  status: string;
+  completedIterations: number;
+  currentIterationLabel: number;
+  bestCandidateId?: string | null;
+  counts: {
+    queued: number;
+    running: number;
+    outputReady: number;
+    scored: number;
+    failed: number;
+    completed: number;
+  };
+  healthChips: SwarmHealthChip[];
+}

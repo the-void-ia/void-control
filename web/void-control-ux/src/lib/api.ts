@@ -1,4 +1,8 @@
 import type {
+  ExecutionDetailResponse,
+  ExecutionEventsResponse,
+  ExecutionInspection,
+  ExecutionsListResponse,
   RunEvent,
   RunInspection,
   RunStagesResponse,
@@ -61,6 +65,35 @@ export async function getRuns(state?: 'active' | 'terminal'): Promise<RunInspect
   const query = state ? `?state=${state}` : '';
   const body = await requestJson<RunsListResponse>(`/v1/runs${query}`);
   return body.runs ?? [];
+}
+
+export async function getRuntimeHealth(): Promise<boolean> {
+  try {
+    await requestJson('/v1/health');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function getExecutions(): Promise<ExecutionInspection[]> {
+  const body = await requestJsonAt<ExecutionsListResponse>(controlBaseUrl, '/v1/executions');
+  return body.executions ?? [];
+}
+
+export async function getExecution(executionId: string): Promise<ExecutionDetailResponse> {
+  return requestJsonAt<ExecutionDetailResponse>(
+    controlBaseUrl,
+    `/v1/executions/${encodeURIComponent(executionId)}`
+  );
+}
+
+export async function getExecutionEvents(executionId: string) {
+  const body = await requestJsonAt<ExecutionEventsResponse>(
+    controlBaseUrl,
+    `/v1/executions/${encodeURIComponent(executionId)}/events`
+  );
+  return body.events ?? [];
 }
 
 export function getRunId(run: RunInspection): string {
@@ -140,6 +173,28 @@ export async function launchRunFromSpecText(params: {
       spec_format: params.specFormat
     })
   });
+}
+
+export async function createExecutionFromSpecText(params: {
+  specText: string;
+}): Promise<ExecutionInspection> {
+  const res = await fetch(`${controlBaseUrl}/v1/executions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/yaml' },
+    body: params.specText
+  });
+
+  if (!res.ok) {
+    let body = '';
+    try {
+      body = await res.text();
+    } catch {
+      body = '<no-body>';
+    }
+    throw new Error(`HTTP ${res.status} ${res.statusText}: ${body}`);
+  }
+
+  return (await res.json()) as ExecutionInspection;
 }
 
 export { runtimeBaseUrl as baseUrl, controlBaseUrl };

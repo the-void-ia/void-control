@@ -46,9 +46,16 @@ function validateSpecText(text: string): string[] {
   const errors: string[] = [];
   const kindMatch = /^\s*kind\s*:\s*([a-zA-Z0-9_-]+)\s*$/m.exec(trimmed);
   const kind = kindMatch?.[1]?.toLowerCase() ?? '';
+  const modeMatch = /^\s*mode\s*:\s*([a-zA-Z0-9_-]+)\s*$/m.exec(trimmed);
+  const hasGoal = /^\s*goal\s*:\s*/m.test(trimmed);
+
+  if (modeMatch && hasGoal) {
+    return [];
+  }
+
   if (!/^\s*api_version\s*:\s*/m.test(trimmed)) errors.push('Missing `api_version:`.');
   if (!kindMatch) {
-    errors.push('Missing `kind:`.');
+    errors.push('Missing `kind:` for runtime specs or `mode:` + `goal:` for orchestration specs.');
   } else if (kind !== 'workflow' && kind !== 'pipeline') {
     errors.push("`kind` must be `workflow` or `pipeline`.");
   }
@@ -109,7 +116,7 @@ export function LaunchRunModal({
     <div className="modal-overlay" onClick={onClose}>
       <div className="launch-modal" onClick={(e) => e.stopPropagation()}>
         <div className="launch-modal-head">
-          <h3>Launch Run</h3>
+          <h3>Launch Spec</h3>
           <button type="button" className="inspector-btn" onClick={onClose}>Close</button>
         </div>
 
@@ -119,7 +126,7 @@ export function LaunchRunModal({
             <input
               value={filePath}
               onChange={(e) => setFilePath(e.target.value)}
-              placeholder="/tmp/run.yaml"
+              placeholder="/tmp/spec.yaml"
             />
           </label>
           <label>
@@ -147,11 +154,11 @@ export function LaunchRunModal({
         </div>
 
         <label className="launch-spec-label">
-          <span>Spec Content (optional, for validation/review)</span>
+          <span>Spec Content (runtime or orchestration YAML)</span>
           <textarea
             value={specText}
             onChange={(e) => setSpecText(e.target.value)}
-            placeholder="Paste workflow or pipeline YAML here..."
+            placeholder="Paste workflow, pipeline, or swarm/search YAML here..."
           />
         </label>
 
@@ -164,8 +171,8 @@ export function LaunchRunModal({
         {submitError && <div className="launch-error-list">- {submitError}</div>}
 
         <div className="launch-note">
-          If spec content is provided, it is uploaded through the void-control bridge and launched automatically.
-          If spec content is empty, launch falls back to file-path mode (path must exist on daemon host).
+          If spec content is provided, the UI will try orchestration launch first and fall back to runtime launch for raw workflow/pipeline specs.
+          If spec content is empty, launch falls back to file-path mode and the path must exist on the daemon host.
         </div>
 
         <div className="launch-actions">
