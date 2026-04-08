@@ -5,8 +5,15 @@ package-lock.json
 package.json
 node_modules
 .claude
+!.claude/
+!.claude/skills/
+!.claude/skills/void-control/
+!.claude/skills/void-control/SKILL.md
 .idea
 .local-utils
+CLAUDE.local.md
+.claude/*.local.*
+.worktrees
 
 # Frontend build output and local env files
 web/void-control-ux/dist/

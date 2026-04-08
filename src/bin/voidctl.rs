@@ -13,6 +13,549 @@ fn main() {
 }
 
 #[cfg(feature = "serde")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ExecutionCommand {
+    Submit {
+        spec: Option<String>,
+        stdin: bool,
+    },
+    DryRun {
+        spec: Option<String>,
+        stdin: bool,
+    },
+    Watch {
+        execution_id: String,
+    },
+    Inspect {
+        execution_id: String,
+    },
+    Events {
+        execution_id: String,
+    },
+    Result {
+        execution_id: String,
+    },
+    Runtime {
+        execution_id: String,
+        candidate_id: Option<String>,
+    },
+}
+
+#[cfg(feature = "serde")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CliCommand {
+    Serve,
+    Help,
+    Interactive,
+    Execution(ExecutionCommand),
+}
+
+#[cfg(feature = "serde")]
+#[derive(Debug, Clone)]
+struct BridgeJsonResponse {
+    status: u16,
+    json: serde_json::Value,
+}
+
+#[cfg(feature = "serde")]
+fn execution_subcommand_candidates() -> &'static [&'static str] {
+    &[
+        "submit", "dry-run", "watch", "inspect", "events", "result", "runtime",
+    ]
+}
+
+#[cfg(feature = "serde")]
+fn parse_cli_args<I, S>(args: I) -> Result<CliCommand, String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let tokens = args
+        .into_iter()
+        .map(|s| s.as_ref().to_string())
+        .collect::<Vec<_>>();
+    let mut iter = tokens.iter().map(String::as_str);
+    let Some(head) = iter.next() else {
+        return Ok(CliCommand::Interactive);
+    };
+
+    match head {
+        "serve" => Ok(CliCommand::Serve),
+        "help" | "--help" | "-h" => Ok(CliCommand::Help),
+        "execution" => {
+            let action = iter
+                .next()
+                .ok_or_else(|| "usage: voidctl execution <submit|dry-run|watch|inspect|events|result|runtime> [args]".to_string())?;
+            match action {
+                "submit" => {
+                    parse_execution_file_or_stdin(&mut iter, "submit").map(|(spec, stdin)| {
+                        CliCommand::Execution(ExecutionCommand::Submit { spec, stdin })
+                    })
+                }
+                "dry-run" => {
+                    parse_execution_file_or_stdin(&mut iter, "dry-run").map(|(spec, stdin)| {
+                        CliCommand::Execution(ExecutionCommand::DryRun { spec, stdin })
+                    })
+                }
+                "watch" => {
+                    let execution_id = iter
+                        .next()
+                        .ok_or_else(|| "usage: voidctl execution watch <execution_id>".to_string())?
+                        .to_string();
+                    expect_no_more_args(
+                        &mut iter,
+                        "usage: voidctl execution watch <execution_id>",
+                    )?;
+                    Ok(CliCommand::Execution(ExecutionCommand::Watch {
+                        execution_id,
+                    }))
+                }
+                "inspect" => {
+                    let execution_id = iter
+                        .next()
+                        .ok_or_else(|| {
+                            "usage: voidctl execution inspect <execution_id>".to_string()
+                        })?
+                        .to_string();
+                    expect_no_more_args(
+                        &mut iter,
+                        "usage: voidctl execution inspect <execution_id>",
+                    )?;
+                    Ok(CliCommand::Execution(ExecutionCommand::Inspect {
+                        execution_id,
+                    }))
+                }
+                "events" => {
+                    let execution_id = iter
+                        .next()
+                        .ok_or_else(|| {
+                            "usage: voidctl execution events <execution_id>".to_string()
+                        })?
+                        .to_string();
+                    expect_no_more_args(
+                        &mut iter,
+                        "usage: voidctl execution events <execution_id>",
+                    )?;
+                    Ok(CliCommand::Execution(ExecutionCommand::Events {
+                        execution_id,
+                    }))
+                }
+                "result" => {
+                    let execution_id = iter
+                        .next()
+                        .ok_or_else(|| {
+                            "usage: voidctl execution result <execution_id>".to_string()
+                        })?
+                        .to_string();
+                    expect_no_more_args(
+                        &mut iter,
+                        "usage: voidctl execution result <execution_id>",
+                    )?;
+                    Ok(CliCommand::Execution(ExecutionCommand::Result {
+                        execution_id,
+                    }))
+                }
+                "runtime" => {
+                    let execution_id = iter
+                        .next()
+                        .ok_or_else(|| {
+                            "usage: voidctl execution runtime <execution_id> [candidate_id]"
+                                .to_string()
+                        })?
+                        .to_string();
+                    let candidate_id = iter.next().map(|s| s.to_string());
+                    if iter.next().is_some() {
+                        return Err(
+                            "usage: voidctl execution runtime <execution_id> [candidate_id]"
+                                .to_string(),
+                        );
+                    }
+                    Ok(CliCommand::Execution(ExecutionCommand::Runtime {
+                        execution_id,
+                        candidate_id,
+                    }))
+                }
+                other => Err(format!(
+                    "unknown execution subcommand '{other}'. supported: {}",
+                    execution_subcommand_candidates().join(", ")
+                )),
+            }
+        }
+        other => Err(format!(
+            "unknown command '{other}'. supported: serve, help, execution"
+        )),
+    }
+}
+
+#[cfg(feature = "serde")]
+fn parse_execution_file_or_stdin<'a, I>(
+    iter: &mut I,
+    action: &str,
+) -> Result<(Option<String>, bool), String>
+where
+    I: Iterator<Item = &'a str>,
+{
+    let mut spec = None;
+    let mut stdin = false;
+    for token in iter.by_ref() {
+        match token {
+            "--stdin" => {
+                if stdin || spec.is_some() {
+                    return Err(format!(
+                        "usage: voidctl execution {action} [<spec-path> | --stdin]"
+                    ));
+                }
+                stdin = true;
+            }
+            other => {
+                if stdin {
+                    return Err(format!("unexpected extra argument '{other}'"));
+                }
+                if spec.is_none() {
+                    spec = Some(other.to_string());
+                } else {
+                    return Err(format!("unexpected extra argument '{other}'"));
+                }
+            }
+        }
+    }
+
+    if !stdin && spec.is_none() {
+        return Err(format!(
+            "usage: voidctl execution {action} [<spec-path> | --stdin]"
+        ));
+    }
+
+    Ok((spec, stdin))
+}
+
+#[cfg(feature = "serde")]
+fn expect_no_more_args<I>(iter: &mut I, usage: &str) -> Result<(), String>
+where
+    I: Iterator,
+{
+    if iter.next().is_some() {
+        Err(usage.to_string())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(feature = "serde")]
+fn top_level_help_text() -> &'static str {
+    "voidctl commands:
+  voidctl                         # interactive terminal console
+  voidctl serve                   # start launch bridge (:43210 by default)
+  voidctl help                    # show this help
+  voidctl execution submit <spec-path>
+  voidctl execution submit --stdin
+  voidctl execution dry-run <spec-path>
+  voidctl execution dry-run --stdin
+  voidctl execution watch <execution-id>
+  voidctl execution inspect <execution-id>
+  voidctl execution events <execution-id>
+  voidctl execution result <execution-id>
+  voidctl execution runtime <execution-id> [candidate-id]"
+}
+
+#[cfg(feature = "serde")]
+fn parse_host_port(base_url: &str) -> Result<(String, u16), String> {
+    let stripped = base_url
+        .strip_prefix("http://")
+        .ok_or_else(|| format!("bridge URL must start with http://, got '{base_url}'"))?;
+    let host_port = stripped.split('/').next().unwrap_or(stripped);
+    match host_port.split_once(':') {
+        Some((host, port)) => port
+            .parse::<u16>()
+            .map(|port| (host.to_string(), port))
+            .map_err(|_| format!("invalid port in bridge URL '{base_url}'")),
+        None => Ok((host_port.to_string(), 80)),
+    }
+}
+
+#[cfg(feature = "serde")]
+fn bridge_request(
+    base_url: &str,
+    method: &str,
+    path: &str,
+    body: Option<&str>,
+) -> Result<BridgeJsonResponse, String> {
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+
+    let (host, port) = parse_host_port(base_url)?;
+    let mut stream =
+        TcpStream::connect(format!("{host}:{port}")).map_err(|e| format!("connect failed: {e}"))?;
+    let body = body.unwrap_or("");
+    let request = format!(
+        "{method} {path} HTTP/1.1\r\nHost: {host}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body
+    );
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|e| format!("request write failed: {e}"))?;
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .map_err(|e| format!("response read failed: {e}"))?;
+    let Some((headers, body)) = response.split_once("\r\n\r\n") else {
+        return Err("invalid HTTP response".to_string());
+    };
+    let Some(status_line) = headers.lines().next() else {
+        return Err("invalid HTTP response status line".to_string());
+    };
+    let Some(status) = status_line.split_whitespace().nth(1) else {
+        return Err("invalid HTTP response status line".to_string());
+    };
+    let status = status
+        .parse::<u16>()
+        .map_err(|_| "invalid HTTP status code".to_string())?;
+    let json = serde_json::from_str(body).map_err(|e| format!("invalid JSON response: {e}"))?;
+    Ok(BridgeJsonResponse { status, json })
+}
+
+#[cfg(feature = "serde")]
+fn load_execution_spec_file(path: &str) -> Result<String, String> {
+    std::fs::read_to_string(path).map_err(|e| format!("read execution spec failed: {e}"))
+}
+
+#[cfg(feature = "serde")]
+fn load_execution_spec_input(spec: Option<&str>, stdin: bool) -> Result<String, String> {
+    use std::io::Read;
+
+    if stdin {
+        let mut spec = String::new();
+        std::io::stdin()
+            .read_to_string(&mut spec)
+            .map_err(|e| format!("read stdin failed: {e}"))?;
+        if spec.trim().is_empty() {
+            return Err("stdin spec is empty".to_string());
+        }
+        return Ok(spec);
+    }
+
+    let Some(spec) = spec else {
+        return Err("spec path is required unless --stdin is used".to_string());
+    };
+    load_execution_spec_file(spec)
+}
+
+#[cfg(feature = "serde")]
+fn execution_status_is_terminal(status: &str) -> bool {
+    match status {
+        "Completed" | "Failed" | "Canceled" => true,
+        "Pending" | "Running" | "Paused" => false,
+        _ => false,
+    }
+}
+
+#[cfg(feature = "serde")]
+fn execution_progress_line(detail: &serde_json::Value) -> String {
+    let execution = detail.get("execution").unwrap_or(detail);
+    let progress = detail.get("progress").unwrap_or(&serde_json::Value::Null);
+    format!(
+        "execution_id={} status={} iterations={} queued={} running={} completed={} failed={} best_candidate={}",
+        execution
+            .get("execution_id")
+            .and_then(|value| value.as_str())
+            .unwrap_or("-"),
+        execution
+            .get("status")
+            .and_then(|value| value.as_str())
+            .unwrap_or("unknown"),
+        detail
+            .get("result")
+            .and_then(|value| value.get("completed_iterations"))
+            .and_then(|value| value.as_u64())
+            .unwrap_or(0),
+        progress
+            .get("queued_candidate_count")
+            .and_then(|value| value.as_u64())
+            .unwrap_or(0),
+        progress
+            .get("running_candidate_count")
+            .and_then(|value| value.as_u64())
+            .unwrap_or(0),
+        progress
+            .get("completed_candidate_count")
+            .and_then(|value| value.as_u64())
+            .unwrap_or(0),
+        progress
+            .get("failed_candidate_count")
+            .and_then(|value| value.as_u64())
+            .unwrap_or(0),
+        execution
+            .get("result_best_candidate_id")
+            .and_then(|value| value.as_str())
+            .unwrap_or("-")
+    )
+}
+
+#[cfg(feature = "serde")]
+fn print_execution_summary(detail: &serde_json::Value) {
+    let execution = detail.get("execution").unwrap_or(detail);
+    let result = detail.get("result").unwrap_or(&serde_json::Value::Null);
+    let progress = detail.get("progress").unwrap_or(&serde_json::Value::Null);
+    println!(
+        "execution_id={} status={} mode={} goal={} iterations={} best_candidate={}",
+        execution
+            .get("execution_id")
+            .and_then(|value| value.as_str())
+            .unwrap_or("-"),
+        execution
+            .get("status")
+            .and_then(|value| value.as_str())
+            .unwrap_or("unknown"),
+        execution
+            .get("mode")
+            .and_then(|value| value.as_str())
+            .unwrap_or("-"),
+        execution
+            .get("goal")
+            .and_then(|value| value.as_str())
+            .unwrap_or("-"),
+        result
+            .get("completed_iterations")
+            .or_else(|| execution.get("completed_iterations"))
+            .and_then(|value| value.as_u64())
+            .unwrap_or(0),
+        result
+            .get("best_candidate_id")
+            .or_else(|| execution.get("result_best_candidate_id"))
+            .and_then(|value| value.as_str())
+            .unwrap_or("-")
+    );
+    println!(
+        "queued={} running={} completed={} failed={} canceled={} last_event={}",
+        progress
+            .get("queued_candidate_count")
+            .and_then(|value| value.as_u64())
+            .unwrap_or(0),
+        progress
+            .get("running_candidate_count")
+            .and_then(|value| value.as_u64())
+            .unwrap_or(0),
+        progress
+            .get("completed_candidate_count")
+            .and_then(|value| value.as_u64())
+            .unwrap_or(0),
+        progress
+            .get("failed_candidate_count")
+            .and_then(|value| value.as_u64())
+            .unwrap_or(0),
+        progress
+            .get("canceled_candidate_count")
+            .and_then(|value| value.as_u64())
+            .unwrap_or(0),
+        progress
+            .get("last_event")
+            .and_then(|value| value.as_str())
+            .unwrap_or("-")
+    );
+}
+
+#[cfg(feature = "serde")]
+fn select_runtime_run(
+    detail: &serde_json::Value,
+    requested_candidate_id: Option<&str>,
+) -> Option<(String, String)> {
+    let execution = detail.get("execution").unwrap_or(detail);
+    let candidates = detail.get("candidates")?.as_array()?;
+    if let Some(requested_candidate_id) = requested_candidate_id {
+        for candidate in candidates {
+            let candidate_id = candidate
+                .get("candidate_id")
+                .and_then(|value| value.as_str());
+            if candidate_id != Some(requested_candidate_id) {
+                continue;
+            }
+            let runtime_run_id = candidate
+                .get("runtime_run_id")
+                .and_then(|value| value.as_str())?;
+            return Some((
+                requested_candidate_id.to_string(),
+                runtime_run_id.to_string(),
+            ));
+        }
+        return None;
+    }
+
+    let best_candidate_id = execution
+        .get("result_best_candidate_id")
+        .and_then(|value| value.as_str());
+    if let Some(best_candidate_id) = best_candidate_id {
+        for candidate in candidates {
+            let candidate_id = candidate
+                .get("candidate_id")
+                .and_then(|value| value.as_str());
+            if candidate_id != Some(best_candidate_id) {
+                continue;
+            }
+            let runtime_run_id = candidate
+                .get("runtime_run_id")
+                .and_then(|value| value.as_str())?;
+            return Some((best_candidate_id.to_string(), runtime_run_id.to_string()));
+        }
+    }
+
+    for candidate in candidates {
+        let status = candidate
+            .get("status")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        let runtime_run_id = candidate
+            .get("runtime_run_id")
+            .and_then(|value| value.as_str());
+        let candidate_id = candidate
+            .get("candidate_id")
+            .and_then(|value| value.as_str());
+        let (Some(runtime_run_id), Some(candidate_id)) = (runtime_run_id, candidate_id) else {
+            continue;
+        };
+        match status {
+            "Running" | "Completed" => {
+                return Some((candidate_id.to_string(), runtime_run_id.to_string()));
+            }
+            "Queued" | "Failed" | "Canceled" => {}
+            _ => {}
+        }
+    }
+
+    None
+}
+
+#[cfg(feature = "serde")]
+fn bridge_error_message(response: &BridgeJsonResponse) -> String {
+    let message = response
+        .json
+        .get("message")
+        .and_then(|value| value.as_str());
+    if let Some(message) = message {
+        return message.to_string();
+    }
+
+    let errors = response
+        .json
+        .get("errors")
+        .and_then(|value| value.as_array());
+    if let Some(errors) = errors {
+        let mut messages = Vec::new();
+        for error in errors {
+            let Some(error) = error.as_str() else {
+                continue;
+            };
+            messages.push(error.to_string());
+        }
+        if !messages.is_empty() {
+            return messages.join("; ");
+        }
+    }
+
+    format!("bridge request failed with status {}", response.status)
+}
+
+#[cfg(feature = "serde")]
 fn run() -> Result<(), String> {
     use std::collections::BTreeMap;
     use std::env;
@@ -35,19 +578,16 @@ fn run() -> Result<(), String> {
     };
     use void_control::runtime::VoidBoxRuntimeClient;
 
-    let mut args = env::args().skip(1);
-    if let Some(cmd) = args.next() {
-        if cmd == "serve" {
-            return void_control::bridge::run_bridge();
-        }
-        if cmd == "help" || cmd == "--help" || cmd == "-h" {
-            println!("voidctl commands:");
-            println!("  voidctl                 # interactive terminal console");
-            println!("  voidctl serve           # start launch bridge (:43210 by default)");
-            println!("  voidctl help            # show this help");
+    let args = env::args().skip(1).collect::<Vec<_>>();
+    let parsed_cli = parse_cli_args(args.iter().map(String::as_str))?;
+    match &parsed_cli {
+        CliCommand::Serve => return void_control::bridge::run_bridge(),
+        CliCommand::Help => {
+            println!("{}", top_level_help_text());
             return Ok(());
         }
-        return Err(format!("unknown command '{}'. supported: serve, help", cmd));
+        CliCommand::Execution(_) => {}
+        CliCommand::Interactive => {}
     }
 
     #[derive(Debug, Default, Serialize, Deserialize)]
@@ -749,59 +1289,289 @@ Policy presets: fast | balanced | safe"
         let _ = io::stdout().flush();
     }
 
-    fn parse_host_port(base_url: &str) -> Result<(String, u16), String> {
-        let stripped = base_url
-            .strip_prefix("http://")
-            .ok_or_else(|| format!("bridge URL must start with http://, got '{base_url}'"))?;
-        let host_port = stripped.split('/').next().unwrap_or(stripped);
-        match host_port.split_once(':') {
-            Some((host, port)) => port
-                .parse::<u16>()
-                .map(|port| (host.to_string(), port))
-                .map_err(|_| format!("invalid port in bridge URL '{base_url}'")),
-            None => Ok((host_port.to_string(), 80)),
-        }
-    }
-
-    fn bridge_request(
-        base_url: &str,
-        method: &str,
-        path: &str,
-        body: Option<&str>,
-    ) -> Result<serde_json::Value, String> {
-        use std::io::{Read, Write};
-        use std::net::TcpStream;
-
-        let (host, port) = parse_host_port(base_url)?;
-        let mut stream = TcpStream::connect(format!("{host}:{port}"))
-            .map_err(|e| format!("connect failed: {e}"))?;
-        let body = body.unwrap_or("");
-        let request = format!(
-            "{method} {path} HTTP/1.1\r\nHost: {host}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            body.len(),
-            body
-        );
-        stream
-            .write_all(request.as_bytes())
-            .map_err(|e| format!("request write failed: {e}"))?;
-        let mut response = String::new();
-        stream
-            .read_to_string(&mut response)
-            .map_err(|e| format!("response read failed: {e}"))?;
-        let (_, body) = response
-            .split_once("\r\n\r\n")
-            .ok_or_else(|| "invalid HTTP response".to_string())?;
-        serde_json::from_str(body).map_err(|e| format!("invalid JSON response: {e}"))
-    }
-
-    fn load_execution_spec_file(path: &str) -> Result<String, String> {
-        fs::read_to_string(path).map_err(|e| format!("read execution spec failed: {e}"))
-    }
-
     let base_url =
         env::var("VOID_BOX_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:43100".to_string());
     let bridge_base_url = env::var("VOID_CONTROL_BRIDGE_BASE_URL")
         .unwrap_or_else(|_| "http://127.0.0.1:43210".to_string());
+
+    if let CliCommand::Execution(command) = parsed_cli {
+        match command {
+            ExecutionCommand::Submit { spec, stdin } => {
+                let spec = load_execution_spec_input(spec.as_deref(), stdin)?;
+                match bridge_request(&bridge_base_url, "POST", "/v1/executions", Some(&spec)) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            return Err(bridge_error_message(&response));
+                        }
+                        print_execution_summary(&response.json);
+                    }
+                    Err(err) => return Err(err),
+                }
+                return Ok(());
+            }
+            ExecutionCommand::DryRun { spec, stdin } => {
+                let spec = load_execution_spec_input(spec.as_deref(), stdin)?;
+                match bridge_request(
+                    &bridge_base_url,
+                    "POST",
+                    "/v1/executions/dry-run",
+                    Some(&spec),
+                ) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            let valid = response
+                                .json
+                                .get("valid")
+                                .and_then(|value| value.as_bool())
+                                .unwrap_or(false);
+                            if valid {
+                                return Err(bridge_error_message(&response));
+                            }
+                            println!("valid=false");
+                            let errors = response
+                                .json
+                                .get("errors")
+                                .and_then(|value| value.as_array());
+                            let Some(errors) = errors else {
+                                return Err(bridge_error_message(&response));
+                            };
+                            for error in errors {
+                                let Some(error) = error.as_str() else {
+                                    continue;
+                                };
+                                println!("error={error}");
+                            }
+                            return Err("dry-run validation failed".to_string());
+                        }
+                        let json = response.json;
+                        println!(
+                            "valid={} candidates_per_iteration={} max_iterations={} max_child_runs={}",
+                            json.get("valid").and_then(|value| value.as_bool()).unwrap_or(false),
+                            json.get("plan")
+                                .and_then(|value| value.get("candidates_per_iteration"))
+                                .and_then(|value| value.as_u64())
+                                .unwrap_or(0),
+                            json.get("plan")
+                                .and_then(|value| value.get("max_iterations"))
+                                .and_then(|value| value.as_u64())
+                                .unwrap_or(0),
+                            json.get("plan")
+                                .and_then(|value| value.get("max_child_runs"))
+                                .and_then(|value| value.as_u64())
+                                .unwrap_or(0)
+                        );
+                    }
+                    Err(err) => return Err(err),
+                }
+                return Ok(());
+            }
+            ExecutionCommand::Watch { execution_id } => {
+                let mut last_line = String::new();
+                let mut last_event_seq = 0u64;
+                loop {
+                    let path = format!("/v1/executions/{execution_id}");
+                    match bridge_request(&bridge_base_url, "GET", &path, None) {
+                        Ok(response) => {
+                            if response.status >= 400 {
+                                return Err(bridge_error_message(&response));
+                            }
+                            let detail = response.json;
+                            let execution = detail.get("execution").unwrap_or(&detail);
+                            let line = execution_progress_line(&detail);
+                            if line != last_line {
+                                println!("{line}");
+                                last_line = line;
+                            }
+                            let path = format!("/v1/executions/{execution_id}/events");
+                            let response = bridge_request(&bridge_base_url, "GET", &path, None)?;
+                            if response.status >= 400 {
+                                return Err(bridge_error_message(&response));
+                            }
+                            let events = response
+                                .json
+                                .get("events")
+                                .and_then(|value| value.as_array());
+                            let Some(events) = events else {
+                                return Err("execution events response missing events".to_string());
+                            };
+                            for event in events {
+                                let seq = event
+                                    .get("seq")
+                                    .and_then(|value| value.as_u64())
+                                    .unwrap_or(0);
+                                if seq <= last_event_seq {
+                                    continue;
+                                }
+                                println!(
+                                    "event seq={} type={}",
+                                    seq,
+                                    event
+                                        .get("event_type")
+                                        .and_then(|value| value.as_str())
+                                        .unwrap_or("-")
+                                );
+                                last_event_seq = seq;
+                            }
+                            let status = execution
+                                .get("status")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("");
+                            if execution_status_is_terminal(status) {
+                                break;
+                            }
+                        }
+                        Err(err) => return Err(err),
+                    }
+                    std::thread::sleep(Duration::from_millis(1000));
+                }
+                return Ok(());
+            }
+            ExecutionCommand::Inspect { execution_id } => {
+                let path = format!("/v1/executions/{execution_id}");
+                match bridge_request(&bridge_base_url, "GET", &path, None) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            return Err(bridge_error_message(&response));
+                        }
+                        let detail = response.json;
+                        print_execution_summary(&detail);
+                        let candidates = detail
+                            .get("candidates")
+                            .and_then(|value| value.as_array())
+                            .cloned()
+                            .unwrap_or_default();
+                        for candidate in candidates {
+                            println!(
+                                "candidate_id={} status={} runtime_run_id={} metrics={}",
+                                candidate
+                                    .get("candidate_id")
+                                    .and_then(|value| value.as_str())
+                                    .unwrap_or("-"),
+                                candidate
+                                    .get("status")
+                                    .and_then(|value| value.as_str())
+                                    .unwrap_or("unknown"),
+                                candidate
+                                    .get("runtime_run_id")
+                                    .and_then(|value| value.as_str())
+                                    .unwrap_or("-"),
+                                candidate
+                                    .get("metrics")
+                                    .cloned()
+                                    .unwrap_or_else(|| serde_json::json!({}))
+                            );
+                        }
+                    }
+                    Err(err) => return Err(err),
+                }
+                return Ok(());
+            }
+            ExecutionCommand::Events { execution_id } => {
+                let path = format!("/v1/executions/{execution_id}/events");
+                match bridge_request(&bridge_base_url, "GET", &path, None) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            return Err(bridge_error_message(&response));
+                        }
+                        let events = response
+                            .json
+                            .get("events")
+                            .and_then(|value| value.as_array())
+                            .cloned()
+                            .unwrap_or_default();
+                        for event in events {
+                            println!(
+                                "seq={} event_type={}",
+                                event
+                                    .get("seq")
+                                    .and_then(|value| value.as_u64())
+                                    .unwrap_or(0),
+                                event
+                                    .get("event_type")
+                                    .and_then(|value| value.as_str())
+                                    .unwrap_or("-")
+                            );
+                        }
+                    }
+                    Err(err) => return Err(err),
+                }
+                return Ok(());
+            }
+            ExecutionCommand::Result { execution_id } => {
+                let path = format!("/v1/executions/{execution_id}");
+                match bridge_request(&bridge_base_url, "GET", &path, None) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            return Err(bridge_error_message(&response));
+                        }
+                        let detail = response.json;
+                        print_execution_summary(&detail);
+                        if let Some((candidate_id, runtime_run_id)) =
+                            select_runtime_run(&detail, None)
+                        {
+                            println!(
+                                "winner_candidate_id={} runtime_run_id={}",
+                                candidate_id, runtime_run_id
+                            );
+                        }
+                        let candidates = detail
+                            .get("candidates")
+                            .and_then(|value| value.as_array())
+                            .cloned()
+                            .unwrap_or_default();
+                        for candidate in candidates {
+                            println!(
+                                "candidate_id={} status={} succeeded={} metrics={}",
+                                candidate
+                                    .get("candidate_id")
+                                    .and_then(|value| value.as_str())
+                                    .unwrap_or("-"),
+                                candidate
+                                    .get("status")
+                                    .and_then(|value| value.as_str())
+                                    .unwrap_or("unknown"),
+                                candidate
+                                    .get("succeeded")
+                                    .and_then(|value| value.as_bool())
+                                    .map(|value| value.to_string())
+                                    .unwrap_or_else(|| "-".to_string()),
+                                candidate
+                                    .get("metrics")
+                                    .cloned()
+                                    .unwrap_or_else(|| serde_json::json!({}))
+                            );
+                        }
+                    }
+                    Err(err) => return Err(err),
+                }
+                return Ok(());
+            }
+            ExecutionCommand::Runtime {
+                execution_id,
+                candidate_id,
+            } => {
+                let path = format!("/v1/executions/{execution_id}");
+                match bridge_request(&bridge_base_url, "GET", &path, None) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            return Err(bridge_error_message(&response));
+                        }
+                        let runtime = select_runtime_run(&response.json, candidate_id.as_deref());
+                        let Some((candidate_id, runtime_run_id)) = runtime else {
+                            return Err("no runtime run found for execution".to_string());
+                        };
+                        println!(
+                            "execution_id={} candidate_id={} runtime_run_id={}",
+                            execution_id, candidate_id, runtime_run_id
+                        );
+                    }
+                    Err(err) => return Err(err),
+                }
+                return Ok(());
+            }
+        }
+    }
+
     let client = VoidBoxRuntimeClient::new(base_url.clone(), 250);
     let session_file = session_path();
     let mut session = load_session(&session_file);
@@ -1003,18 +1773,26 @@ Policy presets: fast | balanced | safe"
                 match load_execution_spec_file(&spec).and_then(|spec_text| {
                     bridge_request(&bridge_base_url, "POST", "/v1/executions", Some(&spec_text))
                 }) {
-                    Ok(json) => println!(
+                    Ok(response) => println!(
                         "execution_id={} status={} iterations={} best_candidate={}",
-                        json.get("execution_id")
+                        response
+                            .json
+                            .get("execution_id")
                             .and_then(|v| v.as_str())
                             .unwrap_or("-"),
-                        json.get("status")
+                        response
+                            .json
+                            .get("status")
                             .and_then(|v| v.as_str())
                             .unwrap_or("unknown"),
-                        json.get("completed_iterations")
+                        response
+                            .json
+                            .get("completed_iterations")
                             .and_then(|v| v.as_u64())
                             .unwrap_or(0),
-                        json.get("result_best_candidate_id")
+                        response
+                            .json
+                            .get("result_best_candidate_id")
                             .and_then(|v| v.as_str())
                             .unwrap_or("-")
                     ),
@@ -1030,18 +1808,28 @@ Policy presets: fast | balanced | safe"
                         Some(&spec_text),
                     )
                 }) {
-                    Ok(json) => println!(
+                    Ok(response) => println!(
                         "valid={} candidates_per_iteration={} max_iterations={} max_child_runs={}",
-                        json.get("valid").and_then(|v| v.as_bool()).unwrap_or(false),
-                        json.get("plan")
+                        response
+                            .json
+                            .get("valid")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false),
+                        response
+                            .json
+                            .get("plan")
                             .and_then(|v| v.get("candidates_per_iteration"))
                             .and_then(|v| v.as_u64())
                             .unwrap_or(0),
-                        json.get("plan")
+                        response
+                            .json
+                            .get("plan")
                             .and_then(|v| v.get("max_iterations"))
                             .and_then(|v| v.as_u64())
                             .unwrap_or(0),
-                        json.get("plan")
+                        response
+                            .json
+                            .get("plan")
                             .and_then(|v| v.get("max_child_runs"))
                             .and_then(|v| v.as_u64())
                             .unwrap_or(0)
@@ -1051,8 +1839,9 @@ Policy presets: fast | balanced | safe"
             }
             Command::ExecutionList => {
                 match bridge_request(&bridge_base_url, "GET", "/v1/executions", None) {
-                    Ok(json) => {
-                        let executions = json
+                    Ok(response) => {
+                        let executions = response
+                            .json
                             .get("executions")
                             .and_then(|v| v.as_array())
                             .cloned()
@@ -1092,18 +1881,26 @@ Policy presets: fast | balanced | safe"
                 &format!("/v1/executions/{execution_id}"),
                 None,
             ) {
-                Ok(json) => println!(
+                Ok(response) => println!(
                     "execution_id={} status={} iterations={} best_candidate={}",
-                    json.get("execution_id")
+                    response
+                        .json
+                        .get("execution_id")
                         .and_then(|v| v.as_str())
                         .unwrap_or("-"),
-                    json.get("status")
+                    response
+                        .json
+                        .get("status")
                         .and_then(|v| v.as_str())
                         .unwrap_or("unknown"),
-                    json.get("completed_iterations")
+                    response
+                        .json
+                        .get("completed_iterations")
                         .and_then(|v| v.as_u64())
                         .unwrap_or(0),
-                    json.get("result_best_candidate_id")
+                    response
+                        .json
+                        .get("result_best_candidate_id")
                         .and_then(|v| v.as_str())
                         .unwrap_or("-")
                 ),
@@ -1115,12 +1912,16 @@ Policy presets: fast | balanced | safe"
                 &format!("/v1/executions/{execution_id}/pause"),
                 None,
             ) {
-                Ok(json) => println!(
+                Ok(response) => println!(
                     "execution_id={} status={}",
-                    json.get("execution_id")
+                    response
+                        .json
+                        .get("execution_id")
                         .and_then(|v| v.as_str())
                         .unwrap_or("-"),
-                    json.get("status")
+                    response
+                        .json
+                        .get("status")
                         .and_then(|v| v.as_str())
                         .unwrap_or("unknown"),
                 ),
@@ -1132,12 +1933,16 @@ Policy presets: fast | balanced | safe"
                 &format!("/v1/executions/{execution_id}/resume"),
                 None,
             ) {
-                Ok(json) => println!(
+                Ok(response) => println!(
                     "execution_id={} status={}",
-                    json.get("execution_id")
+                    response
+                        .json
+                        .get("execution_id")
                         .and_then(|v| v.as_str())
                         .unwrap_or("-"),
-                    json.get("status")
+                    response
+                        .json
+                        .get("status")
                         .and_then(|v| v.as_str())
                         .unwrap_or("unknown"),
                 ),
@@ -1149,12 +1954,16 @@ Policy presets: fast | balanced | safe"
                 &format!("/v1/executions/{execution_id}/cancel"),
                 None,
             ) {
-                Ok(json) => println!(
+                Ok(response) => println!(
                     "execution_id={} status={}",
-                    json.get("execution_id")
+                    response
+                        .json
+                        .get("execution_id")
                         .and_then(|v| v.as_str())
                         .unwrap_or("-"),
-                    json.get("status")
+                    response
+                        .json
+                        .get("status")
                         .and_then(|v| v.as_str())
                         .unwrap_or("unknown"),
                 ),
@@ -1180,15 +1989,21 @@ Policy presets: fast | balanced | safe"
                     &format!("/v1/executions/{execution_id}/policy"),
                     Some(&body),
                 ) {
-                    Ok(json) => println!(
+                    Ok(response) => println!(
                         "execution_id={} max_iterations={} max_concurrent_candidates={}",
-                        json.get("execution_id")
+                        response
+                            .json
+                            .get("execution_id")
                             .and_then(|v| v.as_str())
                             .unwrap_or("-"),
-                        json.get("max_iterations")
+                        response
+                            .json
+                            .get("max_iterations")
                             .and_then(|v| v.as_u64())
                             .unwrap_or(0),
-                        json.get("max_concurrent_candidates")
+                        response
+                            .json
+                            .get("max_concurrent_candidates")
                             .and_then(|v| v.as_u64())
                             .unwrap_or(0)
                     ),
@@ -1203,4 +2018,292 @@ Policy presets: fast | balanced | safe"
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_execution_submit_with_spec_path() {
+        let command = parse_cli_args(["execution", "submit", "spec.yaml"]).unwrap();
+        assert_eq!(
+            command,
+            CliCommand::Execution(ExecutionCommand::Submit {
+                spec: Some("spec.yaml".to_string()),
+                stdin: false,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_execution_submit_from_stdin() {
+        let command = parse_cli_args(["execution", "submit", "--stdin"]).unwrap();
+        assert_eq!(
+            command,
+            CliCommand::Execution(ExecutionCommand::Submit {
+                spec: None,
+                stdin: true,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_execution_dry_run_with_spec_path() {
+        let command = parse_cli_args(["execution", "dry-run", "spec.yaml"]).unwrap();
+        assert_eq!(
+            command,
+            CliCommand::Execution(ExecutionCommand::DryRun {
+                spec: Some("spec.yaml".to_string()),
+                stdin: false,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_execution_dry_run_from_stdin() {
+        let command = parse_cli_args(["execution", "dry-run", "--stdin"]).unwrap();
+        assert_eq!(
+            command,
+            CliCommand::Execution(ExecutionCommand::DryRun {
+                spec: None,
+                stdin: true,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_execution_watch() {
+        let command = parse_cli_args(["execution", "watch", "exec-1"]).unwrap();
+        assert_eq!(
+            command,
+            CliCommand::Execution(ExecutionCommand::Watch {
+                execution_id: "exec-1".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_execution_inspect() {
+        let command = parse_cli_args(["execution", "inspect", "exec-1"]).unwrap();
+        assert_eq!(
+            command,
+            CliCommand::Execution(ExecutionCommand::Inspect {
+                execution_id: "exec-1".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_execution_events() {
+        let command = parse_cli_args(["execution", "events", "exec-1"]).unwrap();
+        assert_eq!(
+            command,
+            CliCommand::Execution(ExecutionCommand::Events {
+                execution_id: "exec-1".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_execution_result() {
+        let command = parse_cli_args(["execution", "result", "exec-1"]).unwrap();
+        assert_eq!(
+            command,
+            CliCommand::Execution(ExecutionCommand::Result {
+                execution_id: "exec-1".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_execution_runtime_with_optional_candidate() {
+        let command = parse_cli_args(["execution", "runtime", "exec-1", "cand-2"]).unwrap();
+        assert_eq!(
+            command,
+            CliCommand::Execution(ExecutionCommand::Runtime {
+                execution_id: "exec-1".to_string(),
+                candidate_id: Some("cand-2".to_string()),
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_extra_execution_watch_args() {
+        let err = parse_cli_args(["execution", "watch", "exec-1", "extra"]).unwrap_err();
+        assert!(err.contains("usage: voidctl execution watch <execution_id>"));
+    }
+
+    #[test]
+    fn rejects_extra_execution_submit_stdin_args() {
+        let err = parse_cli_args(["execution", "submit", "--stdin", "extra"]).unwrap_err();
+        assert!(err.contains("unexpected extra argument"));
+    }
+
+    #[test]
+    fn completes_execution_subcommands() {
+        let completions = execution_subcommand_candidates();
+        assert!(completions.contains(&"submit"));
+        assert!(completions.contains(&"dry-run"));
+        assert!(completions.contains(&"watch"));
+        assert!(completions.contains(&"inspect"));
+        assert!(completions.contains(&"events"));
+        assert!(completions.contains(&"result"));
+        assert!(completions.contains(&"runtime"));
+    }
+
+    #[test]
+    fn top_level_help_mentions_execution_commands() {
+        let help = top_level_help_text();
+        assert!(help.contains("voidctl execution submit <spec-path>"));
+        assert!(help.contains("voidctl execution dry-run --stdin"));
+        assert!(help.contains("voidctl execution watch <execution-id>"));
+        assert!(help.contains("voidctl execution inspect <execution-id>"));
+        assert!(help.contains("voidctl execution events <execution-id>"));
+        assert!(help.contains("voidctl execution result <execution-id>"));
+        assert!(help.contains("voidctl execution runtime <execution-id> [candidate-id]"));
+    }
+
+    #[test]
+    fn parses_host_port_without_explicit_port() {
+        assert_eq!(
+            parse_host_port("http://127.0.0.1").unwrap(),
+            ("127.0.0.1".to_string(), 80)
+        );
+    }
+
+    #[test]
+    fn bridge_error_message_prefers_message_field() {
+        let response = BridgeJsonResponse {
+            status: 400,
+            json: serde_json::json!({
+                "message": "bad request"
+            }),
+        };
+
+        assert_eq!(bridge_error_message(&response), "bad request");
+    }
+
+    #[test]
+    fn bridge_error_message_joins_errors_array() {
+        let response = BridgeJsonResponse {
+            status: 400,
+            json: serde_json::json!({
+                "errors": ["bad one", "bad two"]
+            }),
+        };
+
+        assert_eq!(bridge_error_message(&response), "bad one; bad two");
+    }
+
+    #[test]
+    fn execution_progress_line_formats_execution_detail() {
+        let detail = serde_json::json!({
+            "execution": {
+                "execution_id": "exec-1",
+                "status": "Running",
+                "result_best_candidate_id": "candidate-2"
+            },
+            "result": {
+                "completed_iterations": 2
+            },
+            "progress": {
+                "queued_candidate_count": 1,
+                "running_candidate_count": 2,
+                "completed_candidate_count": 3,
+                "failed_candidate_count": 4
+            }
+        });
+
+        assert_eq!(
+            execution_progress_line(&detail),
+            "execution_id=exec-1 status=Running iterations=2 queued=1 running=2 completed=3 failed=4 best_candidate=candidate-2"
+        );
+    }
+
+    #[test]
+    fn execution_status_is_terminal_distinguishes_running_from_completed() {
+        assert!(!execution_status_is_terminal("Running"));
+        assert!(execution_status_is_terminal("Completed"));
+    }
+
+    #[test]
+    fn select_runtime_run_prefers_requested_candidate() {
+        let detail = serde_json::json!({
+            "execution": {
+                "execution_id": "exec-1",
+                "result_best_candidate_id": "candidate-1"
+            },
+            "candidates": [
+                {
+                    "candidate_id": "candidate-1",
+                    "status": "Completed",
+                    "runtime_run_id": "run-1"
+                },
+                {
+                    "candidate_id": "candidate-2",
+                    "status": "Completed",
+                    "runtime_run_id": "run-2"
+                }
+            ]
+        });
+
+        assert_eq!(
+            select_runtime_run(&detail, Some("candidate-2")),
+            Some(("candidate-2".to_string(), "run-2".to_string()))
+        );
+    }
+
+    #[test]
+    fn select_runtime_run_falls_back_to_best_candidate() {
+        let detail = serde_json::json!({
+            "execution": {
+                "execution_id": "exec-1",
+                "result_best_candidate_id": "candidate-2"
+            },
+            "candidates": [
+                {
+                    "candidate_id": "candidate-1",
+                    "status": "Running",
+                    "runtime_run_id": "run-1"
+                },
+                {
+                    "candidate_id": "candidate-2",
+                    "status": "Completed",
+                    "runtime_run_id": "run-2"
+                }
+            ]
+        });
+
+        assert_eq!(
+            select_runtime_run(&detail, None),
+            Some(("candidate-2".to_string(), "run-2".to_string()))
+        );
+    }
+
+    #[test]
+    fn select_runtime_run_falls_back_to_running_candidate() {
+        let detail = serde_json::json!({
+            "execution": {
+                "execution_id": "exec-1"
+            },
+            "candidates": [
+                {
+                    "candidate_id": "candidate-1",
+                    "status": "Queued",
+                    "runtime_run_id": "run-1"
+                },
+                {
+                    "candidate_id": "candidate-2",
+                    "status": "Running",
+                    "runtime_run_id": "run-2"
+                }
+            ]
+        });
+
+        assert_eq!(
+            select_runtime_run(&detail, None),
+            Some(("candidate-2".to_string(), "run-2".to_string()))
+        );
+    }
 }

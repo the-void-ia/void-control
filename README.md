@@ -177,6 +177,39 @@ pre-commit run --all-files
 cargo run --features serde --bin voidctl
 ```
 
+## CLI Operator Flow
+
+The non-interactive `voidctl execution ...` commands are the terminal equivalent
+of the UI launcher and inspector.
+
+Submit an orchestration spec:
+
+```bash
+voidctl execution submit examples/swarm-transform-optimization-3way.yaml
+```
+
+Dry-run the same spec:
+
+```bash
+voidctl execution dry-run examples/swarm-transform-optimization-3way.yaml
+```
+
+Submit a generated spec from stdin:
+
+```bash
+cat generated.yaml | voidctl execution submit --stdin
+```
+
+Inspect and follow an execution:
+
+```bash
+voidctl execution watch <execution-id>
+voidctl execution inspect <execution-id>
+voidctl execution events <execution-id>
+voidctl execution result <execution-id>
+voidctl execution runtime <execution-id>
+```
+
 ## Notes
 
 - Dashboard uses daemon APIs (`/v1/runs`, `/v1/runs/{id}/events`, `/v1/runs/{id}/stages`, `/v1/runs/{id}/telemetry`).
