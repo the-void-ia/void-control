@@ -210,6 +210,26 @@ voidctl execution result <execution-id>
 voidctl execution runtime <execution-id>
 ```
 
+## Install The `void-control` Skill
+
+The repo packages a `void-control` skill so Claude or Codex can operate the
+control plane from the terminal instead of the UI.
+
+Canonical skill source:
+
+- [`skills/void-control/SKILL.md`](skills/void-control/SKILL.md)
+
+Claude wrapper:
+
+- [`.claude/skills/void-control/SKILL.md`](.claude/skills/void-control/SKILL.md)
+
+Codex install entrypoint:
+
+- [`.codex/INSTALL.md`](.codex/INSTALL.md)
+
+Codex follows the same install pattern used by Superpowers: tell Codex to fetch
+and follow the repo-hosted `.codex/INSTALL.md` file.
+
 ## Notes
 
 - Dashboard uses daemon APIs (`/v1/runs`, `/v1/runs/{id}/events`, `/v1/runs/{id}/stages`, `/v1/runs/{id}/telemetry`).
