@@ -369,8 +369,7 @@ fn bridge_transform_swarm_one_iteration_acceptance_against_live_daemon() {
 
     let terminal = terminal.expect("execution should reach terminal state");
     assert_eq!(
-        terminal.json["execution"]["status"],
-        "Completed",
+        terminal.json["execution"]["status"], "Completed",
         "execution payload={}",
         terminal.json
     );

@@ -383,7 +383,10 @@ fn candidate_completes_when_sidecar_intent_drain_fails_after_terminal_output() {
         .find(|candidate| candidate.candidate_id == "candidate-1")
         .expect("candidate should exist");
     assert_eq!(candidate.status, CandidateStatus::Completed);
-    assert_eq!(candidate.runtime_run_id.as_deref(), Some("exec-run-candidate-1"));
+    assert_eq!(
+        candidate.runtime_run_id.as_deref(),
+        Some("exec-run-candidate-1")
+    );
 
     let intents = store
         .load_intents(&execution.execution_id)
@@ -656,7 +659,7 @@ fn launch_spec() -> ExecutionSpec {
         mode: "swarm".to_string(),
         goal: "delivery adapter test".to_string(),
         workflow: WorkflowTemplateRef {
-            template: "workflow-template".to_string(),
+            template: temp_workflow_template("message-delivery-launch").to_string(),
         },
         policy: OrchestrationPolicy::default(),
         evaluation: EvaluationConfig {
@@ -681,7 +684,7 @@ fn two_iteration_swarm_spec() -> ExecutionSpec {
         mode: "swarm".to_string(),
         goal: "delivery routing".to_string(),
         workflow: WorkflowTemplateRef {
-            template: "workflow-template".to_string(),
+            template: temp_workflow_template("message-delivery-routing").to_string(),
         },
         policy: OrchestrationPolicy {
             budget: void_control::orchestration::BudgetPolicy {
@@ -741,4 +744,26 @@ fn temp_store_root(label: &str) -> PathBuf {
     let dir = env::temp_dir().join(format!("void-control-{label}-{nanos}"));
     fs::create_dir_all(&dir).expect("create temp dir");
     dir
+}
+
+fn temp_workflow_template(label: &str) -> String {
+    let path = temp_store_root(label).join("workflow-template.yaml");
+    fs::write(
+        &path,
+        r#"api_version: v1
+kind: agent
+name: message-delivery-test
+
+sandbox:
+  mode: auto
+
+llm:
+  provider: claude
+
+agent:
+  prompt: baseline
+"#,
+    )
+    .expect("write workflow template");
+    path.to_string_lossy().into_owned()
 }

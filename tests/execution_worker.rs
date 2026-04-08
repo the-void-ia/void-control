@@ -76,8 +76,12 @@ fn bridge_worker_resumes_running_candidate_even_without_queued_candidates() {
     let root = temp_store_dir("bridge-worker-running-only");
     let store = FsExecutionStore::new(root.clone());
     let spec = single_candidate_spec();
-    ExecutionService::<StepwiseRuntime>::submit_execution(&store, "exec-bridge-running-only", &spec)
-        .expect("submit");
+    ExecutionService::<StepwiseRuntime>::submit_execution(
+        &store,
+        "exec-bridge-running-only",
+        &spec,
+    )
+    .expect("submit");
 
     void_control::bridge::process_pending_executions_once_for_test(
         GlobalConfig {
@@ -87,14 +91,19 @@ fn bridge_worker_resumes_running_candidate_even_without_queued_candidates() {
             1,
             [(
                 "exec-run-candidate-1",
-                output("candidate-1", &[("latency_p99_ms", 90.0), ("cost_usd", 0.03)]),
+                output(
+                    "candidate-1",
+                    &[("latency_p99_ms", 90.0), ("cost_usd", 0.03)],
+                ),
             )],
         ),
         root.clone(),
     )
     .expect("first bridge tick");
 
-    let first = store.load_execution("exec-bridge-running-only").expect("reload");
+    let first = store
+        .load_execution("exec-bridge-running-only")
+        .expect("reload");
     assert_eq!(first.candidates.len(), 1);
     assert_eq!(first.candidates[0].status, CandidateStatus::Running);
 
@@ -106,14 +115,19 @@ fn bridge_worker_resumes_running_candidate_even_without_queued_candidates() {
             0,
             [(
                 "exec-run-candidate-1",
-                output("candidate-1", &[("latency_p99_ms", 90.0), ("cost_usd", 0.03)]),
+                output(
+                    "candidate-1",
+                    &[("latency_p99_ms", 90.0), ("cost_usd", 0.03)],
+                ),
             )],
         ),
         root,
     )
     .expect("second bridge tick");
 
-    let second = store.load_execution("exec-bridge-running-only").expect("reload");
+    let second = store
+        .load_execution("exec-bridge-running-only")
+        .expect("reload");
     assert_eq!(second.candidates[0].status, CandidateStatus::Completed);
     assert_eq!(second.execution.status, ExecutionStatus::Completed);
 }
@@ -235,7 +249,9 @@ fn bridge_worker_dispatches_multiple_candidates_up_to_execution_concurrency() {
     )
     .expect("bridge tick");
 
-    let snapshot = store.load_execution("exec-bridge-parallel").expect("reload");
+    let snapshot = store
+        .load_execution("exec-bridge-parallel")
+        .expect("reload");
     assert_eq!(
         snapshot
             .candidates
@@ -454,9 +470,14 @@ fn dispatch_execution_once_persists_running_candidate_for_nonterminal_run() {
         StepwiseRuntime::new(1),
         store.clone(),
     );
-    planner.plan_execution("exec-dispatch-running").expect("plan");
+    planner
+        .plan_execution("exec-dispatch-running")
+        .expect("plan");
 
-    let output = output("candidate-1", &[("latency_p99_ms", 90.0), ("cost_usd", 0.03)]);
+    let output = output(
+        "candidate-1",
+        &[("latency_p99_ms", 90.0), ("cost_usd", 0.03)],
+    );
     let runtime = StepwiseRuntime::with_outputs(1, [("exec-run-candidate-1", output)]);
     let mut worker = ExecutionService::new(
         GlobalConfig {
@@ -470,7 +491,9 @@ fn dispatch_execution_once_persists_running_candidate_for_nonterminal_run() {
         .expect("dispatch once");
 
     assert_eq!(execution.status, ExecutionStatus::Running);
-    let snapshot = store.load_execution("exec-dispatch-running").expect("reload");
+    let snapshot = store
+        .load_execution("exec-dispatch-running")
+        .expect("reload");
     assert_eq!(snapshot.execution.status, ExecutionStatus::Running);
     assert_eq!(snapshot.candidates[0].status, CandidateStatus::Running);
     assert_eq!(
@@ -507,12 +530,8 @@ fn dispatch_execution_once_reconciles_persisted_running_candidate_on_later_tick(
     let root = temp_store_dir("worker-dispatch-reconcile");
     let store = FsExecutionStore::new(root);
     let spec = spec(1);
-    ExecutionService::<StepwiseRuntime>::submit_execution(
-        &store,
-        "exec-dispatch-reconcile",
-        &spec,
-    )
-    .expect("submit");
+    ExecutionService::<StepwiseRuntime>::submit_execution(&store, "exec-dispatch-reconcile", &spec)
+        .expect("submit");
 
     let mut planner = ExecutionService::new(
         GlobalConfig {
@@ -521,9 +540,14 @@ fn dispatch_execution_once_reconciles_persisted_running_candidate_on_later_tick(
         StepwiseRuntime::new(1),
         store.clone(),
     );
-    planner.plan_execution("exec-dispatch-reconcile").expect("plan");
+    planner
+        .plan_execution("exec-dispatch-reconcile")
+        .expect("plan");
 
-    let output = output("candidate-1", &[("latency_p99_ms", 90.0), ("cost_usd", 0.03)]);
+    let output = output(
+        "candidate-1",
+        &[("latency_p99_ms", 90.0), ("cost_usd", 0.03)],
+    );
     let runtime = StepwiseRuntime::with_outputs(1, [("exec-run-candidate-1", output)]);
     let mut worker = ExecutionService::new(
         GlobalConfig {
@@ -540,7 +564,9 @@ fn dispatch_execution_once_reconciles_persisted_running_candidate_on_later_tick(
         .expect("second dispatch");
 
     assert_eq!(second.status, ExecutionStatus::Running);
-    let snapshot = store.load_execution("exec-dispatch-reconcile").expect("reload");
+    let snapshot = store
+        .load_execution("exec-dispatch-reconcile")
+        .expect("reload");
     assert_eq!(snapshot.candidates[0].status, CandidateStatus::Completed);
     assert_eq!(snapshot.candidates[1].status, CandidateStatus::Queued);
     assert_eq!(snapshot.candidates[0].succeeded, Some(true));

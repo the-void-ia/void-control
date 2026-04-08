@@ -376,7 +376,7 @@ fn service_launches_through_adapter_and_injects_inbox_content() {
 
     let requests = runtime_requests.borrow();
     assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].workflow_spec, "workflow-template");
+    assert_eq!(requests[0].workflow_spec, spec.workflow.template);
     let launch_context = requests[0].launch_context.as_ref().expect("launch context");
     let decoded: InboxSnapshot =
         serde_json::from_str(launch_context).expect("decode launch context");
@@ -578,7 +578,7 @@ fn launch_spec() -> ExecutionSpec {
         mode: "swarm".to_string(),
         goal: "launch adapter test".to_string(),
         workflow: WorkflowTemplateRef {
-            template: "workflow-template".to_string(),
+            template: temp_workflow_template("message-box-launch").to_string(),
         },
         policy: OrchestrationPolicy::default(),
         evaluation: void_control::orchestration::EvaluationConfig {
@@ -603,7 +603,7 @@ fn two_iteration_swarm_spec() -> ExecutionSpec {
         mode: "swarm".to_string(),
         goal: "message routing".to_string(),
         workflow: WorkflowTemplateRef {
-            template: "workflow-template".to_string(),
+            template: temp_workflow_template("message-box-routing").to_string(),
         },
         policy: OrchestrationPolicy {
             budget: void_control::orchestration::BudgetPolicy {
@@ -676,6 +676,28 @@ fn temp_store_root(label: &str) -> PathBuf {
     let dir = env::temp_dir().join(format!("void-control-{label}-{nanos}"));
     fs::create_dir_all(&dir).expect("create temp dir");
     dir
+}
+
+fn temp_workflow_template(label: &str) -> String {
+    let path = temp_store_root(label).join("workflow-template.yaml");
+    fs::write(
+        &path,
+        r#"api_version: v1
+kind: agent
+name: message-box-test
+
+sandbox:
+  mode: auto
+
+llm:
+  provider: claude
+
+agent:
+  prompt: baseline
+"#,
+    )
+    .expect("write workflow template");
+    path.to_string_lossy().into_owned()
 }
 
 fn assert_event_count(

@@ -662,7 +662,7 @@ fn load_ndjson_records<T: serde::de::DeserializeOwned>(path: PathBuf) -> io::Res
                 }
                 match serde_json::from_str(line) {
                     Ok(record) => records.push(record),
-                    Err(err) if lines.peek().is_none() => break,
+                    Err(_err) if lines.peek().is_none() => break,
                     Err(err) => {
                         return Err(io::Error::new(io::ErrorKind::InvalidData, err.to_string()))
                     }

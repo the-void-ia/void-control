@@ -73,9 +73,11 @@ fn write_patched_workflow_spec(
     overrides: &BTreeMap<String, String>,
 ) -> Result<String, ContractError> {
     let original = fs::read_to_string(original_path).map_err(|err| {
-        ContractError::new(crate::contract::ContractErrorCode::InvalidSpec, format!(
-            "failed to read workflow template '{original_path}': {err}"
-        ), false)
+        ContractError::new(
+            crate::contract::ContractErrorCode::InvalidSpec,
+            format!("failed to read workflow template '{original_path}': {err}"),
+            false,
+        )
     })?;
     let ext = Path::new(original_path)
         .extension()
@@ -83,15 +85,19 @@ fn write_patched_workflow_spec(
         .unwrap_or("yaml");
     let mut document = if ext.eq_ignore_ascii_case("json") {
         serde_json::from_str::<Value>(&original).map_err(|err| {
-            ContractError::new(crate::contract::ContractErrorCode::InvalidSpec, format!(
-                "failed to parse workflow template '{original_path}' as JSON: {err}"
-            ), false)
+            ContractError::new(
+                crate::contract::ContractErrorCode::InvalidSpec,
+                format!("failed to parse workflow template '{original_path}' as JSON: {err}"),
+                false,
+            )
         })?
     } else {
         serde_yaml::from_str::<Value>(&original).map_err(|err| {
-            ContractError::new(crate::contract::ContractErrorCode::InvalidSpec, format!(
-                "failed to parse workflow template '{original_path}' as YAML: {err}"
-            ), false)
+            ContractError::new(
+                crate::contract::ContractErrorCode::InvalidSpec,
+                format!("failed to parse workflow template '{original_path}' as YAML: {err}"),
+                false,
+            )
         })?
     };
     for (path, value) in overrides {
@@ -99,22 +105,28 @@ fn write_patched_workflow_spec(
     }
     let rendered = if ext.eq_ignore_ascii_case("json") {
         serde_json::to_string_pretty(&document).map_err(|err| {
-            ContractError::new(crate::contract::ContractErrorCode::InternalError, format!(
-                "failed to serialize patched workflow template '{original_path}': {err}"
-            ), true)
+            ContractError::new(
+                crate::contract::ContractErrorCode::InternalError,
+                format!("failed to serialize patched workflow template '{original_path}': {err}"),
+                true,
+            )
         })?
     } else {
         serde_yaml::to_string(&document).map_err(|err| {
-            ContractError::new(crate::contract::ContractErrorCode::InternalError, format!(
-                "failed to serialize patched workflow template '{original_path}': {err}"
-            ), true)
+            ContractError::new(
+                crate::contract::ContractErrorCode::InternalError,
+                format!("failed to serialize patched workflow template '{original_path}': {err}"),
+                true,
+            )
         })?
     };
     let patched_path = patched_workflow_path(original_path, ext);
     fs::write(&patched_path, rendered).map_err(|err| {
-        ContractError::new(crate::contract::ContractErrorCode::InternalError, format!(
-            "failed to write patched workflow template '{patched_path}': {err}"
-        ), true)
+        ContractError::new(
+            crate::contract::ContractErrorCode::InternalError,
+            format!("failed to write patched workflow template '{patched_path}': {err}"),
+            true,
+        )
     })?;
     Ok(patched_path)
 }

@@ -317,7 +317,10 @@ where
             }
         }
         last.map(RunPollOutcome::InFlight).ok_or_else(|| {
-            io::Error::new(io::ErrorKind::WouldBlock, "run did not reach terminal state")
+            io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "run did not reach terminal state",
+            )
         })
     }
 
@@ -825,12 +828,10 @@ where
         };
         #[cfg(feature = "serde")]
         if self.delivery_adapter.is_none() {
-            launch_request = self.launch_adapter.prepare_launch_request(
-                launch_request,
-                candidate,
-                &launch_inbox,
-            )
-            .map_err(|err| io::Error::other(err.message))?;
+            launch_request = self
+                .launch_adapter
+                .prepare_launch_request(launch_request, candidate, &launch_inbox)
+                .map_err(|err| io::Error::other(err.message))?;
         }
         #[cfg(feature = "serde")]
         let started = self
@@ -1008,8 +1009,7 @@ where
         match self.runtime.take_structured_output(&inspection.run_id) {
             StructuredOutputResult::Found(mut output) => {
                 #[cfg(feature = "serde")]
-                let intents =
-                    self.collect_candidate_intents_best_effort(handle, &output.intents);
+                let intents = self.collect_candidate_intents_best_effort(handle, &output.intents);
                 self.save_candidate_state(CandidateStateUpdate {
                     execution_id: &execution.execution_id,
                     candidate_id: &candidate.candidate_id,
@@ -1094,8 +1094,7 @@ where
         match self.runtime.take_structured_output(&inspection.run_id) {
             StructuredOutputResult::Found(mut output) => {
                 #[cfg(feature = "serde")]
-                let intents =
-                    self.collect_candidate_intents_best_effort(handle, &output.intents);
+                let intents = self.collect_candidate_intents_best_effort(handle, &output.intents);
                 self.save_candidate_state(CandidateStateUpdate {
                     execution_id: &execution.execution_id,
                     candidate_id: &candidate.candidate_id,
@@ -1359,9 +1358,12 @@ where
                         iteration,
                         candidate_seq,
                     )?,
-                    CandidateStatus::Running => {
-                        self.resume_running_candidate(execution, spec, worker_id, &candidate_record)?
-                    }
+                    CandidateStatus::Running => self.resume_running_candidate(
+                        execution,
+                        spec,
+                        worker_id,
+                        &candidate_record,
+                    )?,
                     CandidateStatus::Completed
                     | CandidateStatus::Failed
                     | CandidateStatus::Canceled => continue,
