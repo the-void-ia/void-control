@@ -1,6 +1,8 @@
 import type {
   ExecutionCandidate,
   ExecutionDetailResponse,
+  SupervisionExecutionSummary,
+  SupervisionWorkerCard,
   SwarmCandidateCard,
   SwarmExecutionSummary,
   SwarmHealthChip,
@@ -52,6 +54,27 @@ function deriveCandidateState(
 function extractMetric(candidate: ExecutionCandidate, key: string): string | null {
   const value = candidate.metrics?.[key];
   return typeof value === 'number' ? formatMetricValue(value) : null;
+}
+
+function supervisionState(candidate: ExecutionCandidate): SupervisionWorkerCard['state'] {
+  const reviewStatus = candidate.review_status ?? null;
+  if (candidate.status === 'Failed') return 'failed';
+  if (candidate.status === 'Canceled') return 'canceled';
+  if (candidate.status === 'Running') return 'running';
+  if (candidate.status === 'Queued') return 'queued';
+  if (reviewStatus === 'Approved') return 'approved';
+  if (reviewStatus === 'RevisionRequested') return 'revision_requested';
+  if (reviewStatus === 'RetryRequested') return 'retry_requested';
+  if (reviewStatus === 'Rejected') return 'rejected';
+  return candidate.status === 'Completed' ? 'approved' : 'queued';
+}
+
+function supervisorRole(detail: ExecutionDetailResponse): string {
+  for (const candidate of detail.candidates ?? []) {
+    const role = candidate.overrides?.['role'] ?? candidate.overrides?.['agent.role'];
+    if (role) return role;
+  }
+  return 'supervisor';
 }
 
 export function deriveSwarmExecutionSummary(detail: ExecutionDetailResponse): SwarmExecutionSummary {
@@ -160,4 +183,62 @@ export function deriveCandidateCards(
       if (diff !== 0) return diff;
       return a.candidateId.localeCompare(b.candidateId);
     });
+}
+
+export function deriveSupervisionExecutionSummary(detail: ExecutionDetailResponse): SupervisionExecutionSummary {
+  const candidates = detail.candidates ?? [];
+  const approvedWorker = candidates.find((candidate) => candidate.review_status === 'Approved') ?? null;
+
+  return {
+    executionId: detail.execution.execution_id,
+    mode: detail.execution.mode,
+    goal: detail.execution.goal,
+    status: detail.execution.status,
+    completedIterations: detail.result?.completed_iterations ?? detail.execution.completed_iterations ?? 0,
+    supervisorRole: supervisorRole(detail),
+    approvedWorkerId: approvedWorker?.candidate_id ?? detail.execution.result_best_candidate_id ?? detail.result?.best_candidate_id ?? null,
+    counts: {
+      queued: candidates.filter((candidate) => candidate.status === 'Queued').length,
+      running: candidates.filter((candidate) => candidate.status === 'Running').length,
+      approved: candidates.filter((candidate) => candidate.review_status === 'Approved').length,
+      revisionRequested: candidates.filter((candidate) => candidate.review_status === 'RevisionRequested').length,
+      retryRequested: candidates.filter((candidate) => candidate.review_status === 'RetryRequested').length,
+      rejected: candidates.filter((candidate) => candidate.review_status === 'Rejected').length,
+      failed: candidates.filter((candidate) => candidate.status === 'Failed').length,
+      completed: candidates.filter((candidate) => candidate.status === 'Completed').length
+    },
+    healthChips: deriveHealthChips(detail)
+  };
+}
+
+export function deriveSupervisionWorkerCards(
+  detail: ExecutionDetailResponse,
+  iterationIndex: number
+): SupervisionWorkerCard[] {
+  return (detail.candidates ?? [])
+    .filter((candidate) => candidate.iteration === iterationIndex)
+    .map((candidate) => ({
+      workerId: candidate.candidate_id,
+      iterationIndex: candidate.iteration,
+      iterationLabel: candidate.iteration + 1,
+      runtimeRunId: candidate.runtime_run_id ?? null,
+      state: supervisionState(candidate),
+      reviewStatus: candidate.review_status ?? null,
+      revisionRound: candidate.revision_round ?? 0,
+      metrics: {
+        latency: extractMetric(candidate, 'latency_p99_ms'),
+        errorRate: extractMetric(candidate, 'error_rate'),
+        cpu: extractMetric(candidate, 'cpu_pct')
+      },
+      role: candidate.overrides?.['role'] ?? candidate.overrides?.['agent.role'] ?? null,
+      reason:
+        candidate.review_status === 'RevisionRequested'
+          ? 'Supervisor requested another revision.'
+          : candidate.review_status === 'RetryRequested'
+            ? 'Supervisor requested a retry after runtime failure.'
+            : candidate.review_status === 'Rejected'
+              ? 'Supervisor rejected this worker output.'
+              : null
+    }))
+    .sort((a, b) => a.workerId.localeCompare(b.workerId));
 }
