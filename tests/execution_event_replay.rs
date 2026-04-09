@@ -70,6 +70,59 @@ fn execution_started_event_advances_state_to_running() {
 }
 
 #[test]
+fn supervision_event_types_round_trip_through_parse() {
+    let event_types = [
+        ControlEventType::SupervisorAssigned,
+        ControlEventType::WorkerQueued,
+        ControlEventType::ReviewRequested,
+        ControlEventType::WorkerApproved,
+        ControlEventType::RevisionRequested,
+        ControlEventType::ExecutionFinalized,
+    ];
+
+    for event_type in event_types {
+        let parsed = ControlEventType::parse(event_type.as_str());
+        assert_eq!(parsed, Some(event_type));
+    }
+}
+
+#[test]
+fn supervision_review_events_do_not_advance_execution_state() {
+    let execution = Execution::new("exec-5", "supervision", "review outputs");
+    let events = vec![
+        event(ControlEventType::ExecutionCreated),
+        event(ControlEventType::SupervisorAssigned),
+        event(ControlEventType::WorkerQueued),
+        event(ControlEventType::ReviewRequested),
+        event(ControlEventType::WorkerApproved),
+        event(ControlEventType::RevisionRequested),
+    ];
+
+    let snapshot = ExecutionSnapshot::replay(execution, &events);
+
+    assert_eq!(snapshot.execution.status, ExecutionStatus::Pending);
+}
+
+#[test]
+fn supervision_finalization_marks_execution_completed() {
+    let execution = Execution::new("exec-6", "supervision", "finalize work");
+    let events = vec![
+        event(ControlEventType::ExecutionCreated),
+        event(ControlEventType::ExecutionSubmitted),
+        event(ControlEventType::ExecutionStarted),
+        event(ControlEventType::SupervisorAssigned),
+        event(ControlEventType::WorkerQueued),
+        event(ControlEventType::ReviewRequested),
+        event(ControlEventType::WorkerApproved),
+        event(ControlEventType::ExecutionFinalized),
+    ];
+
+    let snapshot = ExecutionSnapshot::replay(execution, &events);
+
+    assert_eq!(snapshot.execution.status, ExecutionStatus::Completed);
+}
+
+#[test]
 fn store_round_trips_execution_and_events() {
     let root = temp_store_root("round_trip");
     let store = FsExecutionStore::new(root.clone());

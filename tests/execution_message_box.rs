@@ -595,6 +595,7 @@ fn launch_spec() -> ExecutionSpec {
             }],
         ),
         swarm: true,
+        supervision: None,
     }
 }
 
@@ -652,6 +653,7 @@ fn two_iteration_swarm_spec() -> ExecutionSpec {
             ],
         ),
         swarm: true,
+        supervision: None,
     }
 }
 

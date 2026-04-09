@@ -2,7 +2,8 @@ use std::collections::BTreeMap;
 
 use void_control::orchestration::{
     ConvergencePolicy, EvaluationConfig, ExecutionSpec, GlobalConfig, OrchestrationPolicy,
-    VariationConfig, VariationSelection, WorkflowTemplateRef,
+    SupervisionConfig, SupervisionReviewPolicy, VariationConfig, VariationSelection,
+    WorkflowTemplateRef,
 };
 
 #[test]
@@ -77,12 +78,40 @@ fn rejects_unknown_mode() {
 }
 
 #[test]
-fn accepts_search_mode() {
+fn rejects_search_mode() {
     let mut spec = base_spec();
     spec.mode = "search".to_string();
 
+    let err = spec
+        .validate(&global_config())
+        .expect_err("expected search mode to be rejected");
+
+    assert!(err.to_string().contains("unknown mode"));
+}
+
+#[test]
+fn accepts_supervision_mode() {
+    let mut spec = base_spec();
+    spec.mode = "supervision".to_string();
+    spec.swarm = false;
+    spec.supervision = Some(base_supervision_config());
+
     spec.validate(&global_config())
-        .expect("expected search mode to validate");
+        .expect("expected supervision mode to validate");
+}
+
+#[test]
+fn supervision_mode_requires_supervision_block() {
+    let mut spec = base_spec();
+    spec.mode = "supervision".to_string();
+    spec.swarm = false;
+    spec.supervision = None;
+
+    let err = spec
+        .validate(&global_config())
+        .expect_err("expected supervision mode to require supervision config");
+
+    assert!(err.to_string().contains("supervision"));
 }
 
 #[test]
@@ -192,5 +221,17 @@ fn base_spec() -> ExecutionSpec {
             )]),
         ),
         swarm: true,
+        supervision: None,
+    }
+}
+
+fn base_supervision_config() -> SupervisionConfig {
+    SupervisionConfig {
+        supervisor_role: "coordinator".to_string(),
+        review_policy: SupervisionReviewPolicy {
+            max_revision_rounds: 2,
+            retry_on_runtime_failure: true,
+            require_final_approval: true,
+        },
     }
 }

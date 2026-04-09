@@ -468,6 +468,7 @@ workflow:
             }],
         ),
         swarm: true,
+        supervision: None,
     }
 }
 
@@ -543,6 +544,7 @@ workflow:
             }],
         ),
         swarm: true,
+        supervision: None,
     }
 }
 
@@ -636,6 +638,7 @@ fn one_iteration_transform_spec() -> ExecutionSpec {
             ],
         },
         swarm: true,
+        supervision: None,
     }
 }
 

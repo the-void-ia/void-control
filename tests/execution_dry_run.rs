@@ -130,6 +130,7 @@ fn spec(max_iterations: u32) -> ExecutionSpec {
             ],
         ),
         swarm: true,
+        supervision: None,
     }
 }
 

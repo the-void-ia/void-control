@@ -20,8 +20,9 @@ use crate::contract::{ExecutionPolicy, RunState, StartRequest};
 use crate::orchestration::{
     BudgetPolicy, ConcurrencyPolicy, ConvergencePolicy, EvaluationConfig, ExecutionAction,
     ExecutionRuntime, ExecutionService, ExecutionSpec, FsExecutionStore, GlobalConfig,
-    GlobalScheduler, OrchestrationPolicy, PolicyPatch, QueuedCandidate, VariationConfig,
-    VariationProposal, VariationSelection, WorkflowTemplateRef,
+    GlobalScheduler, OrchestrationPolicy, PolicyPatch, QueuedCandidate, SupervisionConfig,
+    SupervisionReviewPolicy, VariationConfig, VariationProposal, VariationSelection,
+    WorkflowTemplateRef,
 };
 #[cfg(feature = "serde")]
 use crate::runtime::{MockRuntime, VoidBoxRuntimeClient};
@@ -90,6 +91,7 @@ struct ExecutionSpecRequest {
     evaluation: EvaluationRequest,
     variation: VariationRequest,
     swarm: bool,
+    supervision: Option<SupervisionRequest>,
 }
 
 #[cfg(feature = "serde")]
@@ -156,6 +158,21 @@ struct VariationRequest {
 #[derive(Debug, Deserialize)]
 struct VariationProposalRequest {
     overrides: std::collections::BTreeMap<String, String>,
+}
+
+#[cfg(feature = "serde")]
+#[derive(Debug, Deserialize)]
+struct SupervisionRequest {
+    supervisor_role: String,
+    review_policy: SupervisionReviewPolicyRequest,
+}
+
+#[cfg(feature = "serde")]
+#[derive(Debug, Deserialize)]
+struct SupervisionReviewPolicyRequest {
+    max_revision_rounds: u32,
+    retry_on_runtime_failure: bool,
+    require_final_approval: bool,
 }
 
 #[cfg(feature = "serde")]
@@ -1145,6 +1162,9 @@ fn handle_launch(
 impl ExecutionSpecRequest {
     fn try_into_spec(self) -> Result<ExecutionSpec, String> {
         let mode = self.mode.trim().to_string();
+        if !matches!(mode.as_str(), "swarm" | "supervision") {
+            return Err(format!("unsupported mode '{mode}'"));
+        }
         let goal = self.goal.trim().to_string();
         let workflow_template = self.workflow.template.trim().to_string();
         let variation = match self.variation.source.as_str() {
@@ -1231,6 +1251,14 @@ impl ExecutionSpecRequest {
             },
             variation,
             swarm: self.swarm,
+            supervision: self.supervision.map(|supervision| SupervisionConfig {
+                supervisor_role: supervision.supervisor_role,
+                review_policy: SupervisionReviewPolicy {
+                    max_revision_rounds: supervision.review_policy.max_revision_rounds,
+                    retry_on_runtime_failure: supervision.review_policy.retry_on_runtime_failure,
+                    require_final_approval: supervision.review_policy.require_final_approval,
+                },
+            }),
         })
     }
 }

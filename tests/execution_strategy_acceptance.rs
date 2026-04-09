@@ -3,9 +3,10 @@
 use std::collections::BTreeMap;
 
 use void_control::orchestration::{
-    CandidateInbox, CandidateOutput, CandidateStatus, ControlEventType, ExecutionCandidate,
+    CandidateOutput, CandidateStatus, ControlEventType, ExecutionCandidate,
     ExecutionService, ExecutionSpec, ExecutionStatus, FsExecutionStore, GlobalConfig,
-    OrchestrationPolicy, VariationConfig, VariationProposal,
+    OrchestrationPolicy, SupervisionConfig, SupervisionReviewPolicy, VariationConfig,
+    VariationProposal, WorkerReviewStatus,
 };
 #[cfg(feature = "serde")]
 use void_control::orchestration::{
@@ -23,35 +24,67 @@ fn swarm_strategy_runs_end_to_end() {
 }
 
 #[test]
-fn search_strategy_runs_end_to_end() {
-    let store_dir = temp_store_dir("search-acceptance");
-    let (execution, store, _) = run_mode_to_completion("search", store_dir.clone());
+fn supervision_strategy_runs_end_to_end() {
+    let (execution, _, _) = run_mode_to_completion(
+        "supervision",
+        temp_store_dir("supervision-acceptance"),
+    );
 
     assert_eq!(execution.status, ExecutionStatus::Completed);
     assert!(execution.result_best_candidate_id.is_some());
+}
 
+#[test]
+fn supervision_strategy_emits_review_and_finalization_events() {
+    let (execution, _, snapshot) =
+        run_mode_to_completion("supervision", temp_store_dir("supervision-events"));
+
+    assert_eq!(execution.status, ExecutionStatus::Completed);
+    assert_event_counts(
+        "supervision",
+        &snapshot.events,
+        &[
+            (ControlEventType::ExecutionCreated, 1),
+            (ControlEventType::ExecutionSubmitted, 1),
+            (ControlEventType::ExecutionStarted, 1),
+            (ControlEventType::SupervisorAssigned, 1),
+            (ControlEventType::IterationStarted, 1),
+            (ControlEventType::CandidateQueued, 2),
+            (ControlEventType::WorkerQueued, 2),
+            (ControlEventType::CandidateDispatched, 2),
+            (ControlEventType::CandidateOutputCollected, 2),
+            (ControlEventType::ReviewRequested, 2),
+            (ControlEventType::WorkerApproved, 2),
+            (ControlEventType::IterationCompleted, 1),
+            (ControlEventType::ExecutionFinalized, 1),
+            (ControlEventType::ExecutionCompleted, 1),
+            (ControlEventType::ExecutionFailed, 0),
+        ],
+    );
+}
+
+#[test]
+fn supervision_strategy_persists_approved_review_state() {
+    let (execution, store, _) = run_mode_to_completion(
+        "supervision",
+        temp_store_dir("supervision-candidates"),
+    );
     let candidates = store
         .load_candidates(&execution.execution_id)
         .expect("load candidates");
-    let mut refinement_prompts: Vec<_> = candidates
-        .iter()
-        .filter(|candidate| candidate.iteration == 1)
-        .map(|candidate| {
-            candidate
-                .overrides
-                .get("agent.prompt")
-                .expect("agent.prompt override")
-                .clone()
-        })
-        .collect();
-    refinement_prompts.sort();
 
-    assert_eq!(refinement_prompts, vec!["v2".to_string(), "v3".to_string()]);
+    assert!(!candidates.is_empty());
+    assert!(candidates.iter().all(|candidate| candidate.status == CandidateStatus::Completed));
+    assert!(
+        candidates
+            .iter()
+            .all(|candidate| candidate.review_status == Some(WorkerReviewStatus::Approved))
+    );
 }
 
 #[test]
 fn supported_strategies_emit_expected_completion_events() {
-    for mode in ["swarm", "search"] {
+    for mode in ["swarm"] {
         let label = format!("{mode}-events");
         let (execution, _, snapshot) = run_mode_to_completion(mode, temp_store_dir(&label));
 
@@ -78,7 +111,7 @@ fn supported_strategies_emit_expected_completion_events() {
 
 #[test]
 fn supported_strategies_persist_terminal_candidate_records() {
-    for mode in ["swarm", "search"] {
+    for mode in ["swarm"] {
         let label = format!("{mode}-candidates");
         let (execution, store, snapshot) = run_mode_to_completion(mode, temp_store_dir(&label));
         let candidates = store
@@ -115,7 +148,7 @@ fn supported_strategies_persist_terminal_candidate_records() {
 
 #[test]
 fn supported_strategies_emit_failed_terminal_events_on_all_failure() {
-    for mode in ["swarm", "search"] {
+    for mode in ["swarm"] {
         let label = format!("{mode}-failed");
         let (execution, _, snapshot) = run_mode_with_all_failures(mode, temp_store_dir(&label));
 
@@ -138,85 +171,6 @@ fn supported_strategies_emit_failed_terminal_events_on_all_failure() {
             ],
         );
     }
-}
-
-#[test]
-fn search_strategy_refines_across_incremental_worker_ticks() {
-    let store_dir = temp_store_dir("search-incremental");
-    let mut runtime = MockRuntime::new();
-    runtime.seed_success(
-        "exec-run-candidate-1",
-        output(
-            "candidate-1",
-            &[("latency_p99_ms", 95.0), ("cost_usd", 0.05)],
-        ),
-    );
-    runtime.seed_success(
-        "exec-run-candidate-2",
-        output(
-            "candidate-2",
-            &[("latency_p99_ms", 80.0), ("cost_usd", 0.03)],
-        ),
-    );
-    runtime.seed_success(
-        "exec-run-candidate-3",
-        output(
-            "candidate-3",
-            &[("latency_p99_ms", 70.0), ("cost_usd", 0.02)],
-        ),
-    );
-    runtime.seed_success(
-        "exec-run-candidate-4",
-        output(
-            "candidate-4",
-            &[("latency_p99_ms", 72.0), ("cost_usd", 0.025)],
-        ),
-    );
-
-    let store = FsExecutionStore::new(store_dir.clone());
-    ExecutionService::<MockRuntime>::submit_execution(
-        &store,
-        "exec-search",
-        &strategy_spec("search"),
-    )
-    .expect("submit execution");
-
-    let mut service = ExecutionService::new(
-        GlobalConfig {
-            max_concurrent_child_runs: 2,
-        },
-        runtime,
-        store,
-    );
-    service
-        .plan_execution("exec-search")
-        .expect("plan execution");
-
-    for _ in 0..8 {
-        let execution = service
-            .dispatch_execution_once("exec-search")
-            .expect("dispatch execution");
-        if matches!(
-            execution.status,
-            ExecutionStatus::Completed | ExecutionStatus::Failed
-        ) {
-            break;
-        }
-    }
-
-    let store = FsExecutionStore::new(store_dir);
-    let snapshot = store.load_execution("exec-search").expect("load execution");
-    assert_eq!(snapshot.execution.status, ExecutionStatus::Completed);
-
-    let mut refinement_prompts: Vec<_> = snapshot
-        .candidates
-        .iter()
-        .filter(|candidate| candidate.iteration == 1)
-        .map(|candidate| candidate.overrides["agent.prompt"].clone())
-        .collect();
-    refinement_prompts.sort();
-    assert_eq!(refinement_prompts, vec!["v2".to_string(), "v3".to_string()]);
-    assert_eq!(snapshot.accumulator.search_phase.as_deref(), Some("refine"));
 }
 
 #[cfg(feature = "serde")]
@@ -327,211 +281,6 @@ fn swarm_strategy_routes_intents_into_next_iteration_message_box_and_events() {
 
 #[cfg(feature = "serde")]
 #[test]
-fn search_strategy_persists_lineage_and_delivers_parent_intent_to_refinement_iteration() {
-    let store_dir = temp_store_dir("search-message-box");
-    let mut runtime = MockRuntime::new();
-    runtime.seed_success(
-        "exec-run-candidate-1",
-        output_with_intents(
-            "candidate-1",
-            &[("latency_p99_ms", 95.0), ("cost_usd", 0.05)],
-            vec![proposal_intent(
-                "intent-search-parent",
-                CommunicationIntentAudience::Leader,
-                "start from rate limit baseline",
-                None,
-            )],
-        ),
-    );
-    runtime.seed_success(
-        "exec-run-candidate-2",
-        output(
-            "candidate-2",
-            &[("latency_p99_ms", 80.0), ("cost_usd", 0.03)],
-        ),
-    );
-    runtime.seed_success(
-        "exec-run-candidate-3",
-        output_with_intents(
-            "candidate-3",
-            &[("latency_p99_ms", 70.0), ("cost_usd", 0.02)],
-            vec![proposal_intent(
-                "intent-search-child",
-                CommunicationIntentAudience::Leader,
-                "refine with jitter",
-                Some("intent-search-parent"),
-            )],
-        ),
-    );
-    runtime.seed_success(
-        "exec-run-candidate-4",
-        output(
-            "candidate-4",
-            &[("latency_p99_ms", 72.0), ("cost_usd", 0.025)],
-        ),
-    );
-
-    let store = FsExecutionStore::new(store_dir.clone());
-    let mut service = ExecutionService::new(
-        GlobalConfig {
-            max_concurrent_child_runs: 2,
-        },
-        runtime,
-        store,
-    );
-    let execution = service
-        .run_to_completion(strategy_spec("search"))
-        .expect("run execution");
-
-    let store = FsExecutionStore::new(store_dir);
-    let intents = store
-        .load_intents(&execution.execution_id)
-        .expect("load intents");
-    let inbox = store
-        .load_inbox_snapshot(&execution.execution_id, 1, "candidate-1")
-        .expect("load iteration-1 inbox");
-    let child = intents
-        .iter()
-        .find(|intent| intent.intent_id == "intent-search-child")
-        .expect("child intent");
-
-    assert_eq!(intents.len(), 2);
-    assert_eq!(child.caused_by.as_deref(), Some("intent-search-parent"));
-    assert!(inbox
-        .entries
-        .iter()
-        .any(|entry| entry.intent_id == "intent-search-parent"));
-}
-
-#[cfg(feature = "serde")]
-#[test]
-fn signal_reactive_search_runs_end_to_end() {
-    let store_dir = temp_store_dir("search-signal-reactive-acceptance");
-    let store = FsExecutionStore::new(store_dir.clone());
-    let mut runtime = MockRuntime::new();
-    let signal_output = output_with_intents(
-        "candidate-1",
-        &[("latency_p99_ms", 95.0), ("cost_usd", 0.05)],
-        vec![signal_intent(
-            "intent-search-signal",
-            CommunicationIntentAudience::Broadcast,
-            "multiple candidates saw the same bottleneck",
-        )],
-    );
-    runtime.seed_success("exec-run-candidate-1", signal_output.clone());
-    runtime.seed_success(
-        "exec-run-candidate-2",
-        output(
-            "candidate-2",
-            &[("latency_p99_ms", 80.0), ("cost_usd", 0.03)],
-        ),
-    );
-    runtime.seed_success(
-        "exec-run-candidate-3",
-        output(
-            "candidate-3",
-            &[("latency_p99_ms", 70.0), ("cost_usd", 0.02)],
-        ),
-    );
-    runtime.seed_success(
-        "exec-run-candidate-4",
-        output(
-            "candidate-4",
-            &[("latency_p99_ms", 72.0), ("cost_usd", 0.025)],
-        ),
-    );
-
-    let execution_id = "exec-search-signal-reactive";
-    ExecutionService::<MockRuntime>::submit_execution(
-        &store,
-        execution_id,
-        &signal_reactive_strategy_spec("search"),
-    )
-    .expect("submit execution");
-    seed_planner_authored_candidates(
-        &store,
-        execution_id,
-        &[
-            (1, 0, "candidate-1", "baseline"),
-            (2, 0, "candidate-2", "v1"),
-            (3, 1, "candidate-3", "v2"),
-            (4, 1, "candidate-4", "v4"),
-        ],
-    );
-    seed_iteration_inboxes(
-        &store,
-        execution_id,
-        1,
-        &["candidate-3", "candidate-4"],
-        &void_control::orchestration::message_box::normalize_intents(
-            "candidate-1",
-            0,
-            &signal_output.intents,
-        )
-        .0,
-    );
-
-    let mut service = ExecutionService::new(
-        GlobalConfig {
-            max_concurrent_child_runs: 2,
-        },
-        runtime,
-        store,
-    );
-    let execution = service
-        .process_execution(execution_id)
-        .expect("process execution");
-
-    let read_store = FsExecutionStore::new(store_dir);
-    let snapshot = read_store
-        .load_execution(execution_id)
-        .expect("load execution snapshot");
-    let intents = read_store.load_intents(execution_id).expect("load intents");
-    let messages = read_store
-        .load_routed_messages(execution_id)
-        .expect("load routed messages");
-    let inbox_one = read_store
-        .load_inbox_snapshot(execution_id, 1, "candidate-3")
-        .expect("load candidate-3 inbox");
-    let inbox_two = read_store
-        .load_inbox_snapshot(execution_id, 1, "candidate-4")
-        .expect("load candidate-4 inbox");
-    let mut refinement_prompts: Vec<_> = snapshot
-        .candidates
-        .iter()
-        .filter(|candidate| candidate.iteration == 1)
-        .map(|candidate| candidate.overrides["agent.prompt"].clone())
-        .collect();
-    refinement_prompts.sort();
-
-    assert_eq!(execution.status, ExecutionStatus::Completed);
-    assert_eq!(snapshot.execution.status, ExecutionStatus::Completed);
-    assert_eq!(snapshot.execution.mode, "search");
-    assert_eq!(refinement_prompts, vec!["v2".to_string(), "v4".to_string()]);
-    assert_eq!(snapshot.candidates.len(), 4);
-    assert_eq!(intents.len(), 1);
-    assert_eq!(
-        messages
-            .iter()
-            .filter(|message| message.status
-                == void_control::orchestration::RoutedMessageStatus::Routed)
-            .count(),
-        1
-    );
-    assert_eq!(
-        messages
-            .iter()
-            .filter(|message| message.status
-                == void_control::orchestration::RoutedMessageStatus::Delivered)
-            .count(),
-        2
-    );
-    assert_eq!(inbox_one.entries.len(), 1);
-    assert_eq!(inbox_two.entries.len(), 1);
-}
-
-#[cfg(feature = "serde")]
-#[test]
 fn legacy_leader_directed_uses_persisted_planner_proposals() {
     let store_dir = temp_store_dir("leader-directed-legacy-acceptance");
     let store = FsExecutionStore::new(store_dir.clone());
@@ -629,31 +378,19 @@ fn run_mode_to_completion(
     let mut runtime = MockRuntime::new();
     runtime.seed_success(
         "exec-run-candidate-1",
-        output(
-            "candidate-1",
-            &[("latency_p99_ms", 95.0), ("cost_usd", 0.05)],
-        ),
+        output_for_mode(mode, "candidate-1", &[("latency_p99_ms", 95.0), ("cost_usd", 0.05)]),
     );
     runtime.seed_success(
         "exec-run-candidate-2",
-        output(
-            "candidate-2",
-            &[("latency_p99_ms", 80.0), ("cost_usd", 0.03)],
-        ),
+        output_for_mode(mode, "candidate-2", &[("latency_p99_ms", 80.0), ("cost_usd", 0.03)]),
     );
     runtime.seed_success(
         "exec-run-candidate-3",
-        output(
-            "candidate-3",
-            &[("latency_p99_ms", 70.0), ("cost_usd", 0.02)],
-        ),
+        output_for_mode(mode, "candidate-3", &[("latency_p99_ms", 70.0), ("cost_usd", 0.02)]),
     );
     runtime.seed_success(
         "exec-run-candidate-4",
-        output(
-            "candidate-4",
-            &[("latency_p99_ms", 72.0), ("cost_usd", 0.025)],
-        ),
+        output_for_mode(mode, "candidate-4", &[("latency_p99_ms", 72.0), ("cost_usd", 0.025)]),
     );
 
     let store = FsExecutionStore::new(store_dir.clone());
@@ -763,35 +500,19 @@ fn strategy_spec(mode: &str) -> ExecutionSpec {
             ],
         ),
         swarm: true,
+        supervision: if mode == "supervision" {
+            Some(SupervisionConfig {
+                supervisor_role: "coordinator".to_string(),
+                review_policy: SupervisionReviewPolicy {
+                    max_revision_rounds: 2,
+                    retry_on_runtime_failure: true,
+                    require_final_approval: true,
+                },
+            })
+        } else {
+            None
+        },
     }
-}
-
-fn signal_reactive_strategy_spec(mode: &str) -> ExecutionSpec {
-    let mut spec = strategy_spec(mode);
-    spec.variation = VariationConfig {
-        source: "signal_reactive".to_string(),
-        candidates_per_iteration: 2,
-        selection: None,
-        parameter_space: BTreeMap::new(),
-        explicit: vec![
-            VariationProposal {
-                overrides: BTreeMap::from([("agent.prompt".to_string(), "baseline".to_string())]),
-            },
-            VariationProposal {
-                overrides: BTreeMap::from([("agent.prompt".to_string(), "v1".to_string())]),
-            },
-            VariationProposal {
-                overrides: BTreeMap::from([("agent.prompt".to_string(), "v2".to_string())]),
-            },
-            VariationProposal {
-                overrides: BTreeMap::from([("agent.prompt".to_string(), "v3".to_string())]),
-            },
-            VariationProposal {
-                overrides: BTreeMap::from([("agent.prompt".to_string(), "v4".to_string())]),
-            },
-        ],
-    };
-    spec
 }
 
 fn legacy_leader_directed_strategy_spec() -> ExecutionSpec {
@@ -805,6 +526,18 @@ fn failing_strategy_spec(mode: &str) -> ExecutionSpec {
     let mut spec = strategy_spec(mode);
     spec.policy.budget.max_iterations = Some(1);
     spec
+}
+
+fn output_for_mode(
+    mode: &str,
+    candidate_id: &str,
+    metrics: &[(&str, f64)],
+) -> CandidateOutput {
+    let mut output = output(candidate_id, metrics);
+    if mode == "supervision" {
+        output.metrics.insert("approved".to_string(), 1.0);
+    }
+    output
 }
 
 fn seed_planner_authored_candidates(
@@ -824,38 +557,6 @@ fn seed_planner_authored_candidates(
             .overrides
             .insert("agent.prompt".to_string(), (*prompt).to_string());
         store.save_candidate(&candidate).expect("save candidate");
-    }
-}
-
-fn seed_iteration_inboxes(
-    store: &FsExecutionStore,
-    execution_id: &str,
-    iteration: u32,
-    candidate_ids: &[&str],
-    intents: &[CommunicationIntent],
-) {
-    let inboxes = candidate_ids
-        .iter()
-        .map(|candidate_id| CandidateInbox::new(candidate_id))
-        .collect::<Vec<_>>();
-    let routed = void_control::orchestration::message_box::route_intents(intents);
-    for (snapshot, delivered) in
-        void_control::orchestration::message_box::materialize_inbox_snapshots(
-            execution_id,
-            iteration,
-            &inboxes,
-            intents,
-            &routed,
-        )
-    {
-        store
-            .save_inbox_snapshot(&snapshot)
-            .expect("save inbox snapshot");
-        for delivered in delivered {
-            store
-                .append_routed_message(execution_id, &delivered)
-                .expect("append delivered message");
-        }
     }
 }
 
@@ -911,18 +612,6 @@ fn proposal_intent(
         ttl_iterations: 1,
         caused_by: caused_by.map(str::to_string),
         context: None,
-    }
-}
-
-#[cfg(feature = "serde")]
-fn signal_intent(
-    intent_id: &str,
-    audience: CommunicationIntentAudience,
-    summary_text: &str,
-) -> CommunicationIntent {
-    CommunicationIntent {
-        kind: CommunicationIntentKind::Signal,
-        ..proposal_intent(intent_id, audience, summary_text, None)
     }
 }
 

@@ -1345,6 +1345,7 @@ fn spec(max_iterations: u32) -> ExecutionSpec {
             ],
         ),
         swarm: true,
+        supervision: None,
     }
 }
 
@@ -1400,6 +1401,7 @@ fn spec_with_candidate_count(
                 .collect(),
         ),
         swarm: true,
+        supervision: None,
     }
 }
 
@@ -1446,6 +1448,7 @@ fn single_candidate_spec() -> ExecutionSpec {
             }],
         ),
         swarm: true,
+        supervision: None,
     }
 }
 

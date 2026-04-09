@@ -49,7 +49,7 @@ runtime transport concerns should stay separate.
   - candidate-generation sources such as `parameter_space`, `explicit`,
     `leader_directed`, and `signal_reactive`
 - `src/orchestration/strategy.rs`
-  - swarm/search planning and reduction logic
+  - swarm planning and reduction logic; supervision strategy work lands here
 - `src/orchestration/message_box.rs`
   - communication intent routing, inbox snapshots, and `MessageStats` extraction
 - `src/orchestration/store/`
@@ -160,10 +160,6 @@ curl -sS -X POST http://127.0.0.1:43210/v1/executions \
 curl -sS -X POST http://127.0.0.1:43210/v1/executions \
   -H 'Content-Type: text/yaml' \
   --data-binary @examples/swarm-transform-optimization.yaml
-
-curl -sS -X POST http://127.0.0.1:43210/v1/executions \
-  -H 'Content-Type: text/yaml' \
-  --data-binary @examples/search-rate-limit-optimization.yaml
 ```
 
 Important:

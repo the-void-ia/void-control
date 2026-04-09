@@ -29,13 +29,18 @@ pub use service::{
     StructuredOutputResult,
 };
 pub use spec::ExecutionSpec;
-pub use spec::{EvaluationConfig, WorkflowTemplateRef};
+pub use spec::{
+    EvaluationConfig, SupervisionConfig, SupervisionReviewPolicy, WorkflowTemplateRef,
+};
 pub use store::{ExecutionStore, FsExecutionStore};
-pub use strategy::{IterationEvaluation, SearchStrategy, StopReason, SwarmStrategy};
+pub use strategy::{
+    IterationEvaluation, StopReason, SupervisionEvaluation, SupervisionStrategy,
+    SwarmStrategy, WorkerReviewDecision,
+};
 pub use types::{
     CandidateInbox, CandidateOutput, CandidateSpec, CandidateStatus, Execution,
     ExecutionAccumulator, ExecutionCandidate, ExecutionSnapshot, ExecutionStatus, FailureCounts,
-    MessageStats,
+    MessageStats, WorkerReviewStatus,
 };
 #[cfg(feature = "serde")]
 pub use types::{

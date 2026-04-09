@@ -175,7 +175,7 @@ fn create_list_and_get_execution_routes_round_trip() {
 }
 
 #[test]
-fn create_execution_route_accepts_search_specs() {
+fn create_execution_route_rejects_search_specs() {
     let root = temp_root("create-search");
     let spec_dir = root.join("specs");
     let execution_dir = root.join("executions");
@@ -190,9 +190,34 @@ fn create_execution_route_accepts_search_specs() {
     )
     .expect("create");
 
+    assert_eq!(created.status, 400);
+    assert_eq!(created.json["code"], "INVALID_SPEC");
+    assert!(
+        created.json["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("unsupported mode"))
+    );
+}
+
+#[test]
+fn create_execution_route_accepts_supervision_specs() {
+    let root = temp_root("create-supervision");
+    let spec_dir = root.join("specs");
+    let execution_dir = root.join("executions");
+    let body = valid_spec_body_for_mode("supervision");
+
+    let created = void_control::bridge::handle_bridge_request_with_dirs_for_test(
+        "POST",
+        "/v1/executions",
+        Some(&body),
+        &spec_dir,
+        &execution_dir,
+    )
+    .expect("create");
+
     assert_eq!(created.status, 200);
     assert_eq!(created.json["status"], "Pending");
-    assert_eq!(created.json["mode"], "search");
+    assert_eq!(created.json["mode"], "supervision");
 }
 
 #[test]
@@ -503,7 +528,7 @@ fn valid_spec_body() -> String {
 }
 
 fn valid_spec_body_for_mode(mode: &str) -> String {
-    json!({
+    let mut body = json!({
         "mode": mode,
         "goal": "optimize latency",
         "workflow": { "template": "fixtures/sample.vbrun" },
@@ -541,8 +566,18 @@ fn valid_spec_body_for_mode(mode: &str) -> String {
             ]
         },
         "swarm": true
-    })
-    .to_string()
+    });
+    if mode == "supervision" {
+        body["supervision"] = json!({
+            "supervisor_role": "coordinator",
+            "review_policy": {
+                "max_revision_rounds": 2,
+                "retry_on_runtime_failure": true,
+                "require_final_approval": true
+            }
+        });
+    }
+    body.to_string()
 }
 
 fn temp_root(label: &str) -> std::path::PathBuf {

@@ -10,7 +10,7 @@ use crate::orchestration::events::{ControlEventEnvelope, ControlEventType};
 use crate::orchestration::spec::ExecutionSpec;
 use crate::orchestration::types::{
     CandidateStatus, Execution, ExecutionAccumulator, ExecutionCandidate, ExecutionSnapshot,
-    ExecutionStatus,
+    ExecutionStatus, WorkerReviewStatus,
 };
 #[cfg(feature = "serde")]
 use crate::orchestration::types::{CommunicationIntent, InboxSnapshot, RoutedMessage};
@@ -382,18 +382,14 @@ impl FsExecutionStore {
     ) -> io::Result<()> {
         let best_candidate_overrides = serde_json::to_string(&accumulator.best_candidate_overrides)
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err.to_string()))?;
-        let explored_signatures = serde_json::to_string(&accumulator.explored_signatures)
-            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err.to_string()))?;
         fs::write(
             self.execution_dir(execution_id).join("accumulator.txt"),
             format!(
-                "{}\n{}\n{}\n{}\n{}\n{}",
+                "{}\n{}\n{}\n{}",
                 accumulator.scoring_history_len,
                 accumulator.completed_iterations,
                 accumulator.best_candidate_id.as_deref().unwrap_or(""),
                 best_candidate_overrides,
-                accumulator.search_phase.as_deref().unwrap_or(""),
-                explored_signatures,
             ),
         )
     }
@@ -413,7 +409,7 @@ impl FsExecutionStore {
                 candidate.created_seq, candidate.candidate_id
             )),
             format!(
-                "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
+                "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
                 candidate.execution_id,
                 candidate.candidate_id,
                 candidate.created_seq,
@@ -426,6 +422,11 @@ impl FsExecutionStore {
                     .map(|value| if value { "true" } else { "false" })
                     .unwrap_or(""),
                 metrics,
+                candidate
+                    .review_status
+                    .map(worker_review_status_to_str)
+                    .unwrap_or(""),
+                candidate.revision_round,
             ),
         )
     }
@@ -730,20 +731,14 @@ fn parse_accumulator(contents: &str) -> io::Result<ExecutionAccumulator> {
         .map(|value| serde_json::from_str(&value).map_err(invalid_data))
         .transpose()?
         .unwrap_or_default();
-    let search_phase = optional_line(&mut lines).filter(|value| !value.is_empty());
-    let explored_signatures = optional_line(&mut lines)
-        .filter(|value| !value.is_empty())
-        .map(|value| serde_json::from_str(&value).map_err(invalid_data))
-        .transpose()?
-        .unwrap_or_default();
+    let _legacy_search_phase = optional_line(&mut lines);
+    let _legacy_explored_signatures = optional_line(&mut lines);
     let _legacy_message_backlog = optional_line(&mut lines);
     Ok(ExecutionAccumulator {
         scoring_history_len,
         completed_iterations,
         best_candidate_id,
         best_candidate_overrides,
-        search_phase,
-        explored_signatures,
         ..ExecutionAccumulator::default()
     })
 }
@@ -781,6 +776,15 @@ fn parse_candidate(contents: String) -> io::Result<ExecutionCandidate> {
         .map(|value| serde_json::from_str(&value).map_err(invalid_data))
         .transpose()?
         .unwrap_or_default();
+    let review_status = optional_line(&mut lines)
+        .filter(|value| !value.is_empty())
+        .map(|value| str_to_worker_review_status(&value))
+        .transpose()?;
+    let revision_round = optional_line(&mut lines)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.parse().map_err(invalid_data))
+        .transpose()?
+        .unwrap_or_default();
     Ok(ExecutionCandidate {
         execution_id,
         candidate_id,
@@ -791,6 +795,8 @@ fn parse_candidate(contents: String) -> io::Result<ExecutionCandidate> {
         overrides,
         succeeded,
         metrics,
+        review_status,
+        revision_round,
     })
 }
 
@@ -826,6 +832,16 @@ fn candidate_status_to_str(status: &CandidateStatus) -> &'static str {
     }
 }
 
+fn worker_review_status_to_str(status: WorkerReviewStatus) -> &'static str {
+    match status {
+        WorkerReviewStatus::PendingReview => "PendingReview",
+        WorkerReviewStatus::Approved => "Approved",
+        WorkerReviewStatus::RevisionRequested => "RevisionRequested",
+        WorkerReviewStatus::RetryRequested => "RetryRequested",
+        WorkerReviewStatus::Rejected => "Rejected",
+    }
+}
+
 fn str_to_status(value: &str) -> io::Result<ExecutionStatus> {
     match value {
         "Pending" => Ok(ExecutionStatus::Pending),
@@ -851,6 +867,20 @@ fn str_to_candidate_status(value: &str) -> io::Result<CandidateStatus> {
         _ => Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!("unknown candidate status '{value}'"),
+        )),
+    }
+}
+
+fn str_to_worker_review_status(value: &str) -> io::Result<WorkerReviewStatus> {
+    match value {
+        "PendingReview" => Ok(WorkerReviewStatus::PendingReview),
+        "Approved" => Ok(WorkerReviewStatus::Approved),
+        "RevisionRequested" => Ok(WorkerReviewStatus::RevisionRequested),
+        "RetryRequested" => Ok(WorkerReviewStatus::RetryRequested),
+        "Rejected" => Ok(WorkerReviewStatus::Rejected),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("unknown worker review status '{value}'"),
         )),
     }
 }

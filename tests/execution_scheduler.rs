@@ -371,6 +371,7 @@ fn test_spec_inner(
             ],
         ),
         swarm: true,
+        supervision: None,
     }
 }
 

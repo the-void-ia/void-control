@@ -62,7 +62,7 @@ That distinction matters for first release:
                          ▼                       ▼
               ┌───────────────────┐   ┌──────────────────────┐
               │ Store / Replay    │   │ Planning Strategies  │
-              │ fs-backed data    │   │ swarm / search       │
+              │ fs-backed data    │   │ swarm / supervision  │
               │ events / inboxes  │   │ variation sources    │
               └─────────┬─────────┘   └──────────┬───────────┘
                         │                        │
@@ -132,7 +132,7 @@ Supporting modules:
 
 - `src/orchestration/spec.rs`: execution spec schema/validation
 - `src/orchestration/variation.rs`: candidate source generation
-- `src/orchestration/strategy.rs`: swarm/search planning and stopping
+- `src/orchestration/strategy.rs`: swarm planning and stopping, plus supervision strategy logic
 - `src/orchestration/scoring.rs`: weighted scoring and ranking
 - `src/orchestration/policy.rs`: budgets, concurrency, convergence policies
 - `src/orchestration/events.rs`: persisted control-plane event model
@@ -146,7 +146,6 @@ Supporting modules:
 Implemented or active:
 
 - `swarm`: breadth-oriented sibling candidate exploration with reduction
-- `search`: incumbent-centered refinement using the same execution primitives
 
 Planned next:
 
@@ -248,15 +247,18 @@ Properties:
 
 ### MCP and collaboration events
 
-MCP is not a replacement event plane. It is a collaboration/tooling surface
-that can participate in orchestration through the same persisted control-plane
-primitives.
+`void-mcp` is the primary/native in-guest collaboration surface.
+`void-message` is the secondary/complementary CLI path.
+
+Neither is a replacement event plane. Both participate in orchestration through
+the same persisted control-plane primitives.
 
 Flow:
 
 ```text
 ┌──────────────────────────┐
-│ candidate run / MCP tool │
+│ candidate run / void-mcp │
+│ or void-message          │
 └─────────────┬────────────┘
               v
 ┌──────────────────────────┐
@@ -349,7 +351,7 @@ execution + accumulator + prior results + message stats
 Planning inputs depend on strategy:
 
 - swarm: breadth-oriented candidate planning
-- search: incumbent-centered neighborhood refinement
+- supervision: orchestrator-worker review, revision, and finalization
 - supervision: planned next strategy on the same execution substrate
 
 ### 3. Candidate dispatch

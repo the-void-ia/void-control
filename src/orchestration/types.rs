@@ -50,6 +50,16 @@ pub enum CandidateStatus {
     Canceled,
 }
 
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkerReviewStatus {
+    PendingReview,
+    Approved,
+    RevisionRequested,
+    RetryRequested,
+    Rejected,
+}
+
 #[cfg_attr(feature = "serde", derive(Serialize))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExecutionCandidate {
@@ -62,6 +72,8 @@ pub struct ExecutionCandidate {
     pub overrides: std::collections::BTreeMap<String, String>,
     pub succeeded: Option<bool>,
     pub metrics: std::collections::BTreeMap<String, f64>,
+    pub review_status: Option<WorkerReviewStatus>,
+    pub revision_round: u32,
 }
 
 impl ExecutionCandidate {
@@ -82,6 +94,8 @@ impl ExecutionCandidate {
             overrides: std::collections::BTreeMap::new(),
             succeeded: None,
             metrics: std::collections::BTreeMap::new(),
+            review_status: None,
+            revision_round: 0,
         }
     }
 }
@@ -94,9 +108,10 @@ pub struct ExecutionAccumulator {
     pub iterations_without_improvement: u32,
     pub best_candidate_id: Option<String>,
     pub best_candidate_overrides: std::collections::BTreeMap<String, String>,
-    pub search_phase: Option<String>,
-    pub explored_signatures: Vec<String>,
     pub failure_counts: FailureCounts,
+    pub supervision_reviews: std::collections::BTreeMap<String, WorkerReviewStatus>,
+    pub supervision_revision_rounds: std::collections::BTreeMap<String, u32>,
+    pub supervision_final_approval: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

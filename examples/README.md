@@ -11,7 +11,7 @@ Boundary:
 - `void-control` owns orchestration concerns such as `mode`, `policy`, `evaluation`,
   `variation`, and `swarm`.
 - `void-box` only receives a runtime template path plus a patched per-candidate
-  workflow spec. It does not need to understand swarm/search strategies.
+  workflow spec. It does not need to understand swarm/supervision strategies.
 
 ## Files
 
@@ -23,13 +23,8 @@ Boundary:
   - wide Transform-02 swarm stress example
   - launches 8 sibling candidates in parallel
   - scores `latency_p99_ms`, `error_rate`, and `cpu_pct`
-- `search-rate-limit-optimization.yaml`
-  - incumbent-centered search example for `Transform-02`
-  - mutates around a promising rate-limit policy
 - `runtime-templates/transform_optimizer_agent.yaml`
   - plain runtime template used by the swarm example
-- `runtime-templates/rate_limit_optimizer_agent.yaml`
-  - plain runtime template used by the search example
 
 ## Transform Swarm Examples
 
@@ -131,15 +126,6 @@ cd /home/diego/github/void-control
 curl -sS -X POST http://127.0.0.1:43210/v1/executions \
   -H 'Content-Type: text/yaml' \
   --data-binary @examples/swarm-transform-optimization.yaml
-```
-
-Search:
-
-```bash
-cd /home/diego/github/void-control
-curl -sS -X POST http://127.0.0.1:43210/v1/executions \
-  -H 'Content-Type: text/yaml' \
-  --data-binary @examples/search-rate-limit-optimization.yaml
 ```
 
 ## Launch From UI
