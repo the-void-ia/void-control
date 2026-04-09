@@ -29,13 +29,11 @@ pub use service::{
     StructuredOutputResult,
 };
 pub use spec::ExecutionSpec;
-pub use spec::{
-    EvaluationConfig, SupervisionConfig, SupervisionReviewPolicy, WorkflowTemplateRef,
-};
+pub use spec::{EvaluationConfig, SupervisionConfig, SupervisionReviewPolicy, WorkflowTemplateRef};
 pub use store::{ExecutionStore, FsExecutionStore};
 pub use strategy::{
-    IterationEvaluation, StopReason, SupervisionEvaluation, SupervisionStrategy,
-    SwarmStrategy, WorkerReviewDecision,
+    IterationEvaluation, StopReason, SupervisionEvaluation, SupervisionStrategy, SwarmStrategy,
+    WorkerReviewDecision,
 };
 pub use types::{
     CandidateInbox, CandidateOutput, CandidateSpec, CandidateStatus, Execution,

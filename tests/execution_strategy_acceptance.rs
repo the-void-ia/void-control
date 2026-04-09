@@ -3,10 +3,10 @@
 use std::collections::BTreeMap;
 
 use void_control::orchestration::{
-    CandidateOutput, CandidateStatus, ControlEventType, ExecutionCandidate,
-    ExecutionService, ExecutionSpec, ExecutionStatus, FsExecutionStore, GlobalConfig,
-    OrchestrationPolicy, SupervisionConfig, SupervisionReviewPolicy, VariationConfig,
-    VariationProposal, WorkerReviewStatus,
+    CandidateOutput, CandidateStatus, ControlEventType, ExecutionCandidate, ExecutionService,
+    ExecutionSpec, ExecutionStatus, FsExecutionStore, GlobalConfig, OrchestrationPolicy,
+    SupervisionConfig, SupervisionReviewPolicy, VariationConfig, VariationProposal,
+    WorkerReviewStatus,
 };
 #[cfg(feature = "serde")]
 use void_control::orchestration::{
@@ -25,10 +25,8 @@ fn swarm_strategy_runs_end_to_end() {
 
 #[test]
 fn supervision_strategy_runs_end_to_end() {
-    let (execution, _, _) = run_mode_to_completion(
-        "supervision",
-        temp_store_dir("supervision-acceptance"),
-    );
+    let (execution, _, _) =
+        run_mode_to_completion("supervision", temp_store_dir("supervision-acceptance"));
 
     assert_eq!(execution.status, ExecutionStatus::Completed);
     assert!(execution.result_best_candidate_id.is_some());
@@ -65,21 +63,19 @@ fn supervision_strategy_emits_review_and_finalization_events() {
 
 #[test]
 fn supervision_strategy_persists_approved_review_state() {
-    let (execution, store, _) = run_mode_to_completion(
-        "supervision",
-        temp_store_dir("supervision-candidates"),
-    );
+    let (execution, store, _) =
+        run_mode_to_completion("supervision", temp_store_dir("supervision-candidates"));
     let candidates = store
         .load_candidates(&execution.execution_id)
         .expect("load candidates");
 
     assert!(!candidates.is_empty());
-    assert!(candidates.iter().all(|candidate| candidate.status == CandidateStatus::Completed));
-    assert!(
-        candidates
-            .iter()
-            .all(|candidate| candidate.review_status == Some(WorkerReviewStatus::Approved))
-    );
+    assert!(candidates
+        .iter()
+        .all(|candidate| candidate.status == CandidateStatus::Completed));
+    assert!(candidates
+        .iter()
+        .all(|candidate| candidate.review_status == Some(WorkerReviewStatus::Approved)));
 }
 
 #[test]
@@ -378,19 +374,35 @@ fn run_mode_to_completion(
     let mut runtime = MockRuntime::new();
     runtime.seed_success(
         "exec-run-candidate-1",
-        output_for_mode(mode, "candidate-1", &[("latency_p99_ms", 95.0), ("cost_usd", 0.05)]),
+        output_for_mode(
+            mode,
+            "candidate-1",
+            &[("latency_p99_ms", 95.0), ("cost_usd", 0.05)],
+        ),
     );
     runtime.seed_success(
         "exec-run-candidate-2",
-        output_for_mode(mode, "candidate-2", &[("latency_p99_ms", 80.0), ("cost_usd", 0.03)]),
+        output_for_mode(
+            mode,
+            "candidate-2",
+            &[("latency_p99_ms", 80.0), ("cost_usd", 0.03)],
+        ),
     );
     runtime.seed_success(
         "exec-run-candidate-3",
-        output_for_mode(mode, "candidate-3", &[("latency_p99_ms", 70.0), ("cost_usd", 0.02)]),
+        output_for_mode(
+            mode,
+            "candidate-3",
+            &[("latency_p99_ms", 70.0), ("cost_usd", 0.02)],
+        ),
     );
     runtime.seed_success(
         "exec-run-candidate-4",
-        output_for_mode(mode, "candidate-4", &[("latency_p99_ms", 72.0), ("cost_usd", 0.025)]),
+        output_for_mode(
+            mode,
+            "candidate-4",
+            &[("latency_p99_ms", 72.0), ("cost_usd", 0.025)],
+        ),
     );
 
     let store = FsExecutionStore::new(store_dir.clone());
@@ -528,11 +540,7 @@ fn failing_strategy_spec(mode: &str) -> ExecutionSpec {
     spec
 }
 
-fn output_for_mode(
-    mode: &str,
-    candidate_id: &str,
-    metrics: &[(&str, f64)],
-) -> CandidateOutput {
+fn output_for_mode(mode: &str, candidate_id: &str, metrics: &[(&str, f64)]) -> CandidateOutput {
     let mut output = output(candidate_id, metrics);
     if mode == "supervision" {
         output.metrics.insert("approved".to_string(), 1.0);

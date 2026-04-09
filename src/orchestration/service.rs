@@ -162,7 +162,9 @@ impl SelectedStrategy {
         outputs: &[CandidateOutput],
     ) -> StrategyEvaluation {
         match self {
-            Self::Swarm(strategy) => StrategyEvaluation::Swarm(strategy.evaluate(accumulator, outputs)),
+            Self::Swarm(strategy) => {
+                StrategyEvaluation::Swarm(strategy.evaluate(accumulator, outputs))
+            }
             Self::Supervision(strategy) => {
                 StrategyEvaluation::Supervision(strategy.evaluate(accumulator, outputs))
             }
@@ -1368,7 +1370,10 @@ where
                 .iter()
                 .any(|event| event.event_type == ControlEventType::SupervisorAssigned)
         {
-            self.append_event(&execution.execution_id, ControlEventType::SupervisorAssigned)?;
+            self.append_event(
+                &execution.execution_id,
+                ControlEventType::SupervisorAssigned,
+            )?;
         }
 
         while iteration < spec.policy.budget.max_iterations.unwrap_or(0) {
@@ -1635,7 +1640,9 @@ where
                         .decisions
                         .iter()
                         .any(|decision| decision.status == WorkerReviewStatus::Rejected);
-                    if evaluation.final_approval_ready && accumulator.supervision_final_approval == Some(true) {
+                    if evaluation.final_approval_ready
+                        && accumulator.supervision_final_approval == Some(true)
+                    {
                         execution.status = ExecutionStatus::Completed;
                         self.store.save_execution(execution)?;
                         self.append_event(
@@ -1655,7 +1662,10 @@ where
                     if has_rejected {
                         execution.status = ExecutionStatus::Failed;
                         self.store.save_execution(execution)?;
-                        self.append_event(&execution.execution_id, ControlEventType::ExecutionFailed)?;
+                        self.append_event(
+                            &execution.execution_id,
+                            ControlEventType::ExecutionFailed,
+                        )?;
                         return Ok(execution.clone());
                     }
                 }

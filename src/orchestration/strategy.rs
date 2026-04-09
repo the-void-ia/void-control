@@ -1,6 +1,6 @@
 use super::policy::ConvergencePolicy;
-use super::spec::SupervisionReviewPolicy;
 use super::scoring::{score_iteration, RankedCandidate, ScoringConfig};
+use super::spec::SupervisionReviewPolicy;
 use super::types::{
     CandidateInbox, CandidateOutput, CandidateSpec, ExecutionAccumulator, MessageStats,
     WorkerReviewStatus,
@@ -240,10 +240,9 @@ impl SupervisionStrategy {
                 .insert(decision.candidate_id.clone(), decision.status);
             match decision.status {
                 WorkerReviewStatus::RevisionRequested | WorkerReviewStatus::RetryRequested => {
-                    accumulator.supervision_revision_rounds.insert(
-                        decision.candidate_id.clone(),
-                        decision.revision_round + 1,
-                    );
+                    accumulator
+                        .supervision_revision_rounds
+                        .insert(decision.candidate_id.clone(), decision.revision_round + 1);
                 }
                 WorkerReviewStatus::Approved => {
                     approved_count += 1;

@@ -13,7 +13,10 @@ fn supervision_strategy_plans_workers_from_variation() {
 
     let planned = strategy.plan_candidates(
         &ExecutionAccumulator::default(),
-        &[CandidateInbox::new("worker-1"), CandidateInbox::new("worker-2")],
+        &[
+            CandidateInbox::new("worker-1"),
+            CandidateInbox::new("worker-2"),
+        ],
     );
 
     assert_eq!(planned.len(), 2);

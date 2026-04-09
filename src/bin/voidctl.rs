@@ -13,6 +13,15 @@ fn main() {
 }
 
 #[cfg(feature = "serde")]
+fn execution_result_label_for_mode(mode: &str) -> &'static str {
+    if mode == "supervision" {
+        "approved_worker"
+    } else {
+        "best_candidate"
+    }
+}
+
+#[cfg(feature = "serde")]
 fn run() -> Result<(), String> {
     use std::collections::BTreeMap;
     use std::env;
@@ -763,6 +772,66 @@ Policy presets: fast | balanced | safe"
         }
     }
 
+    fn execution_result_label(mode: &str) -> &'static str {
+        execution_result_label_for_mode(mode)
+    }
+
+    fn print_execution_summary(json: &serde_json::Value) {
+        let mode = json
+            .get("mode")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        println!(
+            "execution_id={} mode={} status={} iterations={} {}={}",
+            json.get("execution_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("-"),
+            mode,
+            json.get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown"),
+            json.get("completed_iterations")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0),
+            execution_result_label(mode),
+            json.get("result_best_candidate_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("-")
+        );
+    }
+
+    fn print_execution_detail(json: &serde_json::Value) {
+        let execution = json.get("execution").unwrap_or(json);
+        let result = json.get("result").unwrap_or(json);
+        let mode = execution
+            .get("mode")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        println!(
+            "execution_id={} mode={} status={} iterations={} {}={}",
+            execution
+                .get("execution_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("-"),
+            mode,
+            execution
+                .get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown"),
+            result
+                .get("completed_iterations")
+                .or_else(|| execution.get("completed_iterations"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0),
+            execution_result_label(mode),
+            result
+                .get("best_candidate_id")
+                .or_else(|| execution.get("result_best_candidate_id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("-")
+        );
+    }
+
     fn bridge_request(
         base_url: &str,
         method: &str,
@@ -1003,21 +1072,7 @@ Policy presets: fast | balanced | safe"
                 match load_execution_spec_file(&spec).and_then(|spec_text| {
                     bridge_request(&bridge_base_url, "POST", "/v1/executions", Some(&spec_text))
                 }) {
-                    Ok(json) => println!(
-                        "execution_id={} status={} iterations={} best_candidate={}",
-                        json.get("execution_id")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("-"),
-                        json.get("status")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("unknown"),
-                        json.get("completed_iterations")
-                            .and_then(|v| v.as_u64())
-                            .unwrap_or(0),
-                        json.get("result_best_candidate_id")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("-")
-                    ),
+                    Ok(json) => print_execution_summary(&json),
                     Err(err) => println!("error: {err}"),
                 }
             }
@@ -1061,25 +1116,7 @@ Policy presets: fast | balanced | safe"
                             println!("no executions");
                         } else {
                             for execution in executions {
-                                println!(
-                                    "execution_id={} status={} iterations={} best_candidate={}",
-                                    execution
-                                        .get("execution_id")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or("-"),
-                                    execution
-                                        .get("status")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or("unknown"),
-                                    execution
-                                        .get("completed_iterations")
-                                        .and_then(|v| v.as_u64())
-                                        .unwrap_or(0),
-                                    execution
-                                        .get("result_best_candidate_id")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or("-")
-                                );
+                                print_execution_summary(&execution);
                             }
                         }
                     }
@@ -1092,21 +1129,7 @@ Policy presets: fast | balanced | safe"
                 &format!("/v1/executions/{execution_id}"),
                 None,
             ) {
-                Ok(json) => println!(
-                    "execution_id={} status={} iterations={} best_candidate={}",
-                    json.get("execution_id")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("-"),
-                    json.get("status")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("unknown"),
-                    json.get("completed_iterations")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0),
-                    json.get("result_best_candidate_id")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("-")
-                ),
+                Ok(json) => print_execution_detail(&json),
                 Err(err) => println!("error: {err}"),
             },
             Command::ExecutionPause { execution_id } => match bridge_request(
@@ -1203,4 +1226,23 @@ Policy presets: fast | balanced | safe"
     }
 
     Ok(())
+}
+
+#[cfg(all(test, feature = "serde"))]
+mod tests {
+    #[test]
+    fn supervision_execution_uses_approved_worker_label() {
+        assert_eq!(
+            super::execution_result_label_for_mode("supervision"),
+            "approved_worker"
+        );
+    }
+
+    #[test]
+    fn swarm_execution_uses_best_candidate_label() {
+        assert_eq!(
+            super::execution_result_label_for_mode("swarm"),
+            "best_candidate"
+        );
+    }
 }

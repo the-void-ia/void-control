@@ -192,11 +192,9 @@ fn create_execution_route_rejects_search_specs() {
 
     assert_eq!(created.status, 400);
     assert_eq!(created.json["code"], "INVALID_SPEC");
-    assert!(
-        created.json["message"]
-            .as_str()
-            .is_some_and(|message| message.contains("unsupported mode"))
-    );
+    assert!(created.json["message"]
+        .as_str()
+        .is_some_and(|message| message.contains("unsupported mode")));
 }
 
 #[test]
