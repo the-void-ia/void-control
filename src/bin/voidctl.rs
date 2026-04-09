@@ -2020,7 +2020,7 @@ Policy presets: fast | balanced | safe"
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "serde"))]
 mod tests {
     use super::*;
 
