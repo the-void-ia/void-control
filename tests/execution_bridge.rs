@@ -201,27 +201,6 @@ fn create_execution_route_rejects_search_specs() {
 }
 
 #[test]
-fn create_execution_route_accepts_supervision_specs() {
-    let root = temp_root("create-supervision");
-    let spec_dir = root.join("specs");
-    let execution_dir = root.join("executions");
-    let body = valid_spec_body_for_mode("supervision");
-
-    let created = void_control::bridge::handle_bridge_request_with_dirs_for_test(
-        "POST",
-        "/v1/executions",
-        Some(&body),
-        &spec_dir,
-        &execution_dir,
-    )
-    .expect("create");
-
-    assert_eq!(created.status, 200);
-    assert_eq!(created.json["status"], "Pending");
-    assert_eq!(created.json["mode"], "supervision");
-}
-
-#[test]
 fn create_execution_route_accepts_yaml_specs() {
     let root = temp_root("create-yaml");
     let spec_dir = root.join("specs");
@@ -315,6 +294,61 @@ fn checked_in_supervision_example_is_accepted_by_bridge() {
 
     assert_eq!(created.status, 200);
     assert_eq!(created.json["mode"], "supervision");
+}
+
+#[test]
+fn dry_run_route_wraps_runtime_yaml_specs() {
+    let root = temp_root("dry-run-runtime-yaml");
+    let spec_dir = root.join("specs");
+    let body = runtime_spec_body();
+
+    let response = void_control::bridge::handle_bridge_request_with_dirs_for_test(
+        "POST",
+        "/v1/executions/dry-run",
+        Some(body),
+        &spec_dir,
+        &root.join("executions"),
+    )
+    .expect("dry-run");
+
+    assert_eq!(response.status, 200);
+    assert_eq!(response.json["valid"], true);
+    assert_eq!(response.json["plan"]["candidates_per_iteration"], 1);
+    assert_eq!(response.json["plan"]["max_iterations"], 1);
+    assert_eq!(response.json["plan"]["max_child_runs"], 1);
+}
+
+#[test]
+fn create_execution_route_wraps_runtime_yaml_specs() {
+    let root = temp_root("create-runtime-yaml");
+    let spec_dir = root.join("specs");
+    let execution_dir = root.join("executions");
+    let body = runtime_spec_body();
+
+    let created = void_control::bridge::handle_bridge_request_with_dirs_for_test(
+        "POST",
+        "/v1/executions",
+        Some(body),
+        &spec_dir,
+        &execution_dir,
+    )
+    .expect("create");
+
+    assert_eq!(created.status, 200);
+    assert_eq!(created.json["status"], "Pending");
+    assert_eq!(created.json["mode"], "swarm");
+    assert_eq!(created.json["goal"], "run snapshot-pipeline");
+
+    let execution_id = created.json["execution_id"].as_str().expect("execution_id");
+    let store = void_control::orchestration::FsExecutionStore::new(execution_dir);
+    let spec = store.load_spec(execution_id).expect("load wrapped spec");
+    assert_eq!(spec.mode, "swarm");
+    assert_eq!(spec.variation.candidates_per_iteration, 1);
+    assert!(std::path::Path::new(&spec.workflow.template).exists());
+    assert!(spec
+        .workflow
+        .template
+        .starts_with(spec_dir.to_string_lossy().as_ref()));
 }
 
 #[test]
@@ -566,6 +600,22 @@ fn patch_policy_rejects_immutable_convergence_fields() {
 
 fn valid_spec_body() -> String {
     valid_spec_body_for_mode("swarm")
+}
+
+fn runtime_spec_body() -> &'static str {
+    r#"
+api_version: v1
+kind: pipeline
+name: snapshot-pipeline
+sandbox:
+  mode: auto
+llm:
+  provider: claude
+stages:
+  - id: analyzer
+    agent:
+      prompt: summarize the snapshot
+"#
 }
 
 fn valid_spec_body_for_mode(mode: &str) -> String {

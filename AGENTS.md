@@ -166,8 +166,19 @@ Important:
 
 - top-level execution specs in `examples/*.yaml` are `void-control` documents
 - referenced files under `examples/runtime-templates/*.yaml` are runtime templates for `void-box`
-- non-interactive `voidctl` currently exposes `serve` and `help`; use the bridge
-  HTTP API or UI for execution create/dry-run flows
+- non-interactive `voidctl` exposes:
+  - `serve`
+  - `execution submit <spec-path>`
+  - `execution submit --stdin`
+  - `execution dry-run <spec-path>`
+  - `execution dry-run --stdin`
+  - `execution watch <execution-id>`
+  - `execution inspect <execution-id>`
+  - `execution events <execution-id>`
+  - `execution result <execution-id>`
+  - `execution runtime <execution-id> [candidate-id]`
+- use `voidctl execution ...` for terminal operator workflows; use the bridge
+  HTTP API or UI when you need direct API-driven inspection or browser workflows
 - quote URLs that contain `?` when using `curl` from `zsh`
 
 ## Runtime compatibility commands

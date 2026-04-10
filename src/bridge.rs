@@ -449,21 +449,8 @@ fn handle_bridge_request(
 
 #[cfg(feature = "serde")]
 fn handle_execution_dry_run(body: &str) -> JsonHttpResponse {
-    let spec_request: ExecutionSpecRequest = match parse_execution_spec_request(body) {
-        Ok(value) => value,
-        Err(err) => {
-            return json_response(
-                400,
-                &ApiError {
-                    code: "INVALID_SPEC",
-                    message: err,
-                    retryable: false,
-                },
-            )
-        }
-    };
-
-    let spec = match spec_request.try_into_spec() {
+    let temp_root = std::env::temp_dir().join(format!("void-control-dry-run-{}", now_ms()));
+    let spec = match parse_submitted_execution_spec(body, &temp_root.join("specs")) {
         Ok(spec) => spec,
         Err(err) => {
             return json_response(
@@ -485,7 +472,6 @@ fn handle_execution_dry_run(body: &str) -> JsonHttpResponse {
         }
     };
 
-    let temp_root = std::env::temp_dir().join(format!("void-control-dry-run-{}", now_ms()));
     let service = ExecutionService::new(
         GlobalConfig {
             max_concurrent_child_runs: 20,
@@ -516,20 +502,7 @@ fn handle_execution_create(
     config: &BridgeConfig,
     _use_live_runtime: bool,
 ) -> JsonHttpResponse {
-    let spec_request: ExecutionSpecRequest = match parse_execution_spec_request(body) {
-        Ok(value) => value,
-        Err(err) => {
-            return json_response(
-                400,
-                &ApiError {
-                    code: "INVALID_SPEC",
-                    message: err,
-                    retryable: false,
-                },
-            )
-        }
-    };
-    let spec = match spec_request.try_into_spec() {
+    let spec = match parse_submitted_execution_spec(body, &config.spec_dir) {
         Ok(spec) => spec,
         Err(err) => {
             return json_response(
@@ -567,6 +540,109 @@ fn parse_execution_spec_request(body: &str) -> Result<ExecutionSpecRequest, Stri
                 "invalid execution spec body: JSON parse error: {json_err}; YAML parse error: {yaml_err}"
             )
         }),
+    }
+}
+
+#[cfg(feature = "serde")]
+fn parse_submitted_execution_spec(body: &str, spec_dir: &Path) -> Result<ExecutionSpec, String> {
+    match parse_execution_spec_request(body) {
+        Ok(spec_request) => spec_request.try_into_spec(),
+        Err(parse_err) => {
+            let runtime_doc = parse_runtime_spec_document(body)?;
+            if !looks_like_runtime_spec(&runtime_doc) {
+                return Err(parse_err);
+            }
+            let runtime_spec_path = write_spec_file(spec_dir, body, None)?;
+            Ok(wrap_runtime_spec_as_execution(
+                &runtime_spec_path,
+                runtime_goal(&runtime_doc),
+            ))
+        }
+    }
+}
+
+#[cfg(feature = "serde")]
+fn parse_runtime_spec_document(body: &str) -> Result<serde_yaml::Value, String> {
+    serde_yaml::from_str(body).map_err(|err| format!("invalid runtime spec body: {err}"))
+}
+
+#[cfg(feature = "serde")]
+fn looks_like_runtime_spec(document: &serde_yaml::Value) -> bool {
+    let Some(mapping) = document.as_mapping() else {
+        return false;
+    };
+    for key in ["kind", "agent", "stages", "sandbox", "llm"] {
+        let value = mapping.get(serde_yaml::Value::String(key.to_string()));
+        if value.is_some() {
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg(feature = "serde")]
+fn runtime_goal(document: &serde_yaml::Value) -> String {
+    let Some(mapping) = document.as_mapping() else {
+        return "runtime execution".to_string();
+    };
+    let name = mapping
+        .get(serde_yaml::Value::String("name".to_string()))
+        .and_then(|value| value.as_str());
+    let kind = mapping
+        .get(serde_yaml::Value::String("kind".to_string()))
+        .and_then(|value| value.as_str());
+
+    if let Some(name) = name {
+        return format!("run {name}");
+    }
+    if let Some(kind) = kind {
+        return format!("run {kind}");
+    }
+    "runtime execution".to_string()
+}
+
+#[cfg(feature = "serde")]
+fn wrap_runtime_spec_as_execution(workflow_template: &str, goal: String) -> ExecutionSpec {
+    ExecutionSpec {
+        mode: "swarm".to_string(),
+        goal,
+        workflow: WorkflowTemplateRef {
+            template: workflow_template.to_string(),
+        },
+        policy: OrchestrationPolicy {
+            budget: BudgetPolicy {
+                max_iterations: Some(1),
+                max_child_runs: Some(1),
+                max_wall_clock_secs: Some(600),
+                max_cost_usd_millis: None,
+            },
+            concurrency: ConcurrencyPolicy {
+                max_concurrent_candidates: 1,
+            },
+            convergence: ConvergencePolicy {
+                strategy: "exhaustive".to_string(),
+                min_score: None,
+                max_iterations_without_improvement: None,
+            },
+            max_candidate_failures_per_iteration: 1,
+            missing_output_policy: "mark_failed".to_string(),
+            iteration_failure_policy: "fail_execution".to_string(),
+        },
+        evaluation: EvaluationConfig {
+            scoring_type: "weighted_metrics".to_string(),
+            weights: std::collections::BTreeMap::new(),
+            pass_threshold: None,
+            ranking: "highest_score".to_string(),
+            tie_breaking: "lexicographic".to_string(),
+        },
+        variation: VariationConfig::explicit(
+            1,
+            vec![VariationProposal {
+                overrides: std::collections::BTreeMap::new(),
+            }],
+        ),
+        swarm: true,
+        supervision: None,
     }
 }
 

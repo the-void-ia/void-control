@@ -88,7 +88,9 @@ The recommended non-interactive CLI surface is:
 
 ```text
 voidctl execution submit <spec-path>
+voidctl execution submit --stdin
 voidctl execution dry-run <spec-path>
+voidctl execution dry-run --stdin
 voidctl execution watch <execution-id>
 voidctl execution inspect <execution-id>
 voidctl execution events <execution-id>
@@ -100,7 +102,7 @@ voidctl execution runtime <execution-id> [candidate-id]
 
 ### `voidctl execution submit`
 
-Accepts a YAML path and detects document type.
+Accepts either a YAML path or YAML from stdin and detects document type.
 
 - orchestration spec:
   - submit directly through the execution create path
@@ -114,6 +116,16 @@ Returns:
 - mode
 - goal
 - initial status
+
+This command must support agent-generated specs that do not exist as permanent
+files yet.
+
+Examples:
+
+```bash
+voidctl execution submit examples/swarm-transform-optimization-3way.yaml
+cat generated.yaml | voidctl execution submit --stdin
+```
 
 ### `voidctl execution dry-run`
 
@@ -228,6 +240,125 @@ The wrapper must stay minimal:
 - preserve the original runtime spec
 - add only control-plane metadata needed for launch and inspection
 - do not invent swarm-like semantics for plain runtime runs
+
+## Spec Classification
+
+`voidctl execution submit <spec-path>` must classify the input document before
+launch.
+
+There are two first-release categories:
+
+### 1. Orchestration specs
+
+These are native `void-control` execution documents.
+
+Examples:
+
+- `examples/swarm-transform-optimization-3way.yaml`
+- future `supervision` specs
+
+Behavior:
+
+- submit directly through the execution create path
+- persist as an execution without wrapping
+
+Example:
+
+```bash
+voidctl execution submit examples/swarm-transform-optimization-3way.yaml
+```
+
+### 2. Raw runtime specs
+
+These are `void-box` runtime documents such as agents, pipelines, and
+workloads.
+
+Examples:
+
+- `/home/diego/github/agent-infra/void-box/examples/specs/snapshot_pipeline.yaml`
+- local pipeline specs
+- local workload specs
+- local agent specs
+
+Behavior:
+
+- detect that the document is a raw runtime spec
+- wrap it into a minimal control-plane execution
+- persist that wrapped execution
+- launch the runtime work through the normal runtime path
+
+Example:
+
+```bash
+voidctl execution submit /home/diego/github/agent-infra/void-box/examples/specs/snapshot_pipeline.yaml
+```
+
+The result should still be an execution ID, not a separate runtime-only handle.
+
+### 3. Agent-generated specs
+
+The skill must be able to create a spec on the fly from a problem statement.
+
+Examples:
+
+- "optimize this transform workload with a swarm"
+- "run this pipeline and summarize the result"
+
+Behavior:
+
+- the agent chooses the appropriate spec shape
+- the agent renders YAML
+- the YAML is submitted through stdin
+- `void-control` persists the submitted YAML with the execution
+- the execution then follows the same operator lifecycle as any other launch
+
+Example:
+
+```bash
+cat <<'EOF' | voidctl execution submit --stdin
+mode: swarm
+goal: optimize transform strategy
+workflow:
+  template: examples/runtime-templates/transform_optimizer_agent.yaml
+...
+EOF
+```
+
+### Classification outcome
+
+In both cases, `submit` returns:
+
+- execution ID
+- mode
+- goal
+- status
+
+After that, the rest of the CLI is the same:
+
+```bash
+voidctl execution watch <execution-id>
+voidctl execution inspect <execution-id>
+voidctl execution result <execution-id>
+```
+
+## On-The-Fly Spec Creation
+
+The first-release skill must support turning a problem statement into a launchable
+spec without requiring a manually prepared file.
+
+Required behavior:
+
+- agent receives a problem statement
+- agent decides whether the problem maps to:
+  - orchestration execution
+  - raw runtime execution
+- agent generates YAML
+- agent submits via `voidctl execution submit --stdin`
+- `void-control` persists the submitted spec text as part of the execution record
+
+That persistence matters because the generated spec is part of the operator
+evidence trail. The execution should remain inspectable even when the spec never
+existed as a standalone checked-in file.
 
 ## Output Design
 

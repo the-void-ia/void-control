@@ -196,6 +196,112 @@ pre-commit run --all-files
 cargo run --features serde --bin voidctl
 ```
 
+## CLI Operator Flow
+
+The non-interactive `voidctl execution ...` commands are the terminal equivalent
+of the UI launcher and inspector.
+
+Submit an orchestration spec:
+
+```bash
+voidctl execution submit examples/swarm-transform-optimization-3way.yaml
+```
+
+Dry-run the same spec:
+
+```bash
+voidctl execution dry-run examples/swarm-transform-optimization-3way.yaml
+```
+
+Submit a generated spec from stdin:
+
+```bash
+cat generated.yaml | voidctl execution submit --stdin
+```
+
+Inspect and follow an execution:
+
+```bash
+voidctl execution watch <execution-id>
+voidctl execution inspect <execution-id>
+voidctl execution events <execution-id>
+voidctl execution result <execution-id>
+voidctl execution runtime <execution-id>
+```
+
+Example execution:
+
+```text
+problem:
+  optimize Transform-02 with multiple competing approaches in parallel
+
+generated flow:
+  voidctl execution submit --stdin
+
+execution_id: exec-1775679556549
+status: Completed
+winner: candidate-2
+strategy: vectorized-parse
+runtime_run_id: run-1775679567037
+```
+
+Final candidate scores from that run:
+
+```text
+candidate-1  baseline          latency_p99_ms=3.027  cpu_pct=93.4  error_rate=0.333
+candidate-2  vectorized-parse  latency_p99_ms=1.740  cpu_pct=75.8  error_rate=0.333
+candidate-3  cache-aware       latency_p99_ms=3.287  cpu_pct=91.0  error_rate=0.333
+candidate-4  high-throughput   latency_p99_ms=2.110  cpu_pct=97.0  error_rate=0.333
+```
+
+Follow-up commands for the same execution:
+
+```bash
+voidctl execution inspect exec-1775679556549
+voidctl execution events exec-1775679556549
+voidctl execution result exec-1775679556549
+voidctl execution runtime exec-1775679556549
+voidctl execution runtime exec-1775679556549 candidate-2
+```
+
+## Install The `void-control` Skill
+
+The repo packages a `void-control` skill so Claude or Codex can operate the
+control plane from the terminal instead of the UI.
+
+Canonical skill source:
+
+- [`skills/void-control/SKILL.md`](skills/void-control/SKILL.md)
+
+Claude wrapper:
+
+- [`.claude/skills/void-control/SKILL.md`](.claude/skills/void-control/SKILL.md)
+
+Codex install entrypoint:
+
+- [`.codex/INSTALL.md`](.codex/INSTALL.md)
+
+Codex follows the same install pattern used by Superpowers: tell Codex to fetch
+and follow the repo-hosted `.codex/INSTALL.md` file.
+
+Example prompts after installation:
+
+- `Use the void-control skill to optimize this workload with a swarm.`
+- `Use the void-control skill to run this snapshot pipeline and summarize the result.`
+- `Use the void-control skill to inspect why this execution failed and resolve the runtime run behind it.`
+- `Use the void-control skill to generate a spec from this problem statement and submit it through voidctl.`
+- `Use the void-control skill to dispatch a swarm of agents for a complex problem, let it continue in the background, and later summarize the result.`
+
+For Claude-backed swarm/service runs, the skill should prefer the validated
+service pattern:
+
+- `agent.mode: service`
+- `llm.provider: claude`
+- `sandbox.network: true`
+- `agent.output_file` set
+- runtime-assets directory mount when possible
+- `agent.messaging.enabled: true` for sibling swarm candidates
+
 ## Notes
 
 - Dashboard uses daemon APIs (`/v1/runs`, `/v1/runs/{id}/events`, `/v1/runs/{id}/stages`, `/v1/runs/{id}/telemetry`).
