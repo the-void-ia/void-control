@@ -1,0 +1,52 @@
+mode: supervision
+goal: >
+  Run three specialized Transform-02 workers under a central supervisor and
+  finalize only after every worker produces a measured, approved result.
+workflow:
+  template: examples/runtime-templates/transform_supervision_worker.yaml
+policy:
+  budget:
+    max_iterations: 2
+    max_child_runs: 6
+    max_wall_clock_secs: 1800
+  concurrency:
+    max_concurrent_candidates: 3
+  convergence:
+    strategy: threshold
+    min_score: 0.0
+    max_iterations_without_improvement: 1
+  max_candidate_failures_per_iteration: 3
+  missing_output_policy: mark_failed
+  iteration_failure_policy: fail_execution
+evaluation:
+  scoring_type: weighted_metrics
+  weights:
+    latency_p99_ms: -0.50
+    error_rate: -0.35
+    cpu_pct: -0.15
+  pass_threshold: 0.0
+  ranking: highest_score
+  tie_breaking: latency_p99_ms
+variation:
+  source: explicit
+  candidates_per_iteration: 3
+  explicit:
+    - overrides:
+        sandbox.env.TRANSFORM_ROLE: latency-reviewer
+        sandbox.env.TRANSFORM_STRATEGY: baseline
+        sandbox.env.TRANSFORM_PARALLELISM: "2"
+    - overrides:
+        sandbox.env.TRANSFORM_ROLE: throughput-reviewer
+        sandbox.env.TRANSFORM_STRATEGY: high-throughput
+        sandbox.env.TRANSFORM_PARALLELISM: "8"
+    - overrides:
+        sandbox.env.TRANSFORM_ROLE: efficiency-reviewer
+        sandbox.env.TRANSFORM_STRATEGY: cache-aware
+        sandbox.env.TRANSFORM_CACHE_MODE: hot-path
+supervision:
+  supervisor_role: coordinator
+  review_policy:
+    max_revision_rounds: 1
+    retry_on_runtime_failure: true
+    require_final_approval: true
+swarm: false

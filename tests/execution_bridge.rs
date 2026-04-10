@@ -1,5 +1,8 @@
 #![cfg(feature = "serde")]
 
+use std::fs;
+use std::path::Path;
+
 use serde_json::json;
 
 #[test]
@@ -272,6 +275,46 @@ swarm: true
     assert_eq!(created.json["status"], "Pending");
     assert_eq!(created.json["mode"], "swarm");
     assert_eq!(created.json["goal"], "optimize transform latency");
+}
+
+#[test]
+fn checked_in_swarm_example_is_accepted_by_bridge() {
+    let root = temp_root("checked-in-swarm-example");
+    let spec_dir = root.join("specs");
+    let execution_dir = root.join("executions");
+    let body = read_example("examples/swarm-transform-optimization-3way.yaml");
+
+    let created = void_control::bridge::handle_bridge_request_with_dirs_for_test(
+        "POST",
+        "/v1/executions",
+        Some(&body),
+        &spec_dir,
+        &execution_dir,
+    )
+    .expect("create");
+
+    assert_eq!(created.status, 200);
+    assert_eq!(created.json["mode"], "swarm");
+}
+
+#[test]
+fn checked_in_supervision_example_is_accepted_by_bridge() {
+    let root = temp_root("checked-in-supervision-example");
+    let spec_dir = root.join("specs");
+    let execution_dir = root.join("executions");
+    let body = read_example("examples/supervision-transform-review.yaml");
+
+    let created = void_control::bridge::handle_bridge_request_with_dirs_for_test(
+        "POST",
+        "/v1/executions",
+        Some(&body),
+        &spec_dir,
+        &execution_dir,
+    )
+    .expect("create");
+
+    assert_eq!(created.status, 200);
+    assert_eq!(created.json["mode"], "supervision");
 }
 
 #[test]
@@ -586,6 +629,11 @@ fn temp_root(label: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("void-control-bridge-{label}-{nanos}"));
     std::fs::create_dir_all(&dir).expect("create temp dir");
     dir
+}
+
+fn read_example(path: &str) -> String {
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    fs::read_to_string(repo_root.join(path)).expect("read example file")
 }
 
 fn seed_execution(root: &std::path::Path, execution_id: &str, status: &str) {

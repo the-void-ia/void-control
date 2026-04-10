@@ -9,7 +9,7 @@ These examples are intentionally split across two layers:
 Boundary:
 
 - `void-control` owns orchestration concerns such as `mode`, `policy`, `evaluation`,
-  `variation`, and `swarm`.
+  `variation`, `swarm`, and `supervision`.
 - `void-box` only receives a runtime template path plus a patched per-candidate
   workflow spec. It does not need to understand swarm/supervision strategies.
 
@@ -23,8 +23,14 @@ Boundary:
   - wide Transform-02 swarm stress example
   - launches 8 sibling candidates in parallel
   - scores `latency_p99_ms`, `error_rate`, and `cpu_pct`
+- `supervision-transform-review.yaml`
+  - canonical Transform-02 supervision example
+  - launches 3 worker runs under a flat supervisor
+  - finalizes once every worker emits `metrics.approved = 1.0`
 - `runtime-templates/transform_optimizer_agent.yaml`
   - plain runtime template used by the swarm example
+- `runtime-templates/transform_supervision_worker.yaml`
+  - runtime template used by the supervision example
 
 ## Transform Swarm Examples
 
@@ -119,6 +125,15 @@ curl -sS -X POST http://127.0.0.1:43210/v1/executions \
   --data-binary @examples/swarm-transform-optimization-3way.yaml
 ```
 
+Supervision:
+
+```bash
+cd /home/diego/github/void-control
+curl -sS -X POST http://127.0.0.1:43210/v1/executions \
+  -H 'Content-Type: text/yaml' \
+  --data-binary @examples/supervision-transform-review.yaml
+```
+
 Stress swarm:
 
 ```bash
@@ -145,6 +160,10 @@ npm run dev -- --host 127.0.0.1 --port 3000
 
 - The transform runtime template uses `agent.output_file: /workspace/output.json`
   so `void-control` can collect structured metrics directly.
+- The supervision worker template uses
+  `examples/runtime-assets/transform_supervision_worker.py` to append
+  `metrics.approved` after the measured benchmark run. That is the current v1
+  supervision approval contract.
 - `examples/runtime-templates/transform_optimizer_agent.yaml` uses
   `sandbox.image: "python:3.12-slim"` because the production Claude rootfs does
   not include `python3`.

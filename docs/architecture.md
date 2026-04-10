@@ -288,8 +288,8 @@ Flow:
                    v
         ┌──────────────────────┐
         │ strategy planner     │
-        │ swarm now            │
-        │ supervision later    │
+        │ swarm                │
+        │ supervision          │
         └──────────────────────┘
 ```
 
@@ -352,7 +352,6 @@ Planning inputs depend on strategy:
 
 - swarm: breadth-oriented candidate planning
 - supervision: orchestrator-worker review, revision, and finalization
-- supervision: planned next strategy on the same execution substrate
 
 ### 3. Candidate dispatch
 

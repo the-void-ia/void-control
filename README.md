@@ -49,7 +49,7 @@ as a single-purpose swarm console.
 Current direction:
 
 - `swarm`: first implemented orchestration strategy
-- `supervision`: planned next strategy
+- `supervision`: implemented orchestrator-worker strategy
 
 Shared control-plane primitives across strategies:
 
@@ -142,6 +142,25 @@ This is also the canonical first-release orchestration workflow:
 - launch through the bridge or UI
 - inspect the execution graph, inspector, and event stream
 - follow candidate metrics and `leader` / `broadcast` collaboration events
+
+### 7) Run the supervision example
+
+Use the checked-in supervision example to exercise the flat
+orchestrator-worker path:
+
+```bash
+curl -sS -X POST http://127.0.0.1:43210/v1/executions \
+  -H 'Content-Type: text/yaml' \
+  --data-binary @examples/supervision-transform-review.yaml
+```
+
+Current v1 supervision contract:
+
+- workers still run a normal runtime template on `void-box`
+- approval is reducer-driven in `void-control`
+- worker output must include `metrics.approved`
+- the bundled supervision worker template appends that metric after the measured
+  benchmark run
 
 ## Development
 

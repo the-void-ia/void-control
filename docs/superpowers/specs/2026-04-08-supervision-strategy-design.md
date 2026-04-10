@@ -157,26 +157,24 @@ policy:
   concurrency:
     max_concurrent_candidates: 4
 evaluation:
-  scoring_type: review
-  ranking: supervisor
-  tie_breaking: latest_approved
+  scoring_type: weighted_metrics
+  ranking: highest_score
+  tie_breaking: latency_p99_ms
 variation:
   candidates_per_iteration: 4
   source: explicit
   explicit:
-    - label: researcher
-      overrides:
-        role: researcher
-    - label: implementer
-      overrides:
-        role: implementer
+    - overrides:
+        sandbox.env.WORKER_ROLE: researcher
+    - overrides:
+        sandbox.env.WORKER_ROLE: implementer
 supervision:
-  supervisor:
-    role: coordinator
-    review_policy:
-      max_revision_rounds: 2
-      retry_on_runtime_failure: true
-      require_final_approval: true
+  supervisor_role: coordinator
+  review_policy:
+    max_revision_rounds: 2
+    retry_on_runtime_failure: true
+    require_final_approval: true
+swarm: false
 ```
 
 Notes:
@@ -247,13 +245,9 @@ New event types:
 
 - `SupervisorAssigned`
 - `WorkerQueued`
-- `WorkerDispatched`
-- `WorkerOutputCollected`
 - `ReviewRequested`
 - `WorkerApproved`
 - `RevisionRequested`
-- `RetryRequested`
-- `WorkerRejected`
 - `ExecutionFinalized`
 
 Event payloads should include:
@@ -266,6 +260,13 @@ Event payloads should include:
 - revision notes when present
 
 These events are the primary truth source for UI/CLI supervision inspection.
+
+Current implementation note:
+
+- v1 approval is metric-driven
+- worker output must include `metrics.approved`
+- the checked-in supervision example appends that field after the measured
+  benchmark run
 
 ## Message And Collaboration Model
 
