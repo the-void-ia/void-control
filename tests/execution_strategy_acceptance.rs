@@ -80,93 +80,90 @@ fn supervision_strategy_persists_approved_review_state() {
 
 #[test]
 fn supported_strategies_emit_expected_completion_events() {
-    for mode in ["swarm"] {
-        let label = format!("{mode}-events");
-        let (execution, _, snapshot) = run_mode_to_completion(mode, temp_store_dir(&label));
+    let mode = "swarm";
+    let label = format!("{mode}-events");
+    let (execution, _, snapshot) = run_mode_to_completion(mode, temp_store_dir(&label));
 
-        assert_eq!(execution.status, ExecutionStatus::Completed, "{mode}");
-        assert_event_counts(
-            mode,
-            &snapshot.events,
-            &[
-                (ControlEventType::ExecutionCreated, 1),
-                (ControlEventType::ExecutionSubmitted, 1),
-                (ControlEventType::ExecutionStarted, 1),
-                (ControlEventType::IterationStarted, 2),
-                (ControlEventType::CandidateQueued, 4),
-                (ControlEventType::CandidateDispatched, 4),
-                (ControlEventType::CandidateOutputCollected, 4),
-                (ControlEventType::CandidateScored, 2),
-                (ControlEventType::IterationCompleted, 2),
-                (ControlEventType::ExecutionCompleted, 1),
-                (ControlEventType::ExecutionFailed, 0),
-            ],
-        );
-    }
+    assert_eq!(execution.status, ExecutionStatus::Completed, "{mode}");
+    assert_event_counts(
+        mode,
+        &snapshot.events,
+        &[
+            (ControlEventType::ExecutionCreated, 1),
+            (ControlEventType::ExecutionSubmitted, 1),
+            (ControlEventType::ExecutionStarted, 1),
+            (ControlEventType::IterationStarted, 2),
+            (ControlEventType::CandidateQueued, 4),
+            (ControlEventType::CandidateDispatched, 4),
+            (ControlEventType::CandidateOutputCollected, 4),
+            (ControlEventType::CandidateScored, 2),
+            (ControlEventType::IterationCompleted, 2),
+            (ControlEventType::ExecutionCompleted, 1),
+            (ControlEventType::ExecutionFailed, 0),
+        ],
+    );
 }
 
 #[test]
 fn supported_strategies_persist_terminal_candidate_records() {
-    for mode in ["swarm"] {
-        let label = format!("{mode}-candidates");
-        let (execution, store, snapshot) = run_mode_to_completion(mode, temp_store_dir(&label));
-        let candidates = store
-            .load_candidates(&execution.execution_id)
-            .expect("load candidates");
-        let queued_count = snapshot
-            .events
-            .iter()
-            .filter(|event| event.event_type == ControlEventType::CandidateQueued)
-            .count();
+    let mode = "swarm";
+    let label = format!("{mode}-candidates");
+    let (execution, store, snapshot) = run_mode_to_completion(mode, temp_store_dir(&label));
+    let candidates = store
+        .load_candidates(&execution.execution_id)
+        .expect("load candidates");
+    let queued_count = snapshot
+        .events
+        .iter()
+        .filter(|event| event.event_type == ControlEventType::CandidateQueued)
+        .count();
 
-        assert_eq!(candidates.len(), queued_count, "{mode}");
-        assert!(!candidates.is_empty(), "{mode}");
-        assert!(
-            candidates
-                .iter()
-                .all(|candidate| candidate.status == CandidateStatus::Completed),
-            "{mode}"
-        );
-        assert!(
-            candidates
-                .iter()
-                .all(|candidate| candidate.runtime_run_id.is_some()),
-            "{mode}"
-        );
-        assert!(
-            candidates
-                .iter()
-                .all(|candidate| candidate.succeeded == Some(true)),
-            "{mode}"
-        );
-    }
+    assert_eq!(candidates.len(), queued_count, "{mode}");
+    assert!(!candidates.is_empty(), "{mode}");
+    assert!(
+        candidates
+            .iter()
+            .all(|candidate| candidate.status == CandidateStatus::Completed),
+        "{mode}"
+    );
+    assert!(
+        candidates
+            .iter()
+            .all(|candidate| candidate.runtime_run_id.is_some()),
+        "{mode}"
+    );
+    assert!(
+        candidates
+            .iter()
+            .all(|candidate| candidate.succeeded == Some(true)),
+        "{mode}"
+    );
 }
 
 #[test]
 fn supported_strategies_emit_failed_terminal_events_on_all_failure() {
-    for mode in ["swarm"] {
-        let label = format!("{mode}-failed");
-        let (execution, _, snapshot) = run_mode_with_all_failures(mode, temp_store_dir(&label));
+    let mode = "swarm";
+    let label = format!("{mode}-failed");
+    let (execution, _, snapshot) = run_mode_with_all_failures(mode, temp_store_dir(&label));
 
-        assert_eq!(execution.status, ExecutionStatus::Failed, "{mode}");
-        assert_event_counts(
-            mode,
-            &snapshot.events,
-            &[
-                (ControlEventType::ExecutionCreated, 1),
-                (ControlEventType::ExecutionSubmitted, 1),
-                (ControlEventType::ExecutionStarted, 1),
-                (ControlEventType::IterationStarted, 1),
-                (ControlEventType::CandidateQueued, 2),
-                (ControlEventType::CandidateDispatched, 2),
-                (ControlEventType::CandidateOutputCollected, 2),
-                (ControlEventType::CandidateScored, 1),
-                (ControlEventType::IterationCompleted, 0),
-                (ControlEventType::ExecutionCompleted, 0),
-                (ControlEventType::ExecutionFailed, 1),
-            ],
-        );
-    }
+    assert_eq!(execution.status, ExecutionStatus::Failed, "{mode}");
+    assert_event_counts(
+        mode,
+        &snapshot.events,
+        &[
+            (ControlEventType::ExecutionCreated, 1),
+            (ControlEventType::ExecutionSubmitted, 1),
+            (ControlEventType::ExecutionStarted, 1),
+            (ControlEventType::IterationStarted, 1),
+            (ControlEventType::CandidateQueued, 2),
+            (ControlEventType::CandidateDispatched, 2),
+            (ControlEventType::CandidateOutputCollected, 2),
+            (ControlEventType::CandidateScored, 1),
+            (ControlEventType::IterationCompleted, 0),
+            (ControlEventType::ExecutionCompleted, 0),
+            (ControlEventType::ExecutionFailed, 1),
+        ],
+    );
 }
 
 #[cfg(feature = "serde")]
