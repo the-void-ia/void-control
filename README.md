@@ -23,6 +23,18 @@ This recording shows the canonical first-release flow:
 
 Direct link: [void-control swarm execution demo](docs/assets/void-control-swarm-demo.mp4).
 
+What this example does:
+
+- runs three sibling optimization strategies against the same Transform-02 workload
+- compares candidates by measured metrics, not invented estimates
+- uses swarm reduction to select the best candidate for the iteration
+
+What to look for:
+
+- candidate fan-out in the graph
+- metrics and event inspection on the right
+- winner selection and runtime drill-down through `Open Runtime Graph`
+
 ## Supervision Execution Demo
 
 [![void-control supervision demo](docs/assets/void-control-supervision-demo.gif)](docs/assets/void-control-supervision-demo.webm)
@@ -36,6 +48,18 @@ This recording shows the supervision operator flow in the real UI:
 - runtime drill-down through `Open Runtime Graph`
 
 Direct link: [void-control supervision execution demo](docs/assets/void-control-supervision-demo.webm).
+
+What this example does:
+
+- runs three specialized Transform-02 workers under one supervisor
+- collects each worker output and evaluates `metrics.approved`
+- finalizes only after the workers are reviewed and approved
+
+What to look for:
+
+- supervisor-to-worker graph semantics instead of swarm fan-out/ranking
+- review and approval state in the right inspector
+- finalization flow and runtime drill-down through `Open Runtime Graph`
 
 ## Release
 
