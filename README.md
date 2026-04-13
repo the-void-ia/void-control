@@ -4,6 +4,27 @@ Control-plane orchestration for `void-box` runtime execution.
 
 ![void-control hero](docs/assets/void-control-hero.png)
 
+## Orchestration Strategies
+
+`void-control` should be understood as a host for orchestration strategies, not
+as a single-purpose swarm console.
+
+Current direction:
+
+- `swarm`: first implemented orchestration strategy
+- `supervision`: implemented orchestrator-worker strategy
+
+Shared control-plane primitives across strategies:
+
+- execution specs and policies
+- candidate planning and reduction
+- persisted control-plane events
+- message-box / MCP-backed collaboration state
+- graph-first execution inspection in the UI
+
+The strategy changes the orchestration semantics. It should not require a
+different product surface or a different backend contract family.
+
 ## Demo
 
 [![void-control demo](docs/assets/void-control-demo.gif)](docs/assets/void-control-demo.mp4)
@@ -78,27 +99,6 @@ What to look for:
 - persists execution, event, candidate, and message-box state
 - provides terminal-first and graph-first operator UX
 - enforces runtime contract compatibility with `void-box`
-
-## Orchestration Strategies
-
-`void-control` should be understood as a host for orchestration strategies, not
-as a single-purpose swarm console.
-
-Current direction:
-
-- `swarm`: first implemented orchestration strategy
-- `supervision`: implemented orchestrator-worker strategy
-
-Shared control-plane primitives across strategies:
-
-- execution specs and policies
-- candidate planning and reduction
-- persisted control-plane events
-- message-box / MCP-backed collaboration state
-- graph-first execution inspection in the UI
-
-The strategy changes the orchestration semantics. It should not require a
-different product surface or a different backend contract family.
 
 ## Documentation
 
