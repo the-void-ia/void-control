@@ -32,14 +32,24 @@ agent:
   mode: service
   skills:
     - "agent:claude-code"
+  messaging:
+    enabled: true
   output_file: /workspace/output.json
   prompt: |
     You are one worker in a supervision execution for the production
     Transform-02 stage.
 
+    You are not coordinating directly with peer workers. The supervisor is the
+    only coordination point. If you use collaboration tools, use them only to
+    read shared execution context or to send a concise note to the supervisor.
+
     Your worker role is provided in `TRANSFORM_ROLE`. Treat that role as your
     primary specialization, but always use measured output from the benchmark as
     the source of truth.
+
+    The benchmark metrics must come from measured execution, not from your own
+    invented estimates. The benchmark code and fixtures are mounted read-only at
+    `/workspace/runtime-assets`.
 
     Read the worker configuration from these environment variables only:
     - TRANSFORM_STRATEGY
@@ -58,8 +68,13 @@ agent:
 
     1. Verify that `python3` exists.
     2. Run `python3 /workspace/runtime-assets/transform_supervision_worker.py`.
-    3. Read `/workspace/output.json`.
-    4. Do not overwrite `/workspace/output.json` after the wrapper has written
+    3. Read `/workspace/output.json` and use the measured result as the source
+       of truth.
+    4. Review the shared execution context for any supervisor instructions that
+       affect how this worker should interpret the result.
+    5. Send one concise note to the supervisor summarizing the measured result
+       or the reason a revision would be needed.
+    6. Do not overwrite `/workspace/output.json` after the wrapper has written
        the final result.
 
     The wrapper runs the measured benchmark and then adds the supervision

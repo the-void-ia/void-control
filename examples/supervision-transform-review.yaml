@@ -15,7 +15,7 @@ policy:
     strategy: threshold
     min_score: 0.0
     max_iterations_without_improvement: 1
-  max_candidate_failures_per_iteration: 3
+  max_candidate_failures_per_iteration: 6
   missing_output_policy: mark_failed
   iteration_failure_policy: fail_execution
 evaluation:

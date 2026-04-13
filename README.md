@@ -23,6 +23,20 @@ This recording shows the canonical first-release flow:
 
 Direct link: [void-control swarm execution demo](docs/assets/void-control-swarm-demo.mp4).
 
+## Supervision Execution Demo
+
+[![void-control supervision demo](docs/assets/void-control-supervision-demo.gif)](docs/assets/void-control-supervision-demo.webm)
+
+This recording shows the supervision operator flow in the real UI:
+
+- `Launch Spec` with the checked-in supervision example
+- supervision execution selection in the left rail
+- supervision graph in the center pane
+- supervision-specific inspector state on the right
+- runtime drill-down through `Open Runtime Graph`
+
+Direct link: [void-control supervision execution demo](docs/assets/void-control-supervision-demo.webm).
+
 ## Release
 
 - First public release target: `v0.0.1`
