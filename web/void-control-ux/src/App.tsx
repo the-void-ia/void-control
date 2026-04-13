@@ -8,8 +8,10 @@ import { LaunchRunModal } from './components/LaunchRunModal';
 import { SwarmOverview } from './components/SwarmOverview';
 import { SwarmGraph } from './components/SwarmGraph';
 import { SwarmInspector } from './components/SwarmInspector';
+import { SupervisionGraph } from './components/SupervisionGraph';
+import { SupervisionInspector } from './components/SupervisionInspector';
 import { baseUrl, cancelRun, createExecutionFromSpecText, getExecution, getExecutionEvents, getExecutions, getRun, getRunEvents, getRunStages, getRunTelemetrySamples, getRuns, getRuntimeHealth, launchRunFromSpecText, startRun } from './lib/api';
-import { deriveCandidateCards, deriveIterationSummaries, deriveSwarmExecutionSummary } from './lib/orchestration';
+import { deriveCandidateCards, deriveIterationSummaries, deriveSupervisionExecutionSummary, deriveSupervisionWorkerCards, deriveSwarmExecutionSummary } from './lib/orchestration';
 import { useUiStore } from './store/ui';
 import { defaultStageSelection, eventNodeId, filterEventsForStage, parseNodeId, resolveSelectedStage, runNodeId } from './lib/selectors';
 import type { StageView } from './lib/types';
@@ -231,6 +233,18 @@ export function App() {
   const swarmCandidates = useMemo(
     () => (executionDetail.data ? deriveCandidateCards(executionDetail.data, selectedIterationIndex) : []),
     [executionDetail.data, selectedIterationIndex]
+  );
+  const supervisionSummary = useMemo(
+    () => (executionDetail.data ? deriveSupervisionExecutionSummary(executionDetail.data) : null),
+    [executionDetail.data]
+  );
+  const supervisionWorkers = useMemo(
+    () => (executionDetail.data ? deriveSupervisionWorkerCards(executionDetail.data, selectedIterationIndex) : []),
+    [executionDetail.data, selectedIterationIndex]
+  );
+  const selectedSupervisionWorker = useMemo(
+    () => supervisionWorkers.find((worker) => worker.workerId === selectedSwarmCandidateId) ?? supervisionWorkers[0] ?? null,
+    [supervisionWorkers, selectedSwarmCandidateId]
   );
   const selectedSwarmCandidate = useMemo(
     () => swarmCandidates.find((candidate) => candidate.candidateId === selectedSwarmCandidateId) ?? swarmCandidates[0] ?? null,
@@ -512,7 +526,31 @@ export function App() {
             <div className="empty">No runs yet. Start one from terminal and refresh.</div>
           ) : resolvedExecutionId ? (
             <div className="detail-grid swarm-detail-grid">
-              {swarmSummary ? (
+              {executionDetail.data?.execution.mode === 'supervision' && supervisionSummary ? (
+                <>
+                  <div className="center-panel">
+                    <SupervisionGraph
+                      summary={supervisionSummary}
+                      workers={supervisionWorkers}
+                      selectedWorkerId={selectedSupervisionWorker?.workerId ?? null}
+                      onSelectWorker={setSelectedSwarmCandidateId}
+                    />
+                    <RunLogs
+                      events={executionEvents.data ?? []}
+                      selectedEventRef={null}
+                    />
+                  </div>
+                  <SupervisionInspector
+                    summary={supervisionSummary}
+                    worker={selectedSupervisionWorker}
+                    events={executionEvents.data ?? []}
+                    onOpenRuntime={(runtimeRunId) => {
+                      setSelectedExecutionId(null);
+                      setSelectedRunId(runtimeRunId);
+                    }}
+                  />
+                </>
+              ) : swarmSummary ? (
                 <>
                   <div className="center-panel">
                     <SwarmGraph

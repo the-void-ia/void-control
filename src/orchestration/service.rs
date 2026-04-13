@@ -16,10 +16,12 @@ use super::policy::GlobalConfig;
 use super::scoring::{MetricDirection, ScoringConfig, WeightedMetric};
 use super::spec::ExecutionSpec;
 use super::store::FsExecutionStore;
-use super::strategy::{IterationEvaluation, SearchStrategy, StopReason, SwarmStrategy};
+use super::strategy::{
+    IterationEvaluation, StopReason, SupervisionEvaluation, SupervisionStrategy, SwarmStrategy,
+};
 use super::types::{
     CandidateOutput, CandidateSpec, CandidateStatus, Execution, ExecutionAccumulator,
-    ExecutionCandidate, ExecutionStatus, MessageStats,
+    ExecutionCandidate, ExecutionStatus, MessageStats, WorkerReviewStatus,
 };
 
 #[cfg(feature = "serde")]
@@ -101,27 +103,44 @@ struct CandidateStateUpdate<'a> {
     overrides: &'a std::collections::BTreeMap<String, String>,
     succeeded: Option<bool>,
     metrics: &'a std::collections::BTreeMap<String, f64>,
+    review_status: Option<WorkerReviewStatus>,
+    revision_round: u32,
+}
+
+#[derive(Debug, Clone)]
+enum StrategyEvaluation {
+    Swarm(IterationEvaluation),
+    Supervision(SupervisionEvaluation),
 }
 
 enum SelectedStrategy {
     Swarm(SwarmStrategy),
-    Search(SearchStrategy),
+    Supervision(SupervisionStrategy),
 }
 
 impl SelectedStrategy {
     fn new(spec: &ExecutionSpec) -> Self {
-        let scoring = scoring_from_spec(spec);
         match spec.mode.as_str() {
-            "search" => Self::Search(SearchStrategy::new(
-                spec.variation.clone(),
-                scoring,
-                spec.policy.convergence.clone(),
-            )),
-            _ => Self::Swarm(SwarmStrategy::new(
-                spec.variation.clone(),
-                scoring,
-                spec.policy.convergence.clone(),
-            )),
+            "supervision" => {
+                let review_policy = spec
+                    .supervision
+                    .as_ref()
+                    .expect("validated supervision spec")
+                    .review_policy
+                    .clone();
+                Self::Supervision(SupervisionStrategy::new(
+                    spec.variation.clone(),
+                    review_policy,
+                ))
+            }
+            _ => {
+                let scoring = scoring_from_spec(spec);
+                Self::Swarm(SwarmStrategy::new(
+                    spec.variation.clone(),
+                    scoring,
+                    spec.policy.convergence.clone(),
+                ))
+            }
         }
     }
 
@@ -133,7 +152,7 @@ impl SelectedStrategy {
     ) -> Vec<super::types::CandidateSpec> {
         match self {
             Self::Swarm(strategy) => strategy.plan_candidates(accumulator, inboxes, message_stats),
-            Self::Search(strategy) => strategy.plan_candidates(accumulator, inboxes, message_stats),
+            Self::Supervision(strategy) => strategy.plan_candidates(accumulator, inboxes),
         }
     }
 
@@ -141,33 +160,52 @@ impl SelectedStrategy {
         &self,
         accumulator: &ExecutionAccumulator,
         outputs: &[CandidateOutput],
-    ) -> IterationEvaluation {
+    ) -> StrategyEvaluation {
         match self {
-            Self::Swarm(strategy) => strategy.evaluate(accumulator, outputs),
-            Self::Search(strategy) => strategy.evaluate(accumulator, outputs),
+            Self::Swarm(strategy) => {
+                StrategyEvaluation::Swarm(strategy.evaluate(accumulator, outputs))
+            }
+            Self::Supervision(strategy) => {
+                StrategyEvaluation::Supervision(strategy.evaluate(accumulator, outputs))
+            }
         }
     }
 
     fn reduce(
         &self,
         accumulator: ExecutionAccumulator,
-        planned_candidates: &[CandidateSpec],
-        evaluation: IterationEvaluation,
+        _planned_candidates: &[CandidateSpec],
+        evaluation: &StrategyEvaluation,
     ) -> ExecutionAccumulator {
         match self {
-            Self::Swarm(strategy) => strategy.reduce(accumulator, evaluation),
-            Self::Search(strategy) => strategy.reduce(accumulator, planned_candidates, evaluation),
+            Self::Swarm(strategy) => {
+                let StrategyEvaluation::Swarm(evaluation) = evaluation else {
+                    unreachable!("strategy and evaluation mismatch");
+                };
+                strategy.reduce(accumulator, evaluation.clone())
+            }
+            Self::Supervision(strategy) => {
+                let StrategyEvaluation::Supervision(evaluation) = evaluation else {
+                    unreachable!("strategy and evaluation mismatch");
+                };
+                strategy.reduce(accumulator, evaluation)
+            }
         }
     }
 
     fn should_stop(
         &self,
         accumulator: &ExecutionAccumulator,
-        evaluation: &IterationEvaluation,
+        evaluation: &StrategyEvaluation,
     ) -> Option<StopReason> {
         match self {
-            Self::Swarm(strategy) => strategy.should_stop(accumulator, evaluation),
-            Self::Search(strategy) => strategy.should_stop(accumulator, evaluation),
+            Self::Swarm(strategy) => {
+                let StrategyEvaluation::Swarm(evaluation) = evaluation else {
+                    unreachable!("strategy and evaluation mismatch");
+                };
+                strategy.should_stop(accumulator, evaluation)
+            }
+            Self::Supervision(_) => None,
         }
     }
 }
@@ -591,7 +629,50 @@ where
         record.overrides = update.overrides.clone();
         record.succeeded = update.succeeded;
         record.metrics = update.metrics.clone();
+        record.review_status = update.review_status;
+        record.revision_round = update.revision_round;
         self.store.save_candidate(&record)
+    }
+
+    fn persist_supervision_reviews(
+        &self,
+        execution: &Execution,
+        iteration: u32,
+        candidates: &[ExecutionCandidate],
+        evaluation: &SupervisionEvaluation,
+    ) -> io::Result<()> {
+        for decision in &evaluation.decisions {
+            let Some(candidate) = candidates
+                .iter()
+                .find(|candidate| candidate.candidate_id == decision.candidate_id)
+            else {
+                continue;
+            };
+            self.append_event(&execution.execution_id, ControlEventType::ReviewRequested)?;
+            let event_type = match decision.status {
+                WorkerReviewStatus::Approved => ControlEventType::WorkerApproved,
+                WorkerReviewStatus::RevisionRequested => ControlEventType::RevisionRequested,
+                WorkerReviewStatus::RetryRequested => ControlEventType::RevisionRequested,
+                WorkerReviewStatus::Rejected => ControlEventType::ExecutionFailed,
+                WorkerReviewStatus::PendingReview => continue,
+            };
+            self.save_candidate_state(CandidateStateUpdate {
+                execution_id: &execution.execution_id,
+                candidate_id: &candidate.candidate_id,
+                created_seq: candidate.created_seq,
+                iteration,
+                status: candidate.status.clone(),
+                runtime_run_id: candidate.runtime_run_id.clone(),
+                overrides: &candidate.overrides,
+                succeeded: candidate.succeeded,
+                metrics: &candidate.metrics,
+                review_status: Some(decision.status),
+                revision_round: decision.revision_round,
+            })?;
+            self.append_event(&execution.execution_id, event_type)?;
+        }
+
+        Ok(())
     }
 
     #[cfg(feature = "serde")]
@@ -755,8 +836,13 @@ where
                 overrides: &candidate.overrides,
                 succeeded: None,
                 metrics: &Default::default(),
+                review_status: None,
+                revision_round: 0,
             })?;
             self.append_event(&execution.execution_id, ControlEventType::CandidateQueued)?;
+            if spec.mode == "supervision" {
+                self.append_event(&execution.execution_id, ControlEventType::WorkerQueued)?;
+            }
             self.next_candidate_id += 1;
         }
         Ok(candidates)
@@ -871,6 +957,8 @@ where
             overrides: &candidate.overrides,
             succeeded: None,
             metrics: &Default::default(),
+            review_status: None,
+            revision_round: 0,
         })?;
 
         let inspection =
@@ -887,6 +975,8 @@ where
                         overrides: &candidate.overrides,
                         succeeded: None,
                         metrics: &Default::default(),
+                        review_status: None,
+                        revision_round: 0,
                     })?;
                     return Ok(DispatchOutcome::Canceled);
                 }
@@ -946,6 +1036,8 @@ where
                         overrides: &candidate.overrides,
                         succeeded: None,
                         metrics: &Default::default(),
+                        review_status: None,
+                        revision_round: 0,
                     })?;
                     return Ok(DispatchOutcome::Canceled);
                 }
@@ -1020,6 +1112,8 @@ where
                     overrides: &candidate.overrides,
                     succeeded: Some(output.succeeded),
                     metrics: &output.metrics,
+                    review_status: None,
+                    revision_round: 0,
                 })?;
                 output.candidate_id = candidate.candidate_id.clone();
                 self.append_event(
@@ -1064,6 +1158,8 @@ where
                         overrides: &candidate.overrides,
                         succeeded: Some(false),
                         metrics: &Default::default(),
+                        review_status: None,
+                        revision_round: 0,
                     })?;
                     self.append_event(
                         &execution.execution_id,
@@ -1105,6 +1201,8 @@ where
                     overrides: &candidate.overrides,
                     succeeded: Some(output.succeeded),
                     metrics: &output.metrics,
+                    review_status: None,
+                    revision_round: 0,
                 })?;
                 output.candidate_id = candidate.candidate_id.clone();
                 self.append_event(
@@ -1142,6 +1240,8 @@ where
                     overrides: &candidate.overrides,
                     succeeded: Some(!failed),
                     metrics: &Default::default(),
+                    review_status: None,
+                    revision_round: 0,
                 })?;
                 self.append_event(
                     &execution.execution_id,
@@ -1183,6 +1283,8 @@ where
                         overrides: &candidate.overrides,
                         succeeded: Some(!failed),
                         metrics: &Default::default(),
+                        review_status: None,
+                        revision_round: 0,
                     })?;
                     self.append_event(
                         &execution.execution_id,
@@ -1225,6 +1327,8 @@ where
                         overrides: &candidate.overrides,
                         succeeded: Some(false),
                         metrics: &Default::default(),
+                        review_status: None,
+                        revision_round: 0,
                     })?;
                     self.append_event(
                         &execution.execution_id,
@@ -1257,6 +1361,20 @@ where
         let mut iteration = accumulator.completed_iterations;
         let mut retry_used = false;
         let mut dispatches_used = 0usize;
+
+        if spec.mode == "supervision"
+            && !self
+                .store
+                .load_execution(&execution.execution_id)?
+                .events
+                .iter()
+                .any(|event| event.event_type == ControlEventType::SupervisorAssigned)
+        {
+            self.append_event(
+                &execution.execution_id,
+                ControlEventType::SupervisorAssigned,
+            )?;
+        }
 
         while iteration < spec.policy.budget.max_iterations.unwrap_or(0) {
             match self.check_execution_control(&execution.execution_id, worker_id)? {
@@ -1425,19 +1543,41 @@ where
                 .filter(|candidate| candidate.succeeded == Some(false))
                 .count() as u32;
             let evaluation = strategy.evaluate(&accumulator, &outputs);
-            self.append_event(&execution.execution_id, ControlEventType::CandidateScored)?;
-            accumulator = strategy.reduce(accumulator, &candidates, evaluation.clone());
-            accumulator.failure_counts.total_candidate_failures = accumulator
-                .failure_counts
-                .total_candidate_failures
-                .saturating_sub(
-                    evaluation
-                        .ranked_candidates
+            match &evaluation {
+                StrategyEvaluation::Swarm(swarm_evaluation) => {
+                    self.append_event(&execution.execution_id, ControlEventType::CandidateScored)?;
+                    accumulator = strategy.reduce(accumulator, &candidates, &evaluation);
+                    accumulator.failure_counts.total_candidate_failures = accumulator
+                        .failure_counts
+                        .total_candidate_failures
+                        .saturating_sub(
+                            swarm_evaluation
+                                .ranked_candidates
+                                .iter()
+                                .filter(|candidate| !candidate.pass)
+                                .count() as u32,
+                        )
+                        + iteration_failures;
+                }
+                StrategyEvaluation::Supervision(supervision_evaluation) => {
+                    self.persist_supervision_reviews(
+                        execution,
+                        iteration,
+                        &persisted_iteration_candidates,
+                        supervision_evaluation,
+                    )?;
+                    accumulator = strategy.reduce(accumulator, &candidates, &evaluation);
+                    accumulator.completed_iterations += 1;
+                    accumulator.failure_counts.total_candidate_failures += iteration_failures;
+                    if let Some(approved) = supervision_evaluation
+                        .decisions
                         .iter()
-                        .filter(|candidate| !candidate.pass)
-                        .count() as u32,
-                )
-                + iteration_failures;
+                        .find(|decision| decision.status == WorkerReviewStatus::Approved)
+                    {
+                        accumulator.best_candidate_id = Some(approved.candidate_id.clone());
+                    }
+                }
+            }
             execution.completed_iterations = accumulator.completed_iterations;
             execution.failure_counts = accumulator.failure_counts.clone();
             execution.result_best_candidate_id = accumulator.best_candidate_id.clone();
@@ -1445,7 +1585,7 @@ where
                 .save_accumulator(&execution.execution_id, &accumulator)?;
 
             let all_failed = outputs.iter().all(|output| !output.succeeded);
-            if all_failed {
+            if matches!(evaluation, StrategyEvaluation::Swarm(_)) && all_failed {
                 match spec.policy.iteration_failure_policy.as_str() {
                     "continue" => {
                         iteration += 1;
@@ -1479,18 +1619,56 @@ where
                 return Ok(execution.clone());
             }
 
-            if strategy.should_stop(&accumulator, &evaluation).is_some() {
-                execution.status = ExecutionStatus::Completed;
-                self.store.save_execution(execution)?;
-                self.append_event(
-                    &execution.execution_id,
-                    ControlEventType::IterationCompleted,
-                )?;
-                self.append_event(
-                    &execution.execution_id,
-                    ControlEventType::ExecutionCompleted,
-                )?;
-                return Ok(execution.clone());
+            match &evaluation {
+                StrategyEvaluation::Swarm(_) => {
+                    if strategy.should_stop(&accumulator, &evaluation).is_some() {
+                        execution.status = ExecutionStatus::Completed;
+                        self.store.save_execution(execution)?;
+                        self.append_event(
+                            &execution.execution_id,
+                            ControlEventType::IterationCompleted,
+                        )?;
+                        self.append_event(
+                            &execution.execution_id,
+                            ControlEventType::ExecutionCompleted,
+                        )?;
+                        return Ok(execution.clone());
+                    }
+                }
+                StrategyEvaluation::Supervision(evaluation) => {
+                    let has_rejected = evaluation
+                        .decisions
+                        .iter()
+                        .any(|decision| decision.status == WorkerReviewStatus::Rejected);
+                    if evaluation.final_approval_ready
+                        && accumulator.supervision_final_approval == Some(true)
+                    {
+                        execution.status = ExecutionStatus::Completed;
+                        self.store.save_execution(execution)?;
+                        self.append_event(
+                            &execution.execution_id,
+                            ControlEventType::IterationCompleted,
+                        )?;
+                        self.append_event(
+                            &execution.execution_id,
+                            ControlEventType::ExecutionFinalized,
+                        )?;
+                        self.append_event(
+                            &execution.execution_id,
+                            ControlEventType::ExecutionCompleted,
+                        )?;
+                        return Ok(execution.clone());
+                    }
+                    if has_rejected {
+                        execution.status = ExecutionStatus::Failed;
+                        self.store.save_execution(execution)?;
+                        self.append_event(
+                            &execution.execution_id,
+                            ControlEventType::ExecutionFailed,
+                        )?;
+                        return Ok(execution.clone());
+                    }
+                }
             }
 
             self.append_event(

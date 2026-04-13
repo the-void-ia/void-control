@@ -1,5 +1,8 @@
 #![cfg(feature = "serde")]
 
+use std::fs;
+use std::path::Path;
+
 use serde_json::json;
 
 #[test]
@@ -175,7 +178,7 @@ fn create_list_and_get_execution_routes_round_trip() {
 }
 
 #[test]
-fn create_execution_route_accepts_search_specs() {
+fn create_execution_route_rejects_search_specs() {
     let root = temp_root("create-search");
     let spec_dir = root.join("specs");
     let execution_dir = root.join("executions");
@@ -190,9 +193,11 @@ fn create_execution_route_accepts_search_specs() {
     )
     .expect("create");
 
-    assert_eq!(created.status, 200);
-    assert_eq!(created.json["status"], "Pending");
-    assert_eq!(created.json["mode"], "search");
+    assert_eq!(created.status, 400);
+    assert_eq!(created.json["code"], "INVALID_SPEC");
+    assert!(created.json["message"]
+        .as_str()
+        .is_some_and(|message| message.contains("unsupported mode")));
 }
 
 #[test]
@@ -249,6 +254,46 @@ swarm: true
     assert_eq!(created.json["status"], "Pending");
     assert_eq!(created.json["mode"], "swarm");
     assert_eq!(created.json["goal"], "optimize transform latency");
+}
+
+#[test]
+fn checked_in_swarm_example_is_accepted_by_bridge() {
+    let root = temp_root("checked-in-swarm-example");
+    let spec_dir = root.join("specs");
+    let execution_dir = root.join("executions");
+    let body = read_example("examples/swarm-transform-optimization-3way.yaml");
+
+    let created = void_control::bridge::handle_bridge_request_with_dirs_for_test(
+        "POST",
+        "/v1/executions",
+        Some(&body),
+        &spec_dir,
+        &execution_dir,
+    )
+    .expect("create");
+
+    assert_eq!(created.status, 200);
+    assert_eq!(created.json["mode"], "swarm");
+}
+
+#[test]
+fn checked_in_supervision_example_is_accepted_by_bridge() {
+    let root = temp_root("checked-in-supervision-example");
+    let spec_dir = root.join("specs");
+    let execution_dir = root.join("executions");
+    let body = read_example("examples/supervision-transform-review.yaml");
+
+    let created = void_control::bridge::handle_bridge_request_with_dirs_for_test(
+        "POST",
+        "/v1/executions",
+        Some(&body),
+        &spec_dir,
+        &execution_dir,
+    )
+    .expect("create");
+
+    assert_eq!(created.status, 200);
+    assert_eq!(created.json["mode"], "supervision");
 }
 
 #[test]
@@ -574,7 +619,7 @@ stages:
 }
 
 fn valid_spec_body_for_mode(mode: &str) -> String {
-    json!({
+    let mut body = json!({
         "mode": mode,
         "goal": "optimize latency",
         "workflow": { "template": "fixtures/sample.vbrun" },
@@ -612,8 +657,18 @@ fn valid_spec_body_for_mode(mode: &str) -> String {
             ]
         },
         "swarm": true
-    })
-    .to_string()
+    });
+    if mode == "supervision" {
+        body["supervision"] = json!({
+            "supervisor_role": "coordinator",
+            "review_policy": {
+                "max_revision_rounds": 2,
+                "retry_on_runtime_failure": true,
+                "require_final_approval": true
+            }
+        });
+    }
+    body.to_string()
 }
 
 fn temp_root(label: &str) -> std::path::PathBuf {
@@ -624,6 +679,11 @@ fn temp_root(label: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("void-control-bridge-{label}-{nanos}"));
     std::fs::create_dir_all(&dir).expect("create temp dir");
     dir
+}
+
+fn read_example(path: &str) -> String {
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    fs::read_to_string(repo_root.join(path)).expect("read example file")
 }
 
 fn seed_execution(root: &std::path::Path, execution_id: &str, status: &str) {

@@ -23,6 +23,44 @@ This recording shows the canonical first-release flow:
 
 Direct link: [void-control swarm execution demo](docs/assets/void-control-swarm-demo.mp4).
 
+What this example does:
+
+- runs three sibling optimization strategies against the same Transform-02 workload
+- compares candidates by measured metrics, not invented estimates
+- uses swarm reduction to select the best candidate for the iteration
+
+What to look for:
+
+- candidate fan-out in the graph
+- metrics and event inspection on the right
+- winner selection and runtime drill-down through `Open Runtime Graph`
+
+## Supervision Execution Demo
+
+[![void-control supervision demo](docs/assets/void-control-supervision-demo.gif)](docs/assets/void-control-supervision-demo.webm)
+
+This recording shows the supervision operator flow in the real UI:
+
+- `Launch Spec` with the checked-in supervision example
+- supervision execution selection in the left rail
+- supervision graph in the center pane
+- supervision-specific inspector state on the right
+- runtime drill-down through `Open Runtime Graph`
+
+Direct link: [void-control supervision execution demo](docs/assets/void-control-supervision-demo.webm).
+
+What this example does:
+
+- runs three specialized Transform-02 workers under one supervisor
+- collects each worker output and evaluates `metrics.approved`
+- finalizes only after the workers are reviewed and approved
+
+What to look for:
+
+- supervisor-to-worker graph semantics instead of swarm fan-out/ranking
+- review and approval state in the right inspector
+- finalization flow and runtime drill-down through `Open Runtime Graph`
+
 ## Release
 
 - First public release target: `v0.0.1`
@@ -49,7 +87,7 @@ as a single-purpose swarm console.
 Current direction:
 
 - `swarm`: first implemented orchestration strategy
-- `supervision`: planned next strategy
+- `supervision`: implemented orchestrator-worker strategy
 
 Shared control-plane primitives across strategies:
 
@@ -142,6 +180,25 @@ This is also the canonical first-release orchestration workflow:
 - launch through the bridge or UI
 - inspect the execution graph, inspector, and event stream
 - follow candidate metrics and `leader` / `broadcast` collaboration events
+
+### 7) Run the supervision example
+
+Use the checked-in supervision example to exercise the flat
+orchestrator-worker path:
+
+```bash
+curl -sS -X POST http://127.0.0.1:43210/v1/executions \
+  -H 'Content-Type: text/yaml' \
+  --data-binary @examples/supervision-transform-review.yaml
+```
+
+Current v1 supervision contract:
+
+- workers still run a normal runtime template on `void-box`
+- approval is reducer-driven in `void-control`
+- worker output must include `metrics.approved`
+- the bundled supervision worker template appends that metric after the measured
+  benchmark run
 
 ## Development
 

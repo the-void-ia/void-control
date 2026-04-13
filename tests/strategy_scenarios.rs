@@ -5,7 +5,6 @@ use std::collections::BTreeMap;
 use void_control::orchestration::{
     CandidateOutput, ControlEventType, ExecutionService, ExecutionSpec, ExecutionStatus,
     FsExecutionStore, GlobalConfig, OrchestrationPolicy, VariationConfig, VariationProposal,
-    VariationSelection,
 };
 #[cfg(feature = "serde")]
 use void_control::orchestration::{
@@ -234,294 +233,6 @@ fn swarm_prompt_optimization_finds_best_style_cluster() {
     );
 }
 
-#[test]
-fn search_rate_limit_tuning_refines_known_good_direction() {
-    let store_dir = temp_store_dir("search-rate-limit");
-    let mut runtime = MockRuntime::new();
-    runtime.seed_success(
-        "exec-run-candidate-1",
-        metrics_output_with_intents(
-            "candidate-1",
-            95.0,
-            0.06,
-            0.96,
-            vec![scenario_intent(
-                "intent-search-parent",
-                CommunicationIntentAudience::Leader,
-                "baseline rate limit looks promising",
-                None,
-            )],
-        ),
-    );
-    runtime.seed_success(
-        "exec-run-candidate-2",
-        metrics_output("candidate-2", 82.0, 0.05, 0.98),
-    );
-    runtime.seed_success(
-        "exec-run-candidate-3",
-        metrics_output_with_intents(
-            "candidate-3",
-            70.0,
-            0.05,
-            0.99,
-            vec![scenario_intent(
-                "intent-search-child",
-                CommunicationIntentAudience::Leader,
-                "refine with adaptive jitter",
-                Some("intent-search-parent"),
-            )],
-        ),
-    );
-
-    let store = FsExecutionStore::new(store_dir.clone());
-    ExecutionService::<MockRuntime>::submit_execution(
-        &store,
-        "exec-search-rate-limit",
-        &search_rate_limit_spec(),
-    )
-    .expect("submit");
-
-    let mut service = ExecutionService::new(
-        GlobalConfig {
-            max_concurrent_child_runs: 2,
-        },
-        runtime,
-        store,
-    );
-    service
-        .plan_execution("exec-search-rate-limit")
-        .expect("plan execution");
-
-    for _ in 0..6 {
-        let execution = service
-            .dispatch_execution_once("exec-search-rate-limit")
-            .expect("dispatch");
-        if execution.status == ExecutionStatus::Completed {
-            break;
-        }
-    }
-
-    let store = FsExecutionStore::new(store_dir);
-    let snapshot = store
-        .load_execution("exec-search-rate-limit")
-        .expect("load execution");
-    let intents = store
-        .load_intents("exec-search-rate-limit")
-        .expect("load intents");
-    let messages = store
-        .load_routed_messages("exec-search-rate-limit")
-        .expect("load routed messages");
-    let inbox = store
-        .load_inbox_snapshot("exec-search-rate-limit", 1, "candidate-1")
-        .expect("load refinement inbox");
-    let iter0_thresholds: Vec<_> = snapshot
-        .candidates
-        .iter()
-        .filter(|candidate| candidate.iteration == 0)
-        .map(|candidate| candidate.overrides["rate_limit.threshold"].clone())
-        .collect();
-    let iter1_thresholds: Vec<_> = snapshot
-        .candidates
-        .iter()
-        .filter(|candidate| candidate.iteration == 1)
-        .map(|candidate| candidate.overrides["rate_limit.threshold"].clone())
-        .collect();
-
-    assert_eq!(snapshot.execution.status, ExecutionStatus::Completed);
-    assert_eq!(iter0_thresholds, vec!["80".to_string(), "100".to_string()]);
-    assert_eq!(iter1_thresholds, vec!["120".to_string()]);
-    assert_eq!(snapshot.accumulator.search_phase.as_deref(), Some("refine"));
-    assert_eq!(intents.len(), 2);
-    assert_eq!(
-        intents
-            .iter()
-            .find(|intent| intent.intent_id == "intent-search-child")
-            .and_then(|intent| intent.caused_by.as_deref()),
-        Some("intent-search-parent")
-    );
-    assert!(messages.iter().any(|message| {
-        message.intent_id == "intent-search-parent"
-            && message.status == RoutedMessageStatus::Delivered
-            && message.delivery_iteration == 1
-    }));
-    assert!(inbox
-        .entries
-        .iter()
-        .any(|entry| entry.intent_id == "intent-search-parent"));
-    assert_event_counts(
-        &snapshot.events,
-        &[
-            (ControlEventType::CandidateQueued, 3),
-            (ControlEventType::CandidateDispatched, 3),
-            (ControlEventType::CandidateScored, 2),
-            (ControlEventType::CommunicationIntentEmitted, 2),
-            (ControlEventType::MessageRouted, 2),
-            (ControlEventType::MessageDelivered, 1),
-            (ControlEventType::ExecutionCompleted, 1),
-        ],
-    );
-}
-
-#[test]
-fn search_pipeline_optimization_refines_known_bottleneck_config() {
-    let store_dir = temp_store_dir("search-pipeline");
-    let mut runtime = MockRuntime::new();
-    runtime.seed_success(
-        "exec-run-candidate-1",
-        pipeline_output("candidate-1", 0.72, 0.78),
-    );
-    runtime.seed_success(
-        "exec-run-candidate-2",
-        pipeline_output("candidate-2", 0.84, 0.86),
-    );
-    runtime.seed_success(
-        "exec-run-candidate-3",
-        pipeline_output("candidate-3", 0.93, 0.95),
-    );
-    runtime.seed_success(
-        "exec-run-candidate-4",
-        pipeline_output("candidate-4", 0.80, 0.82),
-    );
-
-    let store = FsExecutionStore::new(store_dir.clone());
-    ExecutionService::<MockRuntime>::submit_execution(
-        &store,
-        "exec-search-pipeline",
-        &search_pipeline_spec(),
-    )
-    .expect("submit");
-
-    let mut service = ExecutionService::new(
-        GlobalConfig {
-            max_concurrent_child_runs: 2,
-        },
-        runtime,
-        store,
-    );
-    service
-        .plan_execution("exec-search-pipeline")
-        .expect("plan execution");
-
-    for _ in 0..6 {
-        let execution = service
-            .dispatch_execution_once("exec-search-pipeline")
-            .expect("dispatch");
-        if execution.status == ExecutionStatus::Completed {
-            break;
-        }
-    }
-
-    let snapshot = FsExecutionStore::new(store_dir)
-        .load_execution("exec-search-pipeline")
-        .expect("load execution");
-    let mut iter1_prompts: Vec<_> = snapshot
-        .candidates
-        .iter()
-        .filter(|candidate| candidate.iteration == 1)
-        .map(|candidate| candidate.overrides["transform.config"].clone())
-        .collect();
-    iter1_prompts.sort();
-    let best = snapshot
-        .candidates
-        .iter()
-        .filter(|candidate| {
-            Some(&candidate.candidate_id) == snapshot.execution.result_best_candidate_id.as_ref()
-        })
-        .max_by_key(|candidate| candidate.created_seq)
-        .expect("best candidate");
-
-    assert_eq!(snapshot.execution.status, ExecutionStatus::Completed);
-    assert_eq!(
-        iter1_prompts,
-        vec![
-            "batch1024_parallel2".to_string(),
-            "batch512_parallel4_streaming".to_string(),
-        ]
-    );
-    assert_eq!(
-        best.overrides.get("transform.config").map(String::as_str),
-        Some("batch512_parallel4_streaming")
-    );
-    assert_eq!(snapshot.accumulator.search_phase.as_deref(), Some("refine"));
-}
-
-#[test]
-fn search_message_stats_can_preserve_a_small_exploration_quota() {
-    let store_dir = temp_store_dir("search-signal-reactive");
-    let mut runtime = MockRuntime::new();
-    runtime.seed_success(
-        "exec-run-candidate-1",
-        metrics_output_with_intents(
-            "candidate-1",
-            95.0,
-            0.06,
-            0.95,
-            vec![scenario_signal_intent(
-                "intent-search-signal",
-                CommunicationIntentAudience::Broadcast,
-                "multiple candidates saw the same bottleneck",
-            )],
-        ),
-    );
-    runtime.seed_success(
-        "exec-run-candidate-2",
-        metrics_output("candidate-2", 80.0, 0.05, 0.99),
-    );
-    runtime.seed_success(
-        "exec-run-candidate-3",
-        metrics_output("candidate-3", 84.0, 0.05, 0.98),
-    );
-    runtime.seed_success(
-        "exec-run-candidate-4",
-        metrics_output("candidate-4", 76.0, 0.05, 0.99),
-    );
-    runtime.seed_success(
-        "exec-run-candidate-5",
-        metrics_output("candidate-5", 78.0, 0.05, 0.99),
-    );
-
-    let store = FsExecutionStore::new(store_dir.clone());
-    ExecutionService::<MockRuntime>::submit_execution(
-        &store,
-        "exec-search-signal-reactive",
-        &search_signal_reactive_spec(),
-    )
-    .expect("submit");
-
-    let mut service = ExecutionService::new(
-        GlobalConfig {
-            max_concurrent_child_runs: 2,
-        },
-        runtime,
-        store,
-    );
-    service
-        .plan_execution("exec-search-signal-reactive")
-        .expect("plan execution");
-
-    for _ in 0..6 {
-        let execution = service
-            .dispatch_execution_once("exec-search-signal-reactive")
-            .expect("dispatch");
-        if execution.status == ExecutionStatus::Completed {
-            break;
-        }
-    }
-
-    let snapshot = FsExecutionStore::new(store_dir)
-        .load_execution("exec-search-signal-reactive")
-        .expect("load execution");
-    let iter1_prompts: Vec<_> = snapshot
-        .candidates
-        .iter()
-        .filter(|candidate| candidate.iteration == 1)
-        .map(|candidate| candidate.overrides["agent.prompt"].clone())
-        .collect();
-
-    assert_eq!(snapshot.execution.status, ExecutionStatus::Completed);
-    assert_eq!(iter1_prompts, vec!["v2".to_string(), "v4".to_string()]);
-}
-
 fn swarm_incident_spec() -> ExecutionSpec {
     ExecutionSpec {
         mode: "swarm".to_string(),
@@ -540,6 +251,7 @@ fn swarm_incident_spec() -> ExecutionSpec {
             ],
         ),
         swarm: true,
+        supervision: None,
     }
 }
 
@@ -570,71 +282,7 @@ fn swarm_prompt_spec() -> ExecutionSpec {
             ],
         ),
         swarm: true,
-    }
-}
-
-fn search_rate_limit_spec() -> ExecutionSpec {
-    ExecutionSpec {
-        mode: "search".to_string(),
-        goal: "tune rate limiting".to_string(),
-        workflow: workflow(),
-        policy: search_policy(2),
-        evaluation: infra_evaluation(),
-        variation: VariationConfig::parameter_space(
-            4,
-            VariationSelection::Sequential,
-            BTreeMap::from([(
-                "rate_limit.threshold".to_string(),
-                vec![
-                    "80".to_string(),
-                    "100".to_string(),
-                    "120".to_string(),
-                    "140".to_string(),
-                ],
-            )]),
-        ),
-        swarm: true,
-    }
-}
-
-fn search_pipeline_spec() -> ExecutionSpec {
-    ExecutionSpec {
-        mode: "search".to_string(),
-        goal: "tune transform bottleneck".to_string(),
-        workflow: workflow(),
-        policy: search_policy(2),
-        evaluation: pipeline_evaluation(),
-        variation: VariationConfig::explicit(
-            3,
-            vec![
-                proposal(&[("transform.config", "current_transform")]),
-                proposal(&[("transform.config", "batch256_parallel4")]),
-                proposal(&[("transform.config", "batch512_parallel4_streaming")]),
-                proposal(&[("transform.config", "batch1024_parallel2")]),
-            ],
-        ),
-        swarm: true,
-    }
-}
-
-fn search_signal_reactive_spec() -> ExecutionSpec {
-    ExecutionSpec {
-        mode: "search".to_string(),
-        goal: "react to message stats without leaving incumbent-centered search".to_string(),
-        workflow: workflow(),
-        policy: search_policy(2),
-        evaluation: infra_evaluation(),
-        variation: VariationConfig::explicit(
-            2,
-            vec![
-                proposal(&[("agent.prompt", "baseline")]),
-                proposal(&[("agent.prompt", "v1")]),
-                proposal(&[("agent.prompt", "v2")]),
-                proposal(&[("agent.prompt", "v3")]),
-                proposal(&[("agent.prompt", "v4")]),
-            ],
-        ),
-        swarm: true,
+        supervision: None,
     }
 }
 
@@ -645,10 +293,6 @@ fn workflow() -> void_control::orchestration::WorkflowTemplateRef {
 }
 
 fn swarm_policy(max_iterations: u32) -> OrchestrationPolicy {
-    base_policy(max_iterations, 10)
-}
-
-fn search_policy(max_iterations: u32) -> OrchestrationPolicy {
     base_policy(max_iterations, 10)
 }
 
@@ -701,19 +345,6 @@ fn prompt_evaluation() -> void_control::orchestration::EvaluationConfig {
     }
 }
 
-fn pipeline_evaluation() -> void_control::orchestration::EvaluationConfig {
-    void_control::orchestration::EvaluationConfig {
-        scoring_type: "weighted_metrics".to_string(),
-        weights: BTreeMap::from([
-            ("throughput".to_string(), 0.6),
-            ("stability".to_string(), 0.4),
-        ]),
-        pass_threshold: Some(0.7),
-        ranking: "highest_score".to_string(),
-        tie_breaking: "throughput".to_string(),
-    }
-}
-
 fn proposal(items: &[(&str, &str)]) -> VariationProposal {
     VariationProposal {
         overrides: items
@@ -762,17 +393,6 @@ fn prompt_output(candidate_id: &str, quality_score: f64, policy_score: f64) -> C
     )
 }
 
-fn pipeline_output(candidate_id: &str, throughput: f64, stability: f64) -> CandidateOutput {
-    CandidateOutput::new(
-        candidate_id.to_string(),
-        true,
-        BTreeMap::from([
-            ("throughput".to_string(), throughput),
-            ("stability".to_string(), stability),
-        ]),
-    )
-}
-
 #[cfg(feature = "serde")]
 fn scenario_intent(
     intent_id: &str,
@@ -794,18 +414,6 @@ fn scenario_intent(
         ttl_iterations: 1,
         caused_by: caused_by.map(str::to_string),
         context: None,
-    }
-}
-
-#[cfg(feature = "serde")]
-fn scenario_signal_intent(
-    intent_id: &str,
-    audience: CommunicationIntentAudience,
-    summary_text: &str,
-) -> CommunicationIntent {
-    CommunicationIntent {
-        kind: CommunicationIntentKind::Signal,
-        ..scenario_intent(intent_id, audience, summary_text, None)
     }
 }
 

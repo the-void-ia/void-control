@@ -25,6 +25,21 @@ pub struct EvaluationConfig {
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SupervisionReviewPolicy {
+    pub max_revision_rounds: u32,
+    pub retry_on_runtime_failure: bool,
+    pub require_final_approval: bool,
+}
+
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SupervisionConfig {
+    pub supervisor_role: String,
+    pub review_policy: SupervisionReviewPolicy,
+}
+
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExecutionSpec {
     pub mode: String,
@@ -34,6 +49,8 @@ pub struct ExecutionSpec {
     pub evaluation: EvaluationConfig,
     pub variation: VariationConfig,
     pub swarm: bool,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub supervision: Option<SupervisionConfig>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,7 +72,7 @@ impl Error for SpecValidationError {}
 
 impl ExecutionSpec {
     pub fn validate(&self, global: &GlobalConfig) -> Result<(), SpecValidationError> {
-        if !matches!(self.mode.as_str(), "swarm" | "search") {
+        if !matches!(self.mode.as_str(), "swarm" | "supervision") {
             return Err(SpecValidationError::new(format!(
                 "unknown mode '{}'",
                 self.mode
@@ -66,6 +83,20 @@ impl ExecutionSpec {
             return Err(SpecValidationError::new(
                 "swarm mode requires the swarm section",
             ));
+        }
+
+        if self.mode == "supervision" {
+            let Some(supervision) = &self.supervision else {
+                return Err(SpecValidationError::new(
+                    "supervision mode requires the supervision section",
+                ));
+            };
+
+            if supervision.supervisor_role.trim().is_empty() {
+                return Err(SpecValidationError::new(
+                    "supervision.supervisor_role is required",
+                ));
+            }
         }
 
         self.policy

@@ -167,6 +167,8 @@ export interface ExecutionCandidate {
   overrides?: Record<string, string>;
   succeeded?: boolean | null;
   metrics: Record<string, number>;
+  review_status?: 'PendingReview' | 'Approved' | 'RevisionRequested' | 'RetryRequested' | 'Rejected' | string | null;
+  revision_round?: number;
 }
 
 export interface SwarmHealthChip {
@@ -222,6 +224,52 @@ export interface SwarmExecutionSummary {
     running: number;
     outputReady: number;
     scored: number;
+    failed: number;
+    completed: number;
+  };
+  healthChips: SwarmHealthChip[];
+}
+
+export interface SupervisionWorkerCard {
+  workerId: string;
+  iterationIndex: number;
+  iterationLabel: number;
+  runtimeRunId?: string | null;
+  state:
+    | 'queued'
+    | 'running'
+    | 'approved'
+    | 'revision_requested'
+    | 'retry_requested'
+    | 'rejected'
+    | 'failed'
+    | 'canceled';
+  reviewStatus?: string | null;
+  revisionRound: number;
+  metrics: {
+    latency?: string | null;
+    errorRate?: string | null;
+    cpu?: string | null;
+  };
+  role?: string | null;
+  reason?: string | null;
+}
+
+export interface SupervisionExecutionSummary {
+  executionId: string;
+  mode: string;
+  goal: string;
+  status: string;
+  completedIterations: number;
+  supervisorRole: string;
+  approvedWorkerId?: string | null;
+  counts: {
+    queued: number;
+    running: number;
+    approved: number;
+    revisionRequested: number;
+    retryRequested: number;
+    rejected: number;
     failed: number;
     completed: number;
   };

@@ -58,6 +58,15 @@ struct BridgeJsonResponse {
 }
 
 #[cfg(feature = "serde")]
+fn execution_result_label_for_mode(mode: &str) -> &'static str {
+    if mode == "supervision" {
+        "approved_worker"
+    } else {
+        "best_candidate"
+    }
+}
+
+#[cfg(feature = "serde")]
 fn execution_subcommand_candidates() -> &'static [&'static str] {
     &[
         "submit", "dry-run", "watch", "inspect", "events", "result", "runtime",
@@ -354,8 +363,12 @@ fn execution_status_is_terminal(status: &str) -> bool {
 fn execution_progress_line(detail: &serde_json::Value) -> String {
     let execution = detail.get("execution").unwrap_or(detail);
     let progress = detail.get("progress").unwrap_or(&serde_json::Value::Null);
+    let mode = execution
+        .get("mode")
+        .and_then(|value| value.as_str())
+        .unwrap_or("swarm");
     format!(
-        "execution_id={} status={} iterations={} queued={} running={} completed={} failed={} best_candidate={}",
+        "execution_id={} status={} iterations={} queued={} running={} completed={} failed={} {}={}",
         execution
             .get("execution_id")
             .and_then(|value| value.as_str())
@@ -385,6 +398,7 @@ fn execution_progress_line(detail: &serde_json::Value) -> String {
             .get("failed_candidate_count")
             .and_then(|value| value.as_u64())
             .unwrap_or(0),
+        execution_result_label_for_mode(mode),
         execution
             .get("result_best_candidate_id")
             .and_then(|value| value.as_str())
@@ -397,8 +411,12 @@ fn print_execution_summary(detail: &serde_json::Value) {
     let execution = detail.get("execution").unwrap_or(detail);
     let result = detail.get("result").unwrap_or(&serde_json::Value::Null);
     let progress = detail.get("progress").unwrap_or(&serde_json::Value::Null);
+    let mode = execution
+        .get("mode")
+        .and_then(|value| value.as_str())
+        .unwrap_or("-");
     println!(
-        "execution_id={} status={} mode={} goal={} iterations={} best_candidate={}",
+        "execution_id={} status={} mode={} goal={} iterations={} {}={}",
         execution
             .get("execution_id")
             .and_then(|value| value.as_str())
@@ -407,10 +425,7 @@ fn print_execution_summary(detail: &serde_json::Value) {
             .get("status")
             .and_then(|value| value.as_str())
             .unwrap_or("unknown"),
-        execution
-            .get("mode")
-            .and_then(|value| value.as_str())
-            .unwrap_or("-"),
+        mode,
         execution
             .get("goal")
             .and_then(|value| value.as_str())
@@ -420,6 +435,7 @@ fn print_execution_summary(detail: &serde_json::Value) {
             .or_else(|| execution.get("completed_iterations"))
             .and_then(|value| value.as_u64())
             .unwrap_or(0),
+        execution_result_label_for_mode(mode),
         result
             .get("best_candidate_id")
             .or_else(|| execution.get("result_best_candidate_id"))
@@ -1773,29 +1789,7 @@ Policy presets: fast | balanced | safe"
                 match load_execution_spec_file(&spec).and_then(|spec_text| {
                     bridge_request(&bridge_base_url, "POST", "/v1/executions", Some(&spec_text))
                 }) {
-                    Ok(response) => println!(
-                        "execution_id={} status={} iterations={} best_candidate={}",
-                        response
-                            .json
-                            .get("execution_id")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("-"),
-                        response
-                            .json
-                            .get("status")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("unknown"),
-                        response
-                            .json
-                            .get("completed_iterations")
-                            .and_then(|v| v.as_u64())
-                            .unwrap_or(0),
-                        response
-                            .json
-                            .get("result_best_candidate_id")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("-")
-                    ),
+                    Ok(response) => print_execution_summary(&response.json),
                     Err(err) => println!("error: {err}"),
                 }
             }
@@ -1850,25 +1844,7 @@ Policy presets: fast | balanced | safe"
                             println!("no executions");
                         } else {
                             for execution in executions {
-                                println!(
-                                    "execution_id={} status={} iterations={} best_candidate={}",
-                                    execution
-                                        .get("execution_id")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or("-"),
-                                    execution
-                                        .get("status")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or("unknown"),
-                                    execution
-                                        .get("completed_iterations")
-                                        .and_then(|v| v.as_u64())
-                                        .unwrap_or(0),
-                                    execution
-                                        .get("result_best_candidate_id")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or("-")
-                                );
+                                print_execution_summary(&execution);
                             }
                         }
                     }
@@ -1881,29 +1857,7 @@ Policy presets: fast | balanced | safe"
                 &format!("/v1/executions/{execution_id}"),
                 None,
             ) {
-                Ok(response) => println!(
-                    "execution_id={} status={} iterations={} best_candidate={}",
-                    response
-                        .json
-                        .get("execution_id")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("-"),
-                    response
-                        .json
-                        .get("status")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("unknown"),
-                    response
-                        .json
-                        .get("completed_iterations")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0),
-                    response
-                        .json
-                        .get("result_best_candidate_id")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("-")
-                ),
+                Ok(response) => print_execution_summary(&response.json),
                 Err(err) => println!("error: {err}"),
             },
             Command::ExecutionPause { execution_id } => match bridge_request(
@@ -2165,6 +2119,19 @@ mod tests {
     }
 
     #[test]
+    fn supervision_execution_uses_approved_worker_label() {
+        assert_eq!(
+            execution_result_label_for_mode("supervision"),
+            "approved_worker"
+        );
+    }
+
+    #[test]
+    fn swarm_execution_uses_best_candidate_label() {
+        assert_eq!(execution_result_label_for_mode("swarm"), "best_candidate");
+    }
+
+    #[test]
     fn parses_host_port_without_explicit_port() {
         assert_eq!(
             parse_host_port("http://127.0.0.1").unwrap(),
@@ -2202,6 +2169,7 @@ mod tests {
             "execution": {
                 "execution_id": "exec-1",
                 "status": "Running",
+                "mode": "supervision",
                 "result_best_candidate_id": "candidate-2"
             },
             "result": {
@@ -2217,7 +2185,7 @@ mod tests {
 
         assert_eq!(
             execution_progress_line(&detail),
-            "execution_id=exec-1 status=Running iterations=2 queued=1 running=2 completed=3 failed=4 best_candidate=candidate-2"
+            "execution_id=exec-1 status=Running iterations=2 queued=1 running=2 completed=3 failed=4 approved_worker=candidate-2"
         );
     }
 

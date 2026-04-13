@@ -158,7 +158,7 @@ export function LaunchRunModal({
           <textarea
             value={specText}
             onChange={(e) => setSpecText(e.target.value)}
-            placeholder="Paste workflow, pipeline, or swarm/search YAML here..."
+            placeholder="Paste workflow, pipeline, or swarm/supervision YAML here..."
           />
         </label>
 

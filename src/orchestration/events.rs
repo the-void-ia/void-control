@@ -6,11 +6,17 @@ pub enum ControlEventType {
     ExecutionSubmitted,
     ExecutionStarted,
     IterationStarted,
+    SupervisorAssigned,
     CandidateQueued,
     CandidateDispatched,
     CandidateOutputCollected,
+    WorkerQueued,
+    ReviewRequested,
+    WorkerApproved,
+    RevisionRequested,
     CandidateScored,
     IterationCompleted,
+    ExecutionFinalized,
     ExecutionCompleted,
     ExecutionFailed,
     ExecutionPaused,
@@ -31,11 +37,17 @@ impl ControlEventType {
             Self::ExecutionSubmitted => "ExecutionSubmitted",
             Self::ExecutionStarted => "ExecutionStarted",
             Self::IterationStarted => "IterationStarted",
+            Self::SupervisorAssigned => "SupervisorAssigned",
             Self::CandidateQueued => "CandidateQueued",
             Self::CandidateDispatched => "CandidateDispatched",
             Self::CandidateOutputCollected => "CandidateOutputCollected",
+            Self::WorkerQueued => "WorkerQueued",
+            Self::ReviewRequested => "ReviewRequested",
+            Self::WorkerApproved => "WorkerApproved",
+            Self::RevisionRequested => "RevisionRequested",
             Self::CandidateScored => "CandidateScored",
             Self::IterationCompleted => "IterationCompleted",
+            Self::ExecutionFinalized => "ExecutionFinalized",
             Self::ExecutionCompleted => "ExecutionCompleted",
             Self::ExecutionFailed => "ExecutionFailed",
             Self::ExecutionPaused => "ExecutionPaused",
@@ -56,11 +68,17 @@ impl ControlEventType {
             "ExecutionSubmitted" => Some(Self::ExecutionSubmitted),
             "ExecutionStarted" => Some(Self::ExecutionStarted),
             "IterationStarted" => Some(Self::IterationStarted),
+            "SupervisorAssigned" => Some(Self::SupervisorAssigned),
             "CandidateQueued" => Some(Self::CandidateQueued),
             "CandidateDispatched" => Some(Self::CandidateDispatched),
             "CandidateOutputCollected" => Some(Self::CandidateOutputCollected),
+            "WorkerQueued" => Some(Self::WorkerQueued),
+            "ReviewRequested" => Some(Self::ReviewRequested),
+            "WorkerApproved" => Some(Self::WorkerApproved),
+            "RevisionRequested" => Some(Self::RevisionRequested),
             "CandidateScored" => Some(Self::CandidateScored),
             "IterationCompleted" => Some(Self::IterationCompleted),
+            "ExecutionFinalized" => Some(Self::ExecutionFinalized),
             "ExecutionCompleted" => Some(Self::ExecutionCompleted),
             "ExecutionFailed" => Some(Self::ExecutionFailed),
             "ExecutionPaused" => Some(Self::ExecutionPaused),
@@ -80,9 +98,14 @@ impl ControlEventType {
         !matches!(
             self,
             Self::ExecutionSubmitted
+                | Self::SupervisorAssigned
                 | Self::CandidateQueued
                 | Self::CandidateDispatched
                 | Self::CandidateOutputCollected
+                | Self::WorkerQueued
+                | Self::ReviewRequested
+                | Self::WorkerApproved
+                | Self::RevisionRequested
                 | Self::ExecutionStalled
                 | Self::CommunicationIntentEmitted
                 | Self::CommunicationIntentRejected
@@ -120,14 +143,22 @@ impl ExecutionSnapshot {
                 ControlEventType::ExecutionStarted | ControlEventType::IterationStarted => {
                     execution.status = ExecutionStatus::Running;
                 }
+                ControlEventType::SupervisorAssigned => {}
                 ControlEventType::CandidateQueued
                 | ControlEventType::CandidateDispatched
-                | ControlEventType::CandidateOutputCollected => {}
+                | ControlEventType::CandidateOutputCollected
+                | ControlEventType::WorkerQueued
+                | ControlEventType::ReviewRequested
+                | ControlEventType::WorkerApproved
+                | ControlEventType::RevisionRequested => {}
                 ControlEventType::CandidateScored => {
                     accumulator.scoring_history_len += 1;
                 }
                 ControlEventType::IterationCompleted => {
                     accumulator.completed_iterations += 1;
+                }
+                ControlEventType::ExecutionFinalized => {
+                    execution.status = ExecutionStatus::Completed;
                 }
                 ControlEventType::ExecutionCompleted => {
                     execution.status = ExecutionStatus::Completed;

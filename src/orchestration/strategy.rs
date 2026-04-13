@@ -1,14 +1,28 @@
 use super::policy::ConvergencePolicy;
 use super::scoring::{score_iteration, RankedCandidate, ScoringConfig};
+use super::spec::SupervisionReviewPolicy;
 use super::types::{
     CandidateInbox, CandidateOutput, CandidateSpec, ExecutionAccumulator, MessageStats,
+    WorkerReviewStatus,
 };
 use super::variation::VariationConfig;
-use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct IterationEvaluation {
     pub ranked_candidates: Vec<RankedCandidate>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkerReviewDecision {
+    pub candidate_id: String,
+    pub status: WorkerReviewStatus,
+    pub revision_round: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SupervisionEvaluation {
+    pub decisions: Vec<WorkerReviewDecision>,
+    pub final_approval_ready: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,10 +39,9 @@ pub struct SwarmStrategy {
 }
 
 #[derive(Debug, Clone)]
-pub struct SearchStrategy {
+pub struct SupervisionStrategy {
     variation: VariationConfig,
-    scoring: ScoringConfig,
-    convergence: ConvergencePolicy,
+    review_policy: SupervisionReviewPolicy,
 }
 
 impl Default for SwarmStrategy {
@@ -152,16 +165,11 @@ impl SwarmStrategy {
     }
 }
 
-impl SearchStrategy {
-    pub fn new(
-        variation: VariationConfig,
-        scoring: ScoringConfig,
-        convergence: ConvergencePolicy,
-    ) -> Self {
+impl SupervisionStrategy {
+    pub fn new(variation: VariationConfig, review_policy: SupervisionReviewPolicy) -> Self {
         Self {
             variation,
-            scoring,
-            convergence,
+            review_policy,
         }
     }
 
@@ -169,224 +177,114 @@ impl SearchStrategy {
         &self,
         accumulator: &ExecutionAccumulator,
         inboxes: &[CandidateInbox],
-        message_stats: Option<&MessageStats>,
     ) -> Vec<CandidateSpec> {
-        let proposals = if accumulator.best_candidate_overrides.is_empty() {
-            self.bootstrap_proposals(accumulator)
-        } else {
-            self.refinement_proposals(accumulator, message_stats)
-        };
+        let mut candidates = Vec::new();
+        let proposals = self.variation.generate(accumulator);
 
-        proposals
-            .into_iter()
-            .enumerate()
-            .map(|(idx, proposal)| CandidateSpec {
-                candidate_id: inboxes
-                    .get(idx)
-                    .map(|inbox| inbox.candidate_id.clone())
-                    .unwrap_or_else(|| format!("candidate-{}", idx + 1)),
+        for (idx, proposal) in proposals.into_iter().enumerate() {
+            let candidate_id = if let Some(inbox) = inboxes.get(idx) {
+                inbox.candidate_id.clone()
+            } else {
+                format!("candidate-{}", idx + 1)
+            };
+            candidates.push(CandidateSpec {
+                candidate_id,
                 overrides: proposal.overrides,
-            })
-            .collect()
+            });
+        }
+
+        candidates
     }
 
     pub fn evaluate(
         &self,
-        _accumulator: &ExecutionAccumulator,
-        outputs: &[CandidateOutput],
-    ) -> IterationEvaluation {
-        IterationEvaluation {
-            ranked_candidates: score_iteration(&self.scoring, outputs),
-        }
-    }
-
-    pub fn should_stop(
-        &self,
         accumulator: &ExecutionAccumulator,
-        evaluation: &IterationEvaluation,
-    ) -> Option<StopReason> {
-        match self.convergence.strategy.as_str() {
-            "threshold" => {
-                let best = evaluation.ranked_candidates.first()?;
-                if best.score >= self.convergence.min_score.unwrap_or(f64::INFINITY) {
-                    return Some(StopReason::ConvergenceThreshold);
-                }
+        outputs: &[CandidateOutput],
+    ) -> SupervisionEvaluation {
+        let mut decisions = Vec::new();
+        let mut final_approval_ready = !outputs.is_empty();
+
+        for output in outputs {
+            let revision_round = accumulator
+                .supervision_revision_rounds
+                .get(&output.candidate_id)
+                .copied()
+                .unwrap_or(0);
+            let status = self.review_status_for_output(output, revision_round);
+            if status != WorkerReviewStatus::Approved {
+                final_approval_ready = false;
             }
-            "plateau" => {
-                if accumulator.iterations_without_improvement
-                    >= self
-                        .convergence
-                        .max_iterations_without_improvement
-                        .unwrap_or(u32::MAX)
-                {
-                    return Some(StopReason::ConvergencePlateau);
-                }
-            }
-            _ => {}
+            decisions.push(WorkerReviewDecision {
+                candidate_id: output.candidate_id.clone(),
+                status,
+                revision_round,
+            });
         }
 
-        if !accumulator.best_candidate_overrides.is_empty()
-            && self.refinement_proposals(accumulator, None).is_empty()
-        {
-            return Some(StopReason::ConvergencePlateau);
+        SupervisionEvaluation {
+            decisions,
+            final_approval_ready,
         }
-        None
     }
 
     pub fn reduce(
         &self,
         mut accumulator: ExecutionAccumulator,
-        planned_candidates: &[CandidateSpec],
-        evaluation: IterationEvaluation,
+        evaluation: &SupervisionEvaluation,
     ) -> ExecutionAccumulator {
-        accumulator.scoring_history_len += 1;
-        accumulator.completed_iterations += 1;
-        accumulator.failure_counts.total_candidate_failures += evaluation
-            .ranked_candidates
-            .iter()
-            .filter(|candidate| !candidate.pass)
-            .count() as u32;
-        if let Some(best) = evaluation.ranked_candidates.first() {
-            accumulator.best_candidate_id = Some(best.candidate_id.clone());
-            if let Some(spec) = planned_candidates
-                .iter()
-                .find(|candidate| candidate.candidate_id == best.candidate_id)
-            {
-                accumulator.best_candidate_overrides = spec.overrides.clone();
-                let signature = candidate_signature(&spec.overrides);
-                if !signature.is_empty() && !accumulator.explored_signatures.contains(&signature) {
-                    accumulator.explored_signatures.push(signature);
+        let mut approved_count = 0;
+
+        for decision in &evaluation.decisions {
+            accumulator
+                .supervision_reviews
+                .insert(decision.candidate_id.clone(), decision.status);
+            match decision.status {
+                WorkerReviewStatus::RevisionRequested | WorkerReviewStatus::RetryRequested => {
+                    accumulator
+                        .supervision_revision_rounds
+                        .insert(decision.candidate_id.clone(), decision.revision_round + 1);
                 }
+                WorkerReviewStatus::Approved => {
+                    approved_count += 1;
+                }
+                WorkerReviewStatus::PendingReview | WorkerReviewStatus::Rejected => {}
             }
         }
-        for candidate in planned_candidates {
-            let signature = candidate_signature(&candidate.overrides);
-            if !signature.is_empty() && !accumulator.explored_signatures.contains(&signature) {
-                accumulator.explored_signatures.push(signature);
-            }
+
+        if approved_count > 0 && evaluation.final_approval_ready {
+            accumulator.supervision_final_approval = Some(true);
+        } else if !evaluation.decisions.is_empty() {
+            accumulator.supervision_final_approval = Some(false);
         }
-        accumulator.search_phase = Some(if accumulator.best_candidate_overrides.is_empty() {
-            "bootstrap".to_string()
-        } else {
-            "refine".to_string()
-        });
+
         accumulator
     }
 
-    fn bootstrap_proposals(
+    fn review_status_for_output(
         &self,
-        accumulator: &ExecutionAccumulator,
-    ) -> Vec<super::variation::VariationProposal> {
-        let mut generated = self.variation.generate(accumulator);
-        let bootstrap_size = self.variation.candidates_per_iteration.clamp(1, 2) as usize;
-        generated.truncate(bootstrap_size);
-        generated
-    }
-
-    fn refinement_proposals(
-        &self,
-        accumulator: &ExecutionAccumulator,
-        message_stats: Option<&MessageStats>,
-    ) -> Vec<super::variation::VariationProposal> {
-        let mut proposals: Vec<_> = match refinement_source(&self.variation) {
-            RefinementSource::Explicit => self.refine_explicit(accumulator),
-            RefinementSource::ParameterSpace => self.refine_parameter_space(accumulator),
-            RefinementSource::None => Vec::new(),
-        }
-        .into_iter()
-        .filter(|proposal| {
-            let signature = candidate_signature(&proposal.overrides);
-            !accumulator.explored_signatures.contains(&signature)
-        })
-        .collect();
-
-        if let Some(stats) = advisory_message_stats(&self.variation, message_stats) {
-            let exploration_pressure =
-                stats.signal_count + stats.dropped_count + stats.expired_count;
-            let refinement_pressure = stats.evaluation_count + stats.leader_messages;
-            if exploration_pressure > refinement_pressure && proposals.len() > 2 {
-                let first = proposals.remove(0);
-                if let Some(last) = proposals.pop() {
-                    proposals.insert(0, last);
-                    proposals.insert(0, first);
-                } else {
-                    proposals.insert(0, first);
-                }
-            }
-        }
-
-        proposals
-            .into_iter()
-            .take(self.variation.candidates_per_iteration as usize)
-            .collect()
-    }
-
-    fn refine_explicit(
-        &self,
-        accumulator: &ExecutionAccumulator,
-    ) -> Vec<super::variation::VariationProposal> {
-        if self.variation.explicit.is_empty() {
-            return Vec::new();
-        }
-        let incumbent_index = self
-            .variation
-            .explicit
-            .iter()
-            .position(|proposal| proposal.overrides == accumulator.best_candidate_overrides)
-            .unwrap_or(0);
-
-        let mut indices = Vec::new();
-        if incumbent_index > 0 {
-            indices.push(incumbent_index - 1);
-        }
-        if incumbent_index + 1 < self.variation.explicit.len() {
-            indices.push(incumbent_index + 1);
-        }
-        for idx in 0..self.variation.explicit.len() {
-            if idx != incumbent_index && !indices.contains(&idx) {
-                indices.push(idx);
-            }
-        }
-        indices
-            .into_iter()
-            .map(|idx| self.variation.explicit[idx].clone())
-            .collect()
-    }
-
-    fn refine_parameter_space(
-        &self,
-        accumulator: &ExecutionAccumulator,
-    ) -> Vec<super::variation::VariationProposal> {
-        let mut proposals = Vec::new();
-        let incumbent = &accumulator.best_candidate_overrides;
-        for (path, values) in &self.variation.parameter_space {
-            let current = incumbent.get(path);
-            let Some(current_idx) =
-                current.and_then(|value| values.iter().position(|candidate| candidate == value))
-            else {
-                continue;
-            };
-            for neighbor_idx in [current_idx.checked_sub(1), Some(current_idx + 1)]
-                .into_iter()
-                .flatten()
+        output: &CandidateOutput,
+        revision_round: u32,
+    ) -> WorkerReviewStatus {
+        if !output.succeeded {
+            if self.review_policy.retry_on_runtime_failure
+                && revision_round < self.review_policy.max_revision_rounds
             {
-                if let Some(value) = values.get(neighbor_idx) {
-                    let mut overrides = incumbent.clone();
-                    overrides.insert(path.clone(), value.clone());
-                    proposals.push(super::variation::VariationProposal { overrides });
-                }
+                return WorkerReviewStatus::RetryRequested;
             }
+            return WorkerReviewStatus::Rejected;
         }
-        proposals
-    }
-}
 
-fn candidate_signature(overrides: &BTreeMap<String, String>) -> String {
-    overrides
-        .iter()
-        .map(|(key, value)| format!("{key}={value}"))
-        .collect::<Vec<_>>()
-        .join("|")
+        let approved = output.metrics.get("approved").copied().unwrap_or(0.0);
+        if approved >= 1.0 {
+            return WorkerReviewStatus::Approved;
+        }
+
+        if revision_round < self.review_policy.max_revision_rounds {
+            return WorkerReviewStatus::RevisionRequested;
+        }
+
+        WorkerReviewStatus::Rejected
+    }
 }
 
 fn advisory_message_stats<'a>(
@@ -398,23 +296,4 @@ fn advisory_message_stats<'a>(
         return None;
     }
     Some(stats)
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RefinementSource {
-    Explicit,
-    ParameterSpace,
-    None,
-}
-
-fn refinement_source(variation: &VariationConfig) -> RefinementSource {
-    match variation.source.as_str() {
-        "explicit" => RefinementSource::Explicit,
-        "parameter_space" => RefinementSource::ParameterSpace,
-        "signal_reactive" if !variation.explicit.is_empty() => RefinementSource::Explicit,
-        "signal_reactive" if !variation.parameter_space.is_empty() => {
-            RefinementSource::ParameterSpace
-        }
-        _ => RefinementSource::None,
-    }
 }
