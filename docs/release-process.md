@@ -2,12 +2,12 @@
 
 This repository ships as a GitHub Release.
 
-## `v0.0.1` Baseline
+## `v0.0.2` Baseline
 
-- Repo tag: `v0.0.1`
-- Rust crate version: `0.0.1`
-- UI package version: `0.0.1`
-- Supported `void-box` baseline: `v0.1.1` or an equivalent validated production build
+- Repo tag: `v0.0.2`
+- Rust crate version: `0.0.2`
+- UI package version: `0.0.2`
+- Supported `void-box` baseline: `v0.1.2` or an equivalent validated production build
 
 ## Release Artifacts
 
@@ -15,7 +15,7 @@ This repository ships as a GitHub Release.
 - `normalize_fixture-v<version>-x86_64-unknown-linux-gnu.tar.gz`
 - `void-control-ux-v<version>.tar.gz`
 
-The UI is shipped as a built artifact from `web/void-control-ux/dist/`. It is not published to npm for `v0.0.1`.
+The UI is shipped as a built artifact from `web/void-control-ux/dist/`. It is not published to npm for `v0.0.2`.
 
 ## Required Checks
 
@@ -34,8 +34,8 @@ Before cutting a release tag:
 Releases are created by pushing a semver tag:
 
 ```bash
-git tag v0.0.1
-git push origin v0.0.1
+git tag v0.0.2
+git push origin v0.0.2
 ```
 
 The release workflow will:
@@ -50,9 +50,9 @@ The release workflow will:
 
 `void-control` is released independently from `void-box`, but releases must be validated against a pinned `void-box` version/build.
 
-For `v0.0.1`, use:
+For `v0.0.2`, use:
 
-- `void-box` `v0.1.1`
+- `void-box` `v0.1.2`
 - production kernel/initramfs path as documented in [AGENTS.md](../AGENTS.md)
 
 Run compatibility manually:

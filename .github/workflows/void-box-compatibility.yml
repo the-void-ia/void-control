@@ -10,7 +10,7 @@ on:
       supported_void_box_version:
         description: 'Validated void-box version/build label'
         required: true
-        default: 'v0.1.1'
+        default: 'v0.1.2'
 
 jobs:
   compatibility:

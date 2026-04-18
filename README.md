@@ -84,9 +84,9 @@ What to look for:
 
 ## Release
 
-- First public release target: `v0.0.1`
+- Current release target: `v0.0.2`
 - Release artifacts are published through GitHub Releases
-- Supported `void-box` baseline for `v0.0.1`: `void-box` `v0.1.1` or an equivalent validated production build
+- Supported `void-box` baseline for `v0.0.2`: `void-box` `v0.1.2` or an equivalent validated production build
 - Release process and compatibility gate details: [docs/release-process.md](docs/release-process.md)
 
 ## What It Is

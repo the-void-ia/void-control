@@ -134,10 +134,10 @@ jobs:
       - name: Prepare release notes header
         run: |
           cat > .github-release-notes.md <<'EOF'
-          First public `void-control` release.
+          `void-control` release `${{ needs.verify-version.outputs.version }}`.
 
           Supported `void-box` baseline for this release:
-          - `void-box` `v0.1.1` or equivalent validated production build
+          - `void-box` `v0.1.2` or equivalent validated production build
 
           Included assets:
           - `voidctl` Linux x86_64 binary archive
