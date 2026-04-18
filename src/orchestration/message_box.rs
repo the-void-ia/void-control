@@ -19,10 +19,7 @@ pub fn merge_and_dedup(
     let mut merged = Vec::with_capacity(sidecar_intents.len() + structured_output_intents.len());
     let mut seen = BTreeSet::new();
 
-    for intent in sidecar_intents
-        .into_iter()
-        .chain(structured_output_intents.into_iter())
-    {
+    for intent in sidecar_intents.into_iter().chain(structured_output_intents) {
         let dedup_key = message_dedup_key(&intent);
         if seen.insert(dedup_key) {
             merged.push(intent);
