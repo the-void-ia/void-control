@@ -1824,17 +1824,20 @@ mod tests {
 
     #[test]
     fn claimed_execution_refresh_prevents_other_worker_from_stealing_stale_claim() {
+        let execution_id = "exec-claim-refresh";
         let root = temp_store_dir("claim-refresh");
+        let claim_path = root.join(execution_id).join("claim.txt");
         let store = FsExecutionStore::new(root);
         store
-            .create_execution(&Execution::new("exec-claim-refresh", "swarm", "goal"))
+            .create_execution(&Execution::new(execution_id, "swarm", "goal"))
             .expect("create execution");
 
-        std::env::set_var("VOID_CONTROL_CLAIM_TTL_MS", "30");
-        std::env::set_var("VOID_CONTROL_CLAIM_REFRESH_MS", "10");
+        std::env::set_var("VOID_CONTROL_CLAIM_TTL_MS", "40");
+        std::env::set_var("VOID_CONTROL_CLAIM_REFRESH_MS", "5");
 
         let worker_store = store.clone();
         let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
         let worker = std::thread::spawn(move || {
             let mut service = ExecutionService::new(
                 GlobalConfig {
@@ -1844,23 +1847,26 @@ mod tests {
                 worker_store,
             );
             service
-                .with_claimed_execution("exec-claim-refresh", |_service, _worker_id| {
+                .with_claimed_execution(execution_id, |_service, _worker_id| {
                     started_tx.send(()).expect("signal start");
-                    std::thread::sleep(Duration::from_millis(80));
+                    release_rx
+                        .recv_timeout(Duration::from_millis(500))
+                        .expect("wait for release signal");
                     Ok(())
                 })
                 .expect("claimed operation should succeed");
         });
 
         started_rx.recv().expect("wait for claim");
-        std::thread::sleep(Duration::from_millis(50));
+        let initial_claim = fs::read_to_string(&claim_path).expect("read initial claim");
+        wait_for_claim_refresh(&claim_path, &initial_claim);
 
-        assert!(
-            !store
-                .claim_execution("exec-claim-refresh", "other-worker")
-                .expect("claim should be denied while refreshed"),
-            "other worker should not steal a refreshed claim"
-        );
+        let stolen = store
+            .claim_execution(execution_id, "other-worker")
+            .expect("claim should be denied while refreshed");
+        release_tx.send(()).expect("release worker");
+
+        assert!(!stolen, "other worker should not steal a refreshed claim");
 
         worker.join().expect("worker thread should finish");
         std::env::remove_var("VOID_CONTROL_CLAIM_TTL_MS");
@@ -1875,5 +1881,20 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("void-control-service-{label}-{nanos}"));
         fs::create_dir_all(&dir).expect("create temp dir");
         dir
+    }
+
+    fn wait_for_claim_refresh(claim_path: &std::path::Path, initial_claim: &str) {
+        let started = std::time::Instant::now();
+        loop {
+            let current = fs::read_to_string(claim_path).expect("read refreshed claim");
+            if current != initial_claim {
+                return;
+            }
+            assert!(
+                started.elapsed() < Duration::from_millis(200),
+                "claim refresh did not happen before timeout"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
     }
 }

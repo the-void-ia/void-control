@@ -338,13 +338,11 @@ impl FsExecutionStore {
                 "claim owned by another worker",
             ));
         }
-        fs::write(
-            claim_path,
-            serialize_claim(&ExecutionClaim {
-                worker_id: worker_id.to_string(),
-                claimed_at_ms: now_ms(),
-            }),
-        )
+        let refreshed = ExecutionClaim {
+            worker_id: worker_id.to_string(),
+            claimed_at_ms: now_ms(),
+        };
+        atomic_replace_file(&claim_path, serialize_claim(&refreshed).as_bytes())
     }
 
     pub fn load_claim(&self, execution_id: &str) -> io::Result<Option<String>> {
@@ -936,4 +934,10 @@ fn parse_claim(contents: &str) -> Option<ExecutionClaim> {
 
 fn claim_is_stale(claim: &ExecutionClaim) -> bool {
     now_ms().saturating_sub(claim.claimed_at_ms) > claim_ttl_ms()
+}
+
+fn atomic_replace_file(path: &std::path::Path, contents: &[u8]) -> io::Result<()> {
+    let temp_path = path.with_extension(format!("tmp-{}", now_ms()));
+    fs::write(&temp_path, contents)?;
+    fs::rename(temp_path, path)
 }
