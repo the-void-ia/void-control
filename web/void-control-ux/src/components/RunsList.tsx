@@ -37,7 +37,7 @@ export function RunsList({
   onStateFilterChange
 }: RunsListProps) {
   const all = [...activeRuns, ...terminalRuns];
-  const items: Array<
+  const rawItems: Array<
     | { kind: 'execution'; id: string; execution: ExecutionInspection }
     | { kind: 'run'; id: string; run: RunInspection }
   > = [
@@ -52,6 +52,13 @@ export function RunsList({
       run
     }))
   ];
+  const seen = new Set<string>();
+  const items = rawItems.filter((item) => {
+    const key = `${item.kind}:${item.id}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
   const statePills: Array<{ value: 'all' | 'running' | 'failed' | 'succeeded' | 'cancelled'; label: string }> = [
     { value: 'all', label: 'All' },
     { value: 'running', label: 'Running' },

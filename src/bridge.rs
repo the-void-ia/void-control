@@ -270,6 +270,16 @@ pub fn run_bridge() -> Result<(), String> {
     use tiny_http::{Method, Response, Server, StatusCode};
 
     let config = BridgeConfig::from_env();
+
+    for dir in [&config.spec_dir, &config.execution_dir] {
+        if let Err(err) = std::fs::create_dir_all(dir) {
+            return Err(format!(
+                "failed to create bridge storage dir {}: {err}",
+                dir.display()
+            ));
+        }
+    }
+
     let worker_config = config.clone();
     thread::spawn(move || loop {
         let runtime = VoidBoxRuntimeClient::new(worker_config.base_url.clone(), 250);

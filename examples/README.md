@@ -83,43 +83,78 @@ Metric source of truth:
 
 ## Prerequisites
 
+These examples assume a sibling checkout layout:
+
+```text
+<workspace>/void-box       # the runtime repo
+<workspace>/void-control   # this repo
+```
+
+Substitute `<workspace>` for your local path (e.g. `~/dev/repos`,
+`~/github`, etc.). The runtime template mount path
+`../../void-control/examples/runtime-assets` resolves to
+`<workspace>/void-control/examples/runtime-assets` when the daemon is
+started from `<workspace>/void-box`.
+
 Build the production `void-box` rootfs in the sibling repo:
 
 ```bash
-cd /home/diego/github/agent-infra/void-box
+cd <workspace>/void-box
 TMPDIR=$PWD/target/tmp scripts/build_claude_rootfs.sh
 ```
 
-Start the `void-box` daemon with a real Anthropic key:
+Start the `void-box` daemon (Linux):
 
 ```bash
-cd /home/diego/github/agent-infra/void-box
-export ANTHROPIC_API_KEY=sk-ant-...
+cd <workspace>/void-box
+export ANTHROPIC_API_KEY=sk-ant-...   # or use provider: claude-personal, see below
 export VOID_BOX_KERNEL=/boot/vmlinuz-$(uname -r)
 export VOID_BOX_INITRAMFS=$PWD/target/void-box-rootfs.cpio.gz
 cargo run --bin voidbox -- serve --listen 127.0.0.1:43100
 ```
 
-The transform example also assumes the daemon is started from the sibling
-`void-box` repo root so this runtime template mount resolves correctly:
+Start the `void-box` daemon (macOS, Apple Silicon):
 
-```yaml
-../../void-control/examples/runtime-assets -> /workspace/runtime-assets
+```bash
+cd <workspace>/void-box
+export VOID_BOX_KERNEL=$PWD/target/vmlinuz
+export VOID_BOX_INITRAMFS=$PWD/target/void-box-claude.cpio.gz
+# ANTHROPIC_API_KEY is not needed if the runtime template sets
+# `llm.provider: claude-personal` and you have a Claude subscription
+# (credentials come from the macOS Keychain or ~/.claude/.credentials.json).
+cargo run --bin voidbox -- serve --listen 127.0.0.1:43100
 ```
 
 Start the `void-control` bridge:
 
 ```bash
-cd /home/diego/github/void-control
+cd <workspace>/void-control
 cargo run --features serde --bin voidctl -- serve
 ```
+
+### Using a Claude personal plan instead of an API key
+
+The checked-in runtime templates hardcode `llm.provider: claude` so CI keeps
+using an API key. To opt into `claude-personal` without editing tracked
+templates, set `VOID_CONTROL_LLM_PROVIDER` when starting the bridge (or any
+other process that launches runs through `void-control`):
+
+```bash
+cd <workspace>/void-control
+VOID_CONTROL_LLM_PROVIDER=claude-personal \
+  cargo run --features serde --bin voidctl -- serve
+```
+
+This patches `llm.provider` on every candidate's runtime template at launch
+time. Per-candidate `variation.explicit[].overrides` still win, so you can
+keep a mixed setup if needed.
 
 ## Launch From CLI
 
 Swarm:
 
 ```bash
-cd /home/diego/github/void-control
+cd <workspace>/void-control
 curl -sS -X POST http://127.0.0.1:43210/v1/executions \
   -H 'Content-Type: text/yaml' \
   --data-binary @examples/swarm-transform-optimization-3way.yaml
@@ -128,7 +163,7 @@ curl -sS -X POST http://127.0.0.1:43210/v1/executions \
 Supervision:
 
 ```bash
-cd /home/diego/github/void-control
+cd <workspace>/void-control
 curl -sS -X POST http://127.0.0.1:43210/v1/executions \
   -H 'Content-Type: text/yaml' \
   --data-binary @examples/supervision-transform-review.yaml
@@ -137,7 +172,7 @@ curl -sS -X POST http://127.0.0.1:43210/v1/executions \
 Stress swarm:
 
 ```bash
-cd /home/diego/github/void-control
+cd <workspace>/void-control
 curl -sS -X POST http://127.0.0.1:43210/v1/executions \
   -H 'Content-Type: text/yaml' \
   --data-binary @examples/swarm-transform-optimization.yaml
@@ -148,7 +183,7 @@ curl -sS -X POST http://127.0.0.1:43210/v1/executions \
 1. Start the UI:
 
 ```bash
-cd /home/diego/github/void-control/web/void-control-ux
+cd <workspace>/void-control/web/void-control-ux
 npm run dev -- --host 127.0.0.1 --port 3000
 ```
 

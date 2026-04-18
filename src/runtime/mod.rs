@@ -54,10 +54,15 @@ impl ProviderLaunchAdapter for LaunchInjectionAdapter {
     ) -> Result<StartRequest, ContractError> {
         debug_assert_eq!(candidate.candidate_id, inbox.candidate_id);
         let launch_context = serde_json::to_string(inbox).expect("serialize inbox snapshot");
-        let workflow_spec = if candidate.overrides.is_empty() {
+        let env_overrides = env_provider_overrides();
+        let workflow_spec = if candidate.overrides.is_empty() && env_overrides.is_empty() {
             request.workflow_spec.clone()
         } else {
-            write_patched_workflow_spec(&request.workflow_spec, &candidate.overrides)?
+            let mut merged = env_overrides;
+            for (key, value) in &candidate.overrides {
+                merged.insert(key.clone(), value.clone());
+            }
+            write_patched_workflow_spec(&request.workflow_spec, &merged)?
         };
         Ok(StartRequest {
             workflow_spec,
@@ -65,6 +70,18 @@ impl ProviderLaunchAdapter for LaunchInjectionAdapter {
             ..request
         })
     }
+}
+
+#[cfg(feature = "serde")]
+fn env_provider_overrides() -> BTreeMap<String, String> {
+    let mut overrides = BTreeMap::new();
+    if let Ok(provider) = std::env::var("VOID_CONTROL_LLM_PROVIDER") {
+        let trimmed = provider.trim();
+        if !trimmed.is_empty() {
+            overrides.insert("llm.provider".to_string(), trimmed.to_string());
+        }
+    }
+    overrides
 }
 
 #[cfg(feature = "serde")]
