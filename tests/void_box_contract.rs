@@ -154,7 +154,7 @@ sandbox:
 
 workflow:
   steps:
-    - name: produce
+    - name: main
       run:
         program: sh
         args:
@@ -163,7 +163,7 @@ workflow:
             cat > result.json <<'JSON'
             {"status":"success","summary":"ok","metrics":{"latency_p99_ms":87,"cost_usd":0.018},"artifacts":[]}
             JSON
-  output_step: produce
+  output_step: main
 "#
         }
         DefaultSpecKind::StructuredOutputWithArtifact => {
@@ -177,7 +177,7 @@ sandbox:
 
 workflow:
   steps:
-    - name: produce
+    - name: main
       run:
         program: sh
         args:
@@ -190,7 +190,7 @@ workflow:
             # report
             artifact content
             MD
-  output_step: produce
+  output_step: main
 "#
         }
         DefaultSpecKind::MissingStructuredOutput => {
@@ -204,14 +204,14 @@ sandbox:
 
 workflow:
   steps:
-    - name: produce
+    - name: main
       run:
         program: sh
         args:
           - -lc
           - |
             echo "completed without result.json"
-  output_step: produce
+  output_step: main
 "#
         }
         DefaultSpecKind::MalformedStructuredOutput => {
@@ -225,7 +225,7 @@ sandbox:
 
 workflow:
   steps:
-    - name: produce
+    - name: main
       run:
         program: sh
         args:
@@ -234,7 +234,7 @@ workflow:
             cat > result.json <<'JSON'
             {"status":"success","summary":"ok","metrics":not-json,"artifacts":[]}
             JSON
-  output_step: produce
+  output_step: main
 "#
         }
     };

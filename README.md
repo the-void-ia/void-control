@@ -118,16 +118,37 @@ What to look for:
 
 ### 1) Start `void-box` daemon
 
+Linux:
+
 ```bash
 cargo run --bin voidbox -- serve --listen 127.0.0.1:43100
 ```
 
+macOS (Apple Silicon, Virtualization.framework):
+
+```bash
+# after building the guest kernel + rootfs per void-box's macOS guide
+VOID_BOX_KERNEL=target/vmlinuz \
+VOID_BOX_INITRAMFS=target/void-box-claude.cpio.gz \
+  cargo run --bin voidbox -- serve --listen 127.0.0.1:43100
+```
+
+macOS requires `VOID_BOX_KERNEL` and `VOID_BOX_INITRAMFS` pointing at the
+pre-built guest artifacts. The initramfs filename on macOS is
+`target/void-box-claude.cpio.gz` (not the Linux `void-box-rootfs.cpio.gz`).
+Running through `cargo run` also applies `codesign` automatically — direct
+binary invocation needs manual codesigning. See the `void-box` macOS guide
+for full details.
+
 ### 2) Run `void-control` tests
 
 ```bash
-cargo test
 cargo test --features serde
 ```
+
+All test targets are currently gated behind the `serde` feature, so
+`cargo test` without it runs zero tests. Use `--features serde` as the
+one validation path.
 
 ### 3) Run live daemon contract gate
 
@@ -141,8 +162,14 @@ cargo test --features serde --test void_box_contract -- --ignored --nocapture
 ```bash
 cd web/void-control-ux
 npm install
-VITE_VOID_BOX_BASE_URL=http://127.0.0.1:43100 npm run dev
+npm run dev
 ```
+
+The dev server proxies `/api` to the daemon at `http://127.0.0.1:43100` (see
+`vite.config.ts`), so the browser stays same-origin. `void-box` does not set
+CORS headers, so do **not** set `VITE_VOID_BOX_BASE_URL` during local dev —
+leave it unset to use the proxy. Only override it when the daemon is reachable
+from a host that returns CORS (e.g., a reverse proxy in front of void-box).
 
 ### 5) Launch from YAML editor/upload (bridge)
 
@@ -156,10 +183,13 @@ Then start UI with bridge URL:
 
 ```bash
 cd web/void-control-ux
-VITE_VOID_BOX_BASE_URL=http://127.0.0.1:43100 \
 VITE_VOID_CONTROL_BASE_URL=http://127.0.0.1:43210 \
 npm run dev
 ```
+
+The bridge serves CORS headers, so `VITE_VOID_CONTROL_BASE_URL` can point
+directly at it. Continue to leave `VITE_VOID_BOX_BASE_URL` unset so the
+Vite `/api` proxy is used for daemon calls.
 
 ### 6) Run the canonical live swarm test
 
@@ -207,7 +237,6 @@ Rust validation:
 ```bash
 cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
-cargo test
 cargo test --features serde
 RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
 ```

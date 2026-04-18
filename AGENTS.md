@@ -190,7 +190,29 @@ VOID_BOX_BASE_URL=http://127.0.0.1:43100 \
 cargo test --features serde --test void_box_contract -- --ignored --nocapture
 ```
 
-Optional policy fixture overrides:
+## Environment variables
+
+Control-plane / bridge:
+
+- `VOID_BOX_BASE_URL` — void-box daemon endpoint (default:
+  `http://127.0.0.1:43100`).
+- `VOID_CONTROL_LLM_PROVIDER` — optional global override that patches
+  `llm.provider` on every runtime template at launch. Set to
+  `claude-personal` to use OAuth from the macOS Keychain or
+  `~/.claude/.credentials.json` without editing tracked templates.
+  Per-candidate `variation.explicit[].overrides` still win.
+
+Web UI:
+
+- `VITE_VOID_BOX_BASE_URL` — daemon URL for the operator dashboard.
+  Leave unset during local dev so the Vite `/api` proxy is used;
+  void-box serves no CORS headers, so setting this sends the browser
+  straight into the CORS pit.
+- `VITE_VOID_CONTROL_BASE_URL` — bridge URL for the operator dashboard
+  (e.g., `http://127.0.0.1:43210`). The bridge sets CORS, so this can
+  point at a direct origin.
+
+Optional policy fixture overrides (used by contract tests):
 
 - `VOID_BOX_TIMEOUT_SPEC_FILE`
 - `VOID_BOX_PARALLEL_SPEC_FILE`
