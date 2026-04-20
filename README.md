@@ -248,6 +248,15 @@ starter templates:
 - `single-agent-basic`
 - `warm-agent-basic`
 
+Terminal access is also available through `voidctl`:
+
+```bash
+voidctl template list
+voidctl template get single-agent-basic
+voidctl template dry-run single-agent-basic template-inputs.json
+voidctl template execute warm-agent-basic template-inputs.json
+```
+
 ### 7) Run the supervision example
 
 Use the checked-in supervision example to exercise the flat

@@ -431,3 +431,195 @@ fn runtime_uses_best_candidate_when_not_explicitly_requested() {
     assert!(stdout.contains("candidate_id=candidate-2"));
     assert!(stdout.contains("runtime_run_id=run-2"));
 }
+
+#[test]
+fn template_list_prints_available_templates() {
+    let (base_url, requests, server) = spawn_fake_bridge(vec![FakeResponse {
+        status: 200,
+        body: json!({
+            "templates": [
+                {
+                    "id": "single-agent-basic",
+                    "name": "Single Agent",
+                    "execution_kind": "single_agent",
+                    "description": "Run one agent once and return the result."
+                },
+                {
+                    "id": "warm-agent-basic",
+                    "name": "Warm Agent",
+                    "execution_kind": "warm_agent",
+                    "description": "Start one long-running service-mode agent."
+                }
+            ]
+        }),
+    }]);
+
+    let output = voidctl_command(&base_url)
+        .args(["template", "list"])
+        .output()
+        .expect("template list output");
+    server.join().expect("join fake bridge");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout");
+    assert!(stdout.contains("template_id=single-agent-basic"));
+    assert!(stdout.contains("execution_kind=single_agent"));
+    assert!(stdout.contains("template_id=warm-agent-basic"));
+
+    let requests = requests.lock().expect("lock requests");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "GET");
+    assert_eq!(requests[0].path, "/v1/templates");
+}
+
+#[test]
+fn template_get_prints_template_details() {
+    let (base_url, requests, server) = spawn_fake_bridge(vec![FakeResponse {
+        status: 200,
+        body: json!({
+            "template": {
+                "id": "single-agent-basic",
+                "name": "Single Agent",
+                "execution_kind": "single_agent",
+                "description": "Run one agent once and return the result."
+            },
+            "inputs": {
+                "goal": { "type": "string", "required": true, "description": "Goal" },
+                "prompt": { "type": "string", "required": true, "description": "Prompt" }
+            },
+            "defaults": {
+                "workflow_template": "examples/runtime-templates/claude_mcp_diagnostic_agent.yaml"
+            }
+        }),
+    }]);
+
+    let output = voidctl_command(&base_url)
+        .args(["template", "get", "single-agent-basic"])
+        .output()
+        .expect("template get output");
+    server.join().expect("join fake bridge");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout");
+    assert!(stdout.contains("template_id=single-agent-basic"));
+    assert!(stdout.contains("execution_kind=single_agent"));
+    assert!(stdout
+        .contains("workflow_template=examples/runtime-templates/claude_mcp_diagnostic_agent.yaml"));
+    assert!(stdout.contains("input=goal"));
+    assert!(stdout.contains("input=prompt"));
+
+    let requests = requests.lock().expect("lock requests");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "GET");
+    assert_eq!(requests[0].path, "/v1/templates/single-agent-basic");
+}
+
+#[test]
+fn template_dry_run_from_stdin_posts_inputs_and_prints_compiled_summary() {
+    let (base_url, requests, server) = spawn_fake_bridge(vec![FakeResponse {
+        status: 200,
+        body: json!({
+            "template": {
+                "id": "single-agent-basic",
+                "execution_kind": "single_agent"
+            },
+            "inputs": {
+                "goal": "Summarize this repo",
+                "prompt": "Read the repo and summarize risks",
+                "provider": "claude"
+            },
+            "compiled": {
+                "goal": "Summarize this repo",
+                "workflow_template": "examples/runtime-templates/claude_mcp_diagnostic_agent.yaml",
+                "mode": "swarm",
+                "variation_source": "explicit",
+                "candidates_per_iteration": 1,
+                "overrides": {
+                    "agent.prompt": "Read the repo and summarize risks",
+                    "llm.provider": "claude"
+                }
+            }
+        }),
+    }]);
+
+    let mut child = voidctl_command(&base_url)
+        .args(["template", "dry-run", "single-agent-basic", "--stdin"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn voidctl");
+    let inputs = r#"{"inputs":{"goal":"Summarize this repo","prompt":"Read the repo and summarize risks","provider":"claude"}}"#;
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(inputs.as_bytes())
+        .expect("write stdin");
+
+    let output = child.wait_with_output().expect("wait output");
+    server.join().expect("join fake bridge");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout");
+    assert!(stdout.contains("template_id=single-agent-basic"));
+    assert!(stdout.contains("execution_kind=single_agent"));
+    assert!(stdout
+        .contains("workflow_template=examples/runtime-templates/claude_mcp_diagnostic_agent.yaml"));
+    assert!(stdout.contains("agent.prompt=Read the repo and summarize risks"));
+    assert!(stdout.contains("llm.provider=claude"));
+
+    let requests = requests.lock().expect("lock requests");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "POST");
+    assert_eq!(requests[0].path, "/v1/templates/single-agent-basic/dry-run");
+    assert_eq!(requests[0].body, inputs);
+}
+
+#[test]
+fn template_execute_from_stdin_posts_inputs_and_prints_execution_summary() {
+    let (base_url, requests, server) = spawn_fake_bridge(vec![FakeResponse {
+        status: 200,
+        body: json!({
+            "execution_id": "exec-template-1",
+            "template": {
+                "id": "warm-agent-basic",
+                "execution_kind": "warm_agent"
+            },
+            "status": "Pending",
+            "goal": "Keep a warm agent ready"
+        }),
+    }]);
+
+    let mut child = voidctl_command(&base_url)
+        .args(["template", "execute", "warm-agent-basic", "--stdin"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn voidctl");
+    let inputs = r#"{"inputs":{"goal":"Keep a warm agent ready","prompt":"Stay alive for follow-up repo work."}}"#;
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(inputs.as_bytes())
+        .expect("write stdin");
+
+    let output = child.wait_with_output().expect("wait output");
+    server.join().expect("join fake bridge");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout");
+    assert!(stdout.contains("execution_id=exec-template-1"));
+    assert!(stdout.contains("template_id=warm-agent-basic"));
+    assert!(stdout.contains("execution_kind=warm_agent"));
+    assert!(stdout.contains("status=Pending"));
+    assert!(stdout.contains("goal=Keep a warm agent ready"));
+
+    let requests = requests.lock().expect("lock requests");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "POST");
+    assert_eq!(requests[0].path, "/v1/templates/warm-agent-basic/execute");
+    assert_eq!(requests[0].body, inputs);
+}
