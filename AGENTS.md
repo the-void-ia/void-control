@@ -184,8 +184,13 @@ Important:
   - `execution runtime <execution-id> [candidate-id]`
   - `template list`
   - `template get <template-id>`
-  - `template dry-run <template-id> [<inputs-path> | --stdin]`
-  - `template execute <template-id> [<inputs-path> | --stdin]`
+  - `template dry-run <template-id> [<inputs-json-path> | --stdin]`
+  - `template execute <template-id> [<inputs-json-path> | --stdin]`
+- interactive `voidctl` console also exposes:
+  - `/template list`
+  - `/template get <template-id>`
+  - `/template dry-run <template-id> <inputs-path>`
+  - `/template execute <template-id> <inputs-path>`
 - use `voidctl execution ...` for terminal operator workflows; use the bridge
   HTTP API or UI when you need direct API-driven inspection or browser workflows
 - quote URLs that contain `?` when using `curl` from `zsh`

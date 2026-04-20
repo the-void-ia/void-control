@@ -236,7 +236,7 @@ where
                     let template_id = iter
                         .next()
                         .ok_or_else(|| {
-                            "usage: voidctl template dry-run <template_id> [<inputs-path> | --stdin]"
+                            "usage: voidctl template dry-run <template_id> [<inputs-json-path> | --stdin]"
                                 .to_string()
                         })?
                         .to_string();
@@ -254,7 +254,7 @@ where
                     let template_id = iter
                         .next()
                         .ok_or_else(|| {
-                            "usage: voidctl template execute <template_id> [<inputs-path> | --stdin]"
+                            "usage: voidctl template execute <template_id> [<inputs-json-path> | --stdin]"
                                 .to_string()
                         })?
                         .to_string();
@@ -337,7 +337,7 @@ where
             "--stdin" => {
                 if stdin || inputs.is_some() {
                     return Err(format!(
-                        "usage: voidctl template {action} <template_id> [<inputs-path> | --stdin]"
+                        "usage: voidctl template {action} <template_id> [<inputs-json-path> | --stdin]"
                     ));
                 }
                 stdin = true;
@@ -356,7 +356,7 @@ where
     }
     if !stdin && inputs.is_none() {
         return Err(format!(
-            "usage: voidctl template {action} <template_id> [<inputs-path> | --stdin]"
+            "usage: voidctl template {action} <template_id> [<inputs-json-path> | --stdin]"
         ));
     }
     Ok((inputs, stdin))
@@ -391,8 +391,8 @@ fn top_level_help_text() -> &'static str {
   voidctl execution runtime <execution-id> [candidate-id]
   voidctl template list
   voidctl template get <template-id>
-  voidctl template dry-run <template-id> [<inputs-path> | --stdin]
-  voidctl template execute <template-id> [<inputs-path> | --stdin]"
+  voidctl template dry-run <template-id> [<inputs-json-path> | --stdin]
+  voidctl template execute <template-id> [<inputs-json-path> | --stdin]"
 }
 
 #[cfg(feature = "serde")]
@@ -856,6 +856,7 @@ fn run() -> Result<(), String> {
                 "/watch",
                 "/resume",
                 "/execution",
+                "/template",
                 "/help",
                 "/exit",
             ];
@@ -893,6 +894,7 @@ fn run() -> Result<(), String> {
                 "/execution" => options.extend([
                     "create", "dry-run", "list", "status", "pause", "resume", "cancel", "patch",
                 ]),
+                "/template" => options.extend(["list", "get", "dry-run", "execute"]),
                 "/events" => options.push("--from"),
                 "/logs" => options.push("--follow"),
                 "/cancel" => options.push("--reason"),
@@ -972,6 +974,18 @@ fn run() -> Result<(), String> {
             execution_id: String,
             max_iterations: Option<u32>,
             max_concurrent_candidates: Option<u32>,
+        },
+        TemplateList,
+        TemplateGet {
+            template_id: String,
+        },
+        TemplateDryRun {
+            template_id: String,
+            inputs: String,
+        },
+        TemplateExecute {
+            template_id: String,
+            inputs: String,
         },
         Help,
         Exit,
@@ -1281,6 +1295,49 @@ fn run() -> Result<(), String> {
                     other => Err(format!("unknown /execution action '{other}'")),
                 }
             }
+            "/template" => {
+                let action = tokens.next().ok_or_else(|| {
+                    "usage: /template <list|get|dry-run|execute> [args]".to_string()
+                })?;
+                match action {
+                    "list" => Ok(Command::TemplateList),
+                    "get" => Ok(Command::TemplateGet {
+                        template_id: tokens
+                            .next()
+                            .ok_or_else(|| "usage: /template get <template_id>".to_string())?
+                            .to_string(),
+                    }),
+                    "dry-run" => Ok(Command::TemplateDryRun {
+                        template_id: tokens
+                            .next()
+                            .ok_or_else(|| {
+                                "usage: /template dry-run <template_id> <inputs_file>".to_string()
+                            })?
+                            .to_string(),
+                        inputs: tokens
+                            .next()
+                            .ok_or_else(|| {
+                                "usage: /template dry-run <template_id> <inputs_file>".to_string()
+                            })?
+                            .to_string(),
+                    }),
+                    "execute" => Ok(Command::TemplateExecute {
+                        template_id: tokens
+                            .next()
+                            .ok_or_else(|| {
+                                "usage: /template execute <template_id> <inputs_file>".to_string()
+                            })?
+                            .to_string(),
+                        inputs: tokens
+                            .next()
+                            .ok_or_else(|| {
+                                "usage: /template execute <template_id> <inputs_file>".to_string()
+                            })?
+                            .to_string(),
+                    }),
+                    other => Err(format!("unknown /template action '{other}'")),
+                }
+            }
             "/help" => Ok(Command::Help),
             "/exit" | "/quit" => Ok(Command::Exit),
             other => Err(format!("unknown command '{other}'")),
@@ -1305,6 +1362,10 @@ fn run() -> Result<(), String> {
   /execution resume <execution_id>
   /execution cancel <execution_id>
   /execution patch <execution_id> [--max-iterations N] [--max-concurrent-candidates N]
+  /template list
+  /template get <template_id>
+  /template dry-run <template_id> <inputs_json_file>
+  /template execute <template_id> <inputs_json_file>
   /help
   /exit
 
@@ -2350,6 +2411,138 @@ Policy presets: fast | balanced | safe"
                     Err(err) => println!("error: {err}"),
                 }
             }
+            Command::TemplateList => {
+                match bridge_request(&bridge_base_url, "GET", "/v1/templates", None) {
+                    Ok(response) => {
+                        let templates = response
+                            .json
+                            .get("templates")
+                            .and_then(|v| v.as_array())
+                            .cloned()
+                            .unwrap_or_default();
+                        if templates.is_empty() {
+                            println!("no templates");
+                        } else {
+                            for template in templates {
+                                println!(
+                                    "template_id={} execution_kind={} name={} description={}",
+                                    template.get("id").and_then(|v| v.as_str()).unwrap_or("-"),
+                                    template
+                                        .get("execution_kind")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("-"),
+                                    template.get("name").and_then(|v| v.as_str()).unwrap_or("-"),
+                                    template
+                                        .get("description")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("-"),
+                                );
+                            }
+                        }
+                    }
+                    Err(err) => println!("error: {err}"),
+                }
+            }
+            Command::TemplateGet { template_id } => {
+                match bridge_request(
+                    &bridge_base_url,
+                    "GET",
+                    &format!("/v1/templates/{template_id}"),
+                    None,
+                ) {
+                    Ok(response) => {
+                        let template = response
+                            .json
+                            .get("template")
+                            .cloned()
+                            .unwrap_or(serde_json::Value::Null);
+                        let workflow_template = response
+                            .json
+                            .get("defaults")
+                            .and_then(|value| value.get("workflow_template"))
+                            .and_then(|value| value.as_str())
+                            .unwrap_or("-");
+                        println!(
+                            "template_id={} execution_kind={} name={} workflow_template={}",
+                            template
+                                .get("id")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                            template
+                                .get("execution_kind")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                            template
+                                .get("name")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                            workflow_template
+                        );
+                    }
+                    Err(err) => println!("error: {err}"),
+                }
+            }
+            Command::TemplateDryRun {
+                template_id,
+                inputs,
+            } => {
+                match load_json_input_file(&inputs).and_then(|body| {
+                    bridge_request(
+                        &bridge_base_url,
+                        "POST",
+                        &format!("/v1/templates/{template_id}/dry-run"),
+                        Some(&body),
+                    )
+                }) {
+                    Ok(response) => print_template_compilation_summary(&response.json),
+                    Err(err) => println!("error: {err}"),
+                }
+            }
+            Command::TemplateExecute {
+                template_id,
+                inputs,
+            } => {
+                match load_json_input_file(&inputs).and_then(|body| {
+                    bridge_request(
+                        &bridge_base_url,
+                        "POST",
+                        &format!("/v1/templates/{template_id}/execute"),
+                        Some(&body),
+                    )
+                }) {
+                    Ok(response) => println!(
+                        "execution_id={} template_id={} execution_kind={} status={} goal={}",
+                        response
+                            .json
+                            .get("execution_id")
+                            .and_then(|value| value.as_str())
+                            .unwrap_or("-"),
+                        response
+                            .json
+                            .get("template")
+                            .and_then(|value| value.get("id"))
+                            .and_then(|value| value.as_str())
+                            .unwrap_or("-"),
+                        response
+                            .json
+                            .get("template")
+                            .and_then(|value| value.get("execution_kind"))
+                            .and_then(|value| value.as_str())
+                            .unwrap_or("-"),
+                        response
+                            .json
+                            .get("status")
+                            .and_then(|value| value.as_str())
+                            .unwrap_or("unknown"),
+                        response
+                            .json
+                            .get("goal")
+                            .and_then(|value| value.as_str())
+                            .unwrap_or("-"),
+                    ),
+                    Err(err) => println!("error: {err}"),
+                }
+            }
         }
 
         if let Err(e) = save_session(&session_file, &session) {
@@ -2571,8 +2764,12 @@ mod tests {
         assert!(help.contains("voidctl execution runtime <execution-id> [candidate-id]"));
         assert!(help.contains("voidctl template list"));
         assert!(help.contains("voidctl template get <template-id>"));
-        assert!(help.contains("voidctl template dry-run <template-id> [<inputs-path> | --stdin]"));
-        assert!(help.contains("voidctl template execute <template-id> [<inputs-path> | --stdin]"));
+        assert!(
+            help.contains("voidctl template dry-run <template-id> [<inputs-json-path> | --stdin]")
+        );
+        assert!(
+            help.contains("voidctl template execute <template-id> [<inputs-json-path> | --stdin]")
+        );
     }
 
     #[test]

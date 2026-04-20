@@ -257,6 +257,28 @@ voidctl template dry-run single-agent-basic template-inputs.json
 voidctl template execute warm-agent-basic template-inputs.json
 ```
 
+`template-inputs.json` must be a JSON request body in the same shape the bridge
+accepts, for example:
+
+```json
+{
+  "inputs": {
+    "goal": "Summarize this repo",
+    "prompt": "Read the repo and summarize risks",
+    "provider": "claude"
+  }
+}
+```
+
+Inside the interactive `voidctl` console, the same surface is available as:
+
+```text
+/template list
+/template get single-agent-basic
+/template dry-run single-agent-basic template-inputs.json
+/template execute warm-agent-basic template-inputs.json
+```
+
 ### 7) Run the supervision example
 
 Use the checked-in supervision example to exercise the flat
