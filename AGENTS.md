@@ -189,8 +189,8 @@ Important:
 - interactive `voidctl` console also exposes:
   - `/template list`
   - `/template get <template-id>`
-  - `/template dry-run <template-id> <inputs-path>`
-  - `/template execute <template-id> <inputs-path>`
+  - `/template dry-run <template-id> <inputs-json-path>`
+  - `/template execute <template-id> <inputs-json-path>`
 - use `voidctl execution ...` for terminal operator workflows; use the bridge
   HTTP API or UI when you need direct API-driven inspection or browser workflows
 - quote URLs that contain `?` when using `curl` from `zsh`
