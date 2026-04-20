@@ -623,3 +623,115 @@ fn template_execute_from_stdin_posts_inputs_and_prints_execution_summary() {
     assert_eq!(requests[0].path, "/v1/templates/warm-agent-basic/execute");
     assert_eq!(requests[0].body, inputs);
 }
+
+#[test]
+fn template_get_failure_returns_non_zero_and_prints_bridge_message() {
+    let (base_url, _requests, server) = spawn_fake_bridge(vec![FakeResponse {
+        status: 404,
+        body: json!({
+            "message": "template 'missing-template' not found"
+        }),
+    }]);
+
+    let output = voidctl_command(&base_url)
+        .args(["template", "get", "missing-template"])
+        .output()
+        .expect("template get output");
+    server.join().expect("join fake bridge");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).expect("stderr");
+    assert!(stderr.contains("fatal: template 'missing-template' not found"));
+}
+
+#[test]
+fn template_dry_run_failure_returns_non_zero_and_prints_bridge_message() {
+    let (base_url, _requests, server) = spawn_fake_bridge(vec![FakeResponse {
+        status: 400,
+        body: json!({
+            "message": "missing required input 'prompt'"
+        }),
+    }]);
+
+    let mut child = voidctl_command(&base_url)
+        .args(["template", "dry-run", "single-agent-basic", "--stdin"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn voidctl");
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(br#"{"inputs":{"goal":"Summarize this repo"}}"#)
+        .expect("write stdin");
+
+    let output = child.wait_with_output().expect("wait output");
+    server.join().expect("join fake bridge");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).expect("stderr");
+    assert!(stderr.contains("fatal: missing required input 'prompt'"));
+}
+
+#[test]
+fn template_execute_failure_returns_non_zero_and_prints_bridge_message() {
+    let (base_url, _requests, server) = spawn_fake_bridge(vec![FakeResponse {
+        status: 400,
+        body: json!({
+            "message": "invalid template request body: expected value"
+        }),
+    }]);
+
+    let mut child = voidctl_command(&base_url)
+        .args(["template", "execute", "warm-agent-basic", "--stdin"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn voidctl");
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(b"not-json")
+        .expect("write stdin");
+
+    let output = child.wait_with_output().expect("wait output");
+    server.join().expect("join fake bridge");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).expect("stderr");
+    assert!(stderr.contains("fatal: invalid template request body: expected value"));
+}
+
+#[test]
+fn interactive_template_get_prints_error_for_bridge_failure() {
+    let (base_url, _requests, server) = spawn_fake_bridge(vec![FakeResponse {
+        status: 404,
+        body: json!({
+            "message": "template 'missing-template' not found"
+        }),
+    }]);
+
+    let mut child = voidctl_command(&base_url)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn voidctl");
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(b"/template get missing-template\n/exit\n")
+        .expect("write stdin");
+
+    let output = child.wait_with_output().expect("wait output");
+    server.join().expect("join fake bridge");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout");
+    assert!(stdout.contains("error: template 'missing-template' not found"));
+}

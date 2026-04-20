@@ -2414,6 +2414,10 @@ Policy presets: fast | balanced | safe"
             Command::TemplateList => {
                 match bridge_request(&bridge_base_url, "GET", "/v1/templates", None) {
                     Ok(response) => {
+                        if response.status >= 400 {
+                            println!("error: {}", bridge_error_message(&response));
+                            continue;
+                        }
                         let templates = response
                             .json
                             .get("templates")
@@ -2451,6 +2455,10 @@ Policy presets: fast | balanced | safe"
                     None,
                 ) {
                     Ok(response) => {
+                        if response.status >= 400 {
+                            println!("error: {}", bridge_error_message(&response));
+                            continue;
+                        }
                         let template = response
                             .json
                             .get("template")
@@ -2494,7 +2502,13 @@ Policy presets: fast | balanced | safe"
                         Some(&body),
                     )
                 }) {
-                    Ok(response) => print_template_compilation_summary(&response.json),
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            println!("error: {}", bridge_error_message(&response));
+                            continue;
+                        }
+                        print_template_compilation_summary(&response.json);
+                    }
                     Err(err) => println!("error: {err}"),
                 }
             }
@@ -2510,36 +2524,42 @@ Policy presets: fast | balanced | safe"
                         Some(&body),
                     )
                 }) {
-                    Ok(response) => println!(
-                        "execution_id={} template_id={} execution_kind={} status={} goal={}",
-                        response
-                            .json
-                            .get("execution_id")
-                            .and_then(|value| value.as_str())
-                            .unwrap_or("-"),
-                        response
-                            .json
-                            .get("template")
-                            .and_then(|value| value.get("id"))
-                            .and_then(|value| value.as_str())
-                            .unwrap_or("-"),
-                        response
-                            .json
-                            .get("template")
-                            .and_then(|value| value.get("execution_kind"))
-                            .and_then(|value| value.as_str())
-                            .unwrap_or("-"),
-                        response
-                            .json
-                            .get("status")
-                            .and_then(|value| value.as_str())
-                            .unwrap_or("unknown"),
-                        response
-                            .json
-                            .get("goal")
-                            .and_then(|value| value.as_str())
-                            .unwrap_or("-"),
-                    ),
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            println!("error: {}", bridge_error_message(&response));
+                            continue;
+                        }
+                        println!(
+                            "execution_id={} template_id={} execution_kind={} status={} goal={}",
+                            response
+                                .json
+                                .get("execution_id")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                            response
+                                .json
+                                .get("template")
+                                .and_then(|value| value.get("id"))
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                            response
+                                .json
+                                .get("template")
+                                .and_then(|value| value.get("execution_kind"))
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                            response
+                                .json
+                                .get("status")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("unknown"),
+                            response
+                                .json
+                                .get("goal")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                        );
+                    }
                     Err(err) => println!("error: {err}"),
                 }
             }
