@@ -364,6 +364,37 @@ voidctl execution result <execution-id>
 voidctl execution runtime <execution-id>
 ```
 
+Template-backed agent runs use the `voidctl template ...` surface and expect a
+JSON request body on disk or stdin:
+
+```json
+{
+  "inputs": {
+    "goal": "Summarize this repo",
+    "prompt": "Read the repo and summarize risks",
+    "provider": "claude"
+  }
+}
+```
+
+Dry-run and execute a checked-in template:
+
+```bash
+voidctl template list
+voidctl template get single-agent-basic
+voidctl template dry-run single-agent-basic template-inputs.json
+voidctl template execute warm-agent-basic template-inputs.json
+```
+
+The interactive `voidctl` console exposes the same path:
+
+```text
+/template list
+/template get single-agent-basic
+/template dry-run single-agent-basic template-inputs.json
+/template execute warm-agent-basic template-inputs.json
+```
+
 Example execution:
 
 ```text
