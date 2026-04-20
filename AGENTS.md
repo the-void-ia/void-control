@@ -28,10 +28,12 @@ runtime transport concerns should stay separate.
 - `src/runtime/`: runtime adapter implementations (`MockRuntime`, `VoidBoxRuntimeClient`)
 - `src/orchestration/`: planning, persistence, scheduling, reduction, strategies
 - `src/bridge.rs`: HTTP bridge for launch, dry-run, execution inspection, and policy patching
+- `src/templates/`: file-backed template schema, loading, and compilation into `ExecutionSpec`
 - `src/bin/voidctl.rs`: CLI entrypoint and bridge server
 - `tests/`: orchestration, bridge, runtime, and compatibility coverage
 - `web/void-control-ux/`: React/Vite operator dashboard
 - `docs/`: architecture notes, release process, and internal plans/specs
+- `templates/`: checked-in template-first API definitions
 
 ## Module map
 
@@ -62,6 +64,9 @@ runtime transport concerns should stay separate.
   - restart/reload of persisted active work
 - `src/bridge.rs`
   - serde-gated HTTP routes for UI/bridge workflows
+  - execution routes plus template-first bridge routes
+- `src/templates/`
+  - phase-1 control template schema, checked-in loader, and compile logic
 
 ### Web UI
 
@@ -180,6 +185,11 @@ Important:
 - use `voidctl execution ...` for terminal operator workflows; use the bridge
   HTTP API or UI when you need direct API-driven inspection or browser workflows
 - quote URLs that contain `?` when using `curl` from `zsh`
+- template-first bridge endpoints:
+  - `GET /v1/templates`
+  - `GET /v1/templates/{id}`
+  - `POST /v1/templates/{id}/dry-run`
+  - `POST /v1/templates/{id}/execute`
 
 ## Runtime compatibility commands
 

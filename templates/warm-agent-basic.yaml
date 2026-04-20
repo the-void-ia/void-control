@@ -1,0 +1,72 @@
+api_version: v1
+kind: control_template
+
+template:
+  id: warm-agent-basic
+  name: Warm Agent
+  execution_kind: warm_agent
+  description: Start one long-running service-mode agent.
+
+inputs:
+  goal:
+    type: string
+    required: true
+    description: High-level goal shown in the execution record.
+  prompt:
+    type: string
+    required: true
+    description: Prompt passed to the service agent.
+  provider:
+    type: enum
+    required: false
+    default: claude
+    values: [claude, codex]
+    description: LLM provider override.
+
+defaults:
+  workflow_template: examples/runtime-templates/warm_agent_basic.yaml
+  execution_spec:
+    mode: swarm
+    goal: Warm agent task
+    workflow:
+      template: ""
+    policy:
+      budget:
+        max_iterations: 1
+        max_child_runs: 1
+        max_wall_clock_secs: 3600
+        max_cost_usd_millis: null
+      concurrency:
+        max_concurrent_candidates: 1
+      convergence:
+        strategy: threshold
+        min_score: 1.0
+        max_iterations_without_improvement: 0
+      max_candidate_failures_per_iteration: 1
+      missing_output_policy: mark_failed
+      iteration_failure_policy: fail_execution
+    evaluation:
+      scoring_type: weighted_metrics
+      weights:
+        success: 1.0
+      pass_threshold: 1.0
+      ranking: highest_score
+      tie_breaking: success
+    variation:
+      source: explicit
+      candidates_per_iteration: 1
+      selection: null
+      parameter_space: {}
+      explicit:
+        - overrides: {}
+    swarm: true
+    supervision: null
+
+compile:
+  bindings:
+    - input: goal
+      target: execution_spec.goal
+    - input: prompt
+      target: variation.explicit[0].overrides.agent.prompt
+    - input: provider
+      target: variation.explicit[0].overrides.llm.provider

@@ -6,6 +6,132 @@ use std::path::Path;
 use serde_json::json;
 
 #[test]
+fn template_list_route_returns_checked_in_templates() {
+    let response =
+        void_control::bridge::handle_bridge_request_for_test("GET", "/v1/templates", None)
+            .expect("response");
+
+    assert_eq!(response.status, 200);
+    let templates = response.json["templates"]
+        .as_array()
+        .expect("templates array");
+    assert!(templates
+        .iter()
+        .any(|item| item["id"] == "single-agent-basic"));
+    assert!(templates
+        .iter()
+        .any(|item| item["id"] == "warm-agent-basic"));
+}
+
+#[test]
+fn template_get_route_returns_template_details() {
+    let response = void_control::bridge::handle_bridge_request_for_test(
+        "GET",
+        "/v1/templates/single-agent-basic",
+        None,
+    )
+    .expect("response");
+
+    assert_eq!(response.status, 200);
+    assert_eq!(response.json["template"]["id"], "single-agent-basic");
+    assert_eq!(
+        response.json["defaults"]["workflow_template"],
+        "examples/runtime-templates/claude_mcp_diagnostic_agent.yaml"
+    );
+    assert!(response.json["inputs"]["prompt"].is_object());
+}
+
+#[test]
+fn template_dry_run_route_returns_compiled_execution_preview() {
+    let body = json!({
+        "inputs": {
+            "goal": "Summarize this repo",
+            "prompt": "Read the repo and summarize risks",
+            "provider": "claude"
+        }
+    })
+    .to_string();
+
+    let response = void_control::bridge::handle_bridge_request_for_test(
+        "POST",
+        "/v1/templates/single-agent-basic/dry-run",
+        Some(&body),
+    )
+    .expect("response");
+
+    assert_eq!(response.status, 200);
+    assert_eq!(response.json["template"]["id"], "single-agent-basic");
+    assert_eq!(response.json["inputs"]["goal"], "Summarize this repo");
+    assert_eq!(response.json["compiled"]["goal"], "Summarize this repo");
+    assert_eq!(
+        response.json["compiled"]["workflow_template"],
+        "examples/runtime-templates/claude_mcp_diagnostic_agent.yaml"
+    );
+    assert_eq!(
+        response.json["compiled"]["overrides"]["agent.prompt"],
+        "Read the repo and summarize risks"
+    );
+    assert_eq!(
+        response.json["compiled"]["overrides"]["llm.provider"],
+        "claude"
+    );
+}
+
+#[test]
+fn template_execute_route_creates_normal_execution() {
+    let root = temp_root("template-execute");
+    let spec_dir = root.join("specs");
+    let execution_dir = root.join("executions");
+    let body = json!({
+        "inputs": {
+            "goal": "Keep a warm agent ready",
+            "prompt": "Stay alive for follow-up repo work."
+        }
+    })
+    .to_string();
+
+    let response = void_control::bridge::handle_bridge_request_with_dirs_for_test(
+        "POST",
+        "/v1/templates/warm-agent-basic/execute",
+        Some(&body),
+        &spec_dir,
+        &execution_dir,
+    )
+    .expect("response");
+
+    assert_eq!(response.status, 200);
+    assert_eq!(response.json["template"]["id"], "warm-agent-basic");
+    assert_eq!(response.json["template"]["execution_kind"], "warm_agent");
+    assert_eq!(response.json["goal"], "Keep a warm agent ready");
+    assert_eq!(response.json["status"], "Pending");
+
+    let execution_id = response.json["execution_id"]
+        .as_str()
+        .expect("execution_id");
+    let store = void_control::orchestration::FsExecutionStore::new(execution_dir);
+    let spec = store.load_spec(execution_id).expect("load compiled spec");
+    assert_eq!(spec.goal, "Keep a warm agent ready");
+    assert_eq!(
+        spec.workflow.template,
+        "examples/runtime-templates/warm_agent_basic.yaml"
+    );
+    assert_eq!(
+        spec.variation.explicit[0]
+            .overrides
+            .get("agent.prompt")
+            .map(String::as_str),
+        Some("Stay alive for follow-up repo work.")
+    );
+    assert_eq!(
+        spec.variation.explicit[0]
+            .overrides
+            .get("llm.provider")
+            .map(String::as_str),
+        Some("claude")
+    );
+}
+
+#[test]
 fn dry_run_endpoint_returns_plan_without_creating_execution() {
     let body = json!({
         "mode": "swarm",

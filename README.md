@@ -111,6 +111,7 @@ What to look for:
 
 - `spec/`: Runtime and orchestration contracts.
 - `src/`: Rust orchestration client/runtime normalization logic.
+- `templates/`: File-backed template-first API definitions for single-agent and warm-agent execution.
 - `tests/`: Contract and compatibility tests.
 - `web/void-control-ux/`: React operator dashboard (graph + inspector).
 
@@ -210,6 +211,42 @@ This is also the canonical first-release orchestration workflow:
 - launch through the bridge or UI
 - inspect the execution graph, inspector, and event stream
 - follow candidate metrics and `leader` / `broadcast` collaboration events
+
+### Template-first bridge API
+
+Phase 1 also exposes file-backed templates through the bridge:
+
+```bash
+curl -sS http://127.0.0.1:43210/v1/templates
+
+curl -sS http://127.0.0.1:43210/v1/templates/single-agent-basic
+
+curl -sS -X POST http://127.0.0.1:43210/v1/templates/single-agent-basic/dry-run \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "inputs": {
+      "goal": "Summarize this repo",
+      "prompt": "Read the repo and summarize risks",
+      "provider": "claude"
+    }
+  }'
+
+curl -sS -X POST http://127.0.0.1:43210/v1/templates/warm-agent-basic/execute \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "inputs": {
+      "goal": "Keep a warm agent ready",
+      "prompt": "Stay alive for follow-up repo work."
+    }
+  }'
+```
+
+These template endpoints compile into normal `ExecutionSpec` objects and then
+reuse the existing dry-run and execution creation flow. Phase 1 ships two
+starter templates:
+
+- `single-agent-basic`
+- `warm-agent-basic`
 
 ### 7) Run the supervision example
 
