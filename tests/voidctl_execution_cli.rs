@@ -1618,3 +1618,159 @@ fn pool_scale_from_stdin_posts_request_and_prints_summary() {
     assert_eq!(requests[0].path, "/v1/pools/pool-1/scale");
     assert_eq!(requests[0].body, body);
 }
+
+#[test]
+fn interactive_sandbox_create_posts_spec_and_prints_summary() {
+    let (base_url, requests, server) = spawn_fake_bridge(vec![FakeResponse {
+        status: 200,
+        body: json!({
+            "kind": "sandbox",
+            "sandbox": {
+                "sandbox_id": "sbx-1",
+                "state": "running",
+                "image": "python:3.12-slim",
+                "cpus": 2,
+                "memory_mb": 2048
+            }
+        }),
+    }]);
+
+    let inputs_path = temp_inputs_path("sandbox.json");
+    fs::write(
+        &inputs_path,
+        r#"{"api_version":"v1","kind":"sandbox","runtime":{"image":"python:3.12-slim","cpus":2,"memory_mb":2048}}"#,
+    )
+    .expect("write inputs");
+
+    let mut child = voidctl_command(&base_url)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn voidctl");
+    let command = format!("/sandbox create {}\n/exit\n", inputs_path.display());
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(command.as_bytes())
+        .expect("write stdin");
+
+    let output = child.wait_with_output().expect("wait output");
+    server.join().expect("join fake bridge");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout");
+    assert!(stdout.contains("sandbox_id=sbx-1"));
+    assert!(stdout.contains("state=running"));
+
+    let requests = requests.lock().expect("lock requests");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].path, "/v1/sandboxes");
+}
+
+#[test]
+fn interactive_snapshot_replicate_posts_request_and_prints_summary() {
+    let (base_url, requests, server) = spawn_fake_bridge(vec![FakeResponse {
+        status: 200,
+        body: json!({
+            "kind": "snapshot",
+            "snapshot": {
+                "snapshot_id": "snap-1",
+                "source_sandbox_id": "sbx-1",
+                "distribution": {
+                    "mode": "copy",
+                    "targets": ["node-a", "node-c"]
+                }
+            }
+        }),
+    }]);
+
+    let inputs_path = temp_inputs_path("replicate.json");
+    fs::write(
+        &inputs_path,
+        r#"{"mode":"copy","targets":["node-a","node-c"]}"#,
+    )
+    .expect("write inputs");
+
+    let mut child = voidctl_command(&base_url)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn voidctl");
+    let command = format!(
+        "/snapshot replicate snap-1 {}\n/exit\n",
+        inputs_path.display()
+    );
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(command.as_bytes())
+        .expect("write stdin");
+
+    let output = child.wait_with_output().expect("wait output");
+    server.join().expect("join fake bridge");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout");
+    assert!(stdout.contains("snapshot_id=snap-1"));
+    assert!(stdout.contains("mode=copy"));
+
+    let requests = requests.lock().expect("lock requests");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].path, "/v1/snapshots/snap-1/replicate");
+}
+
+#[test]
+fn interactive_pool_scale_posts_request_and_prints_summary() {
+    let (base_url, requests, server) = spawn_fake_bridge(vec![FakeResponse {
+        status: 200,
+        body: json!({
+            "kind": "pool",
+            "pool": {
+                "pool_id": "pool-1",
+                "sandbox_spec": {
+                    "runtime": {
+                        "image": "python:3.12-slim"
+                    }
+                },
+                "capacity": {
+                    "warm": 8,
+                    "max": 24
+                }
+            }
+        }),
+    }]);
+
+    let inputs_path = temp_inputs_path("scale.json");
+    fs::write(&inputs_path, r#"{"warm":8,"max":24}"#).expect("write inputs");
+
+    let mut child = voidctl_command(&base_url)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn voidctl");
+    let command = format!("/pool scale pool-1 {}\n/exit\n", inputs_path.display());
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(command.as_bytes())
+        .expect("write stdin");
+
+    let output = child.wait_with_output().expect("wait output");
+    server.join().expect("join fake bridge");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout");
+    assert!(stdout.contains("pool_id=pool-1"));
+    assert!(stdout.contains("warm=8"));
+    assert!(stdout.contains("max=24"));
+
+    let requests = requests.lock().expect("lock requests");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].path, "/v1/pools/pool-1/scale");
+}

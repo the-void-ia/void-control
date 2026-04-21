@@ -626,6 +626,15 @@ voidctl pool get <pool-id>
 cat scale.json | voidctl pool scale <pool-id> --stdin
 ```
 
+The interactive console exposes the same compute routes:
+
+```text
+/sandbox create sandbox.json
+/sandbox list
+/snapshot replicate <snapshot-id> replicate.json
+/pool scale <pool-id> scale.json
+```
+
 Example execution:
 
 ```text

@@ -244,6 +244,11 @@ Important:
   - `voidctl pool create [<spec-path> | --stdin]`
   - `voidctl pool get <pool-id>`
   - `voidctl pool scale <pool-id> [<request-path> | --stdin]`
+- interactive compute commands:
+  - `/sandbox create <spec_file>`
+  - `/sandbox list`
+  - `/snapshot replicate <snapshot_id> <request_file>`
+  - `/pool scale <pool_id> <request_file>`
 - quote URLs that contain `?` when using `curl` from `zsh`
 - template-first bridge endpoints:
   - `GET /v1/templates`

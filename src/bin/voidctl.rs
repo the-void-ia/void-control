@@ -1421,6 +1421,9 @@ fn run() -> Result<(), String> {
                 "/batch",
                 "/yolo",
                 "/team",
+                "/sandbox",
+                "/snapshot",
+                "/pool",
                 "/help",
                 "/exit",
             ];
@@ -1461,6 +1464,9 @@ fn run() -> Result<(), String> {
                 "/template" => options.extend(["list", "get", "dry-run", "execute"]),
                 "/batch" | "/yolo" => options.extend(["dry-run", "run"]),
                 "/team" => options.extend(["dry-run", "run"]),
+                "/sandbox" => options.extend(["create", "get", "list", "exec", "stop", "delete"]),
+                "/snapshot" => options.extend(["create", "get", "list", "replicate", "delete"]),
+                "/pool" => options.extend(["create", "get", "scale"]),
                 "/events" => options.push("--from"),
                 "/logs" => options.push("--follow"),
                 "/cancel" => options.push("--reason"),
@@ -1566,6 +1572,47 @@ fn run() -> Result<(), String> {
         },
         TeamRun {
             spec: String,
+        },
+        SandboxCreate {
+            spec: String,
+        },
+        SandboxGet {
+            sandbox_id: String,
+        },
+        SandboxList,
+        SandboxExec {
+            sandbox_id: String,
+            request: String,
+        },
+        SandboxStop {
+            sandbox_id: String,
+        },
+        SandboxDelete {
+            sandbox_id: String,
+        },
+        SnapshotCreate {
+            spec: String,
+        },
+        SnapshotGet {
+            snapshot_id: String,
+        },
+        SnapshotList,
+        SnapshotReplicate {
+            snapshot_id: String,
+            request: String,
+        },
+        SnapshotDelete {
+            snapshot_id: String,
+        },
+        PoolCreate {
+            spec: String,
+        },
+        PoolGet {
+            pool_id: String,
+        },
+        PoolScale {
+            pool_id: String,
+            request: String,
         },
         Help,
         Exit,
@@ -1961,6 +2008,130 @@ fn run() -> Result<(), String> {
                     other => Err(format!("unknown /team action '{other}'")),
                 }
             }
+            "/sandbox" => {
+                let action = tokens.next().ok_or_else(|| {
+                    "usage: /sandbox <create|get|list|exec|stop|delete> [args]".to_string()
+                })?;
+                match action {
+                    "create" => Ok(Command::SandboxCreate {
+                        spec: tokens
+                            .next()
+                            .ok_or_else(|| "usage: /sandbox create <spec_file>".to_string())?
+                            .to_string(),
+                    }),
+                    "get" => Ok(Command::SandboxGet {
+                        sandbox_id: tokens
+                            .next()
+                            .ok_or_else(|| "usage: /sandbox get <sandbox_id>".to_string())?
+                            .to_string(),
+                    }),
+                    "list" => Ok(Command::SandboxList),
+                    "exec" => Ok(Command::SandboxExec {
+                        sandbox_id: tokens
+                            .next()
+                            .ok_or_else(|| {
+                                "usage: /sandbox exec <sandbox_id> <request_file>".to_string()
+                            })?
+                            .to_string(),
+                        request: tokens
+                            .next()
+                            .ok_or_else(|| {
+                                "usage: /sandbox exec <sandbox_id> <request_file>".to_string()
+                            })?
+                            .to_string(),
+                    }),
+                    "stop" => Ok(Command::SandboxStop {
+                        sandbox_id: tokens
+                            .next()
+                            .ok_or_else(|| "usage: /sandbox stop <sandbox_id>".to_string())?
+                            .to_string(),
+                    }),
+                    "delete" => Ok(Command::SandboxDelete {
+                        sandbox_id: tokens
+                            .next()
+                            .ok_or_else(|| "usage: /sandbox delete <sandbox_id>".to_string())?
+                            .to_string(),
+                    }),
+                    other => Err(format!("unknown /sandbox action '{other}'")),
+                }
+            }
+            "/snapshot" => {
+                let action = tokens.next().ok_or_else(|| {
+                    "usage: /snapshot <create|get|list|replicate|delete> [args]".to_string()
+                })?;
+                match action {
+                    "create" => Ok(Command::SnapshotCreate {
+                        spec: tokens
+                            .next()
+                            .ok_or_else(|| "usage: /snapshot create <spec_file>".to_string())?
+                            .to_string(),
+                    }),
+                    "get" => Ok(Command::SnapshotGet {
+                        snapshot_id: tokens
+                            .next()
+                            .ok_or_else(|| "usage: /snapshot get <snapshot_id>".to_string())?
+                            .to_string(),
+                    }),
+                    "list" => Ok(Command::SnapshotList),
+                    "replicate" => Ok(Command::SnapshotReplicate {
+                        snapshot_id: tokens
+                            .next()
+                            .ok_or_else(|| {
+                                "usage: /snapshot replicate <snapshot_id> <request_file>"
+                                    .to_string()
+                            })?
+                            .to_string(),
+                        request: tokens
+                            .next()
+                            .ok_or_else(|| {
+                                "usage: /snapshot replicate <snapshot_id> <request_file>"
+                                    .to_string()
+                            })?
+                            .to_string(),
+                    }),
+                    "delete" => Ok(Command::SnapshotDelete {
+                        snapshot_id: tokens
+                            .next()
+                            .ok_or_else(|| "usage: /snapshot delete <snapshot_id>".to_string())?
+                            .to_string(),
+                    }),
+                    other => Err(format!("unknown /snapshot action '{other}'")),
+                }
+            }
+            "/pool" => {
+                let action = tokens
+                    .next()
+                    .ok_or_else(|| "usage: /pool <create|get|scale> [args]".to_string())?;
+                match action {
+                    "create" => Ok(Command::PoolCreate {
+                        spec: tokens
+                            .next()
+                            .ok_or_else(|| "usage: /pool create <spec_file>".to_string())?
+                            .to_string(),
+                    }),
+                    "get" => Ok(Command::PoolGet {
+                        pool_id: tokens
+                            .next()
+                            .ok_or_else(|| "usage: /pool get <pool_id>".to_string())?
+                            .to_string(),
+                    }),
+                    "scale" => Ok(Command::PoolScale {
+                        pool_id: tokens
+                            .next()
+                            .ok_or_else(|| {
+                                "usage: /pool scale <pool_id> <request_file>".to_string()
+                            })?
+                            .to_string(),
+                        request: tokens
+                            .next()
+                            .ok_or_else(|| {
+                                "usage: /pool scale <pool_id> <request_file>".to_string()
+                            })?
+                            .to_string(),
+                    }),
+                    other => Err(format!("unknown /pool action '{other}'")),
+                }
+            }
             "/help" => Ok(Command::Help),
             "/exit" | "/quit" => Ok(Command::Exit),
             other => Err(format!("unknown command '{other}'")),
@@ -1995,6 +2166,20 @@ fn run() -> Result<(), String> {
   /yolo run <spec_file>
   /team dry-run <spec_file>
   /team run <spec_file>
+  /sandbox create <spec_file>
+  /sandbox get <sandbox_id>
+  /sandbox list
+  /sandbox exec <sandbox_id> <request_file>
+  /sandbox stop <sandbox_id>
+  /sandbox delete <sandbox_id>
+  /snapshot create <spec_file>
+  /snapshot get <snapshot_id>
+  /snapshot list
+  /snapshot replicate <snapshot_id> <request_file>
+  /snapshot delete <snapshot_id>
+  /pool create <spec_file>
+  /pool get <pool_id>
+  /pool scale <pool_id> <request_file>
   /help
   /exit
 
@@ -3728,6 +3913,313 @@ Policy presets: fast | balanced | safe"
                                 .and_then(|value| value.as_str())
                                 .unwrap_or("-"),
                         );
+                    }
+                    Err(err) => println!("error: {err}"),
+                }
+            }
+            Command::SandboxCreate { spec } => {
+                match load_execution_spec_file(&spec).and_then(|spec_text| {
+                    bridge_request(&bridge_base_url, "POST", "/v1/sandboxes", Some(&spec_text))
+                }) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            println!("error: {}", bridge_error_message(&response));
+                            continue;
+                        }
+                        print_sandbox_summary(&response.json);
+                    }
+                    Err(err) => println!("error: {err}"),
+                }
+            }
+            Command::SandboxGet { sandbox_id } => {
+                match bridge_request(
+                    &bridge_base_url,
+                    "GET",
+                    &format!("/v1/sandboxes/{sandbox_id}"),
+                    None,
+                ) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            println!("error: {}", bridge_error_message(&response));
+                            continue;
+                        }
+                        print_sandbox_summary(&response.json);
+                    }
+                    Err(err) => println!("error: {err}"),
+                }
+            }
+            Command::SandboxList => {
+                match bridge_request(&bridge_base_url, "GET", "/v1/sandboxes", None) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            println!("error: {}", bridge_error_message(&response));
+                            continue;
+                        }
+                        let sandboxes = response
+                            .json
+                            .get("sandboxes")
+                            .and_then(|value| value.as_array())
+                            .cloned()
+                            .unwrap_or_default();
+                        if sandboxes.is_empty() {
+                            println!("no sandboxes");
+                        } else {
+                            for sandbox in sandboxes {
+                                print_sandbox_summary(&serde_json::json!({ "sandbox": sandbox }));
+                            }
+                        }
+                    }
+                    Err(err) => println!("error: {err}"),
+                }
+            }
+            Command::SandboxExec {
+                sandbox_id,
+                request,
+            } => {
+                match load_execution_spec_file(&request).and_then(|body| {
+                    bridge_request(
+                        &bridge_base_url,
+                        "POST",
+                        &format!("/v1/sandboxes/{sandbox_id}/exec"),
+                        Some(&body),
+                    )
+                }) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            println!("error: {}", bridge_error_message(&response));
+                            continue;
+                        }
+                        println!(
+                            "kind={} exit_code={} stdout={} stderr={}",
+                            response
+                                .json
+                                .get("kind")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                            response
+                                .json
+                                .get("result")
+                                .and_then(|value| value.get("exit_code"))
+                                .and_then(|value| value.as_i64())
+                                .map(|value| value.to_string())
+                                .unwrap_or_else(|| "-".to_string()),
+                            response
+                                .json
+                                .get("result")
+                                .and_then(|value| value.get("stdout"))
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                            response
+                                .json
+                                .get("result")
+                                .and_then(|value| value.get("stderr"))
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                        );
+                    }
+                    Err(err) => println!("error: {err}"),
+                }
+            }
+            Command::SandboxStop { sandbox_id } => {
+                match bridge_request(
+                    &bridge_base_url,
+                    "POST",
+                    &format!("/v1/sandboxes/{sandbox_id}/stop"),
+                    None,
+                ) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            println!("error: {}", bridge_error_message(&response));
+                            continue;
+                        }
+                        print_sandbox_summary(&response.json);
+                    }
+                    Err(err) => println!("error: {err}"),
+                }
+            }
+            Command::SandboxDelete { sandbox_id } => {
+                match bridge_request(
+                    &bridge_base_url,
+                    "DELETE",
+                    &format!("/v1/sandboxes/{sandbox_id}"),
+                    None,
+                ) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            println!("error: {}", bridge_error_message(&response));
+                            continue;
+                        }
+                        println!(
+                            "kind={} sandbox_id={}",
+                            response
+                                .json
+                                .get("kind")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                            response
+                                .json
+                                .get("sandbox_id")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                        );
+                    }
+                    Err(err) => println!("error: {err}"),
+                }
+            }
+            Command::SnapshotCreate { spec } => {
+                match load_execution_spec_file(&spec).and_then(|spec_text| {
+                    bridge_request(&bridge_base_url, "POST", "/v1/snapshots", Some(&spec_text))
+                }) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            println!("error: {}", bridge_error_message(&response));
+                            continue;
+                        }
+                        print_snapshot_summary(&response.json);
+                    }
+                    Err(err) => println!("error: {err}"),
+                }
+            }
+            Command::SnapshotGet { snapshot_id } => {
+                match bridge_request(
+                    &bridge_base_url,
+                    "GET",
+                    &format!("/v1/snapshots/{snapshot_id}"),
+                    None,
+                ) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            println!("error: {}", bridge_error_message(&response));
+                            continue;
+                        }
+                        print_snapshot_summary(&response.json);
+                    }
+                    Err(err) => println!("error: {err}"),
+                }
+            }
+            Command::SnapshotList => {
+                match bridge_request(&bridge_base_url, "GET", "/v1/snapshots", None) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            println!("error: {}", bridge_error_message(&response));
+                            continue;
+                        }
+                        let snapshots = response
+                            .json
+                            .get("snapshots")
+                            .and_then(|value| value.as_array())
+                            .cloned()
+                            .unwrap_or_default();
+                        if snapshots.is_empty() {
+                            println!("no snapshots");
+                        } else {
+                            for snapshot in snapshots {
+                                print_snapshot_summary(
+                                    &serde_json::json!({ "snapshot": snapshot }),
+                                );
+                            }
+                        }
+                    }
+                    Err(err) => println!("error: {err}"),
+                }
+            }
+            Command::SnapshotReplicate {
+                snapshot_id,
+                request,
+            } => {
+                match load_execution_spec_file(&request).and_then(|body| {
+                    bridge_request(
+                        &bridge_base_url,
+                        "POST",
+                        &format!("/v1/snapshots/{snapshot_id}/replicate"),
+                        Some(&body),
+                    )
+                }) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            println!("error: {}", bridge_error_message(&response));
+                            continue;
+                        }
+                        print_snapshot_summary(&response.json);
+                    }
+                    Err(err) => println!("error: {err}"),
+                }
+            }
+            Command::SnapshotDelete { snapshot_id } => {
+                match bridge_request(
+                    &bridge_base_url,
+                    "DELETE",
+                    &format!("/v1/snapshots/{snapshot_id}"),
+                    None,
+                ) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            println!("error: {}", bridge_error_message(&response));
+                            continue;
+                        }
+                        println!(
+                            "kind={} snapshot_id={}",
+                            response
+                                .json
+                                .get("kind")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                            response
+                                .json
+                                .get("snapshot_id")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                        );
+                    }
+                    Err(err) => println!("error: {err}"),
+                }
+            }
+            Command::PoolCreate { spec } => {
+                match load_execution_spec_file(&spec).and_then(|spec_text| {
+                    bridge_request(&bridge_base_url, "POST", "/v1/pools", Some(&spec_text))
+                }) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            println!("error: {}", bridge_error_message(&response));
+                            continue;
+                        }
+                        print_pool_summary(&response.json);
+                    }
+                    Err(err) => println!("error: {err}"),
+                }
+            }
+            Command::PoolGet { pool_id } => {
+                match bridge_request(
+                    &bridge_base_url,
+                    "GET",
+                    &format!("/v1/pools/{pool_id}"),
+                    None,
+                ) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            println!("error: {}", bridge_error_message(&response));
+                            continue;
+                        }
+                        print_pool_summary(&response.json);
+                    }
+                    Err(err) => println!("error: {err}"),
+                }
+            }
+            Command::PoolScale { pool_id, request } => {
+                match load_execution_spec_file(&request).and_then(|body| {
+                    bridge_request(
+                        &bridge_base_url,
+                        "POST",
+                        &format!("/v1/pools/{pool_id}/scale"),
+                        Some(&body),
+                    )
+                }) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            println!("error: {}", bridge_error_message(&response));
+                            continue;
+                        }
+                        print_pool_summary(&response.json);
                     }
                     Err(err) => println!("error: {err}"),
                 }
