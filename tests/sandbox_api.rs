@@ -410,3 +410,102 @@ fn sandbox_bridge_create_list_get_stop_exec_and_delete_round_trip() {
     .expect("missing response");
     assert_eq!(missing.status, 404);
 }
+
+#[test]
+fn snapshot_bridge_create_list_get_replicate_and_delete_round_trip() {
+    let root = temp_root("snapshot-bridge");
+    let spec_dir = root.join("specs");
+    let execution_dir = root.join("executions");
+    let body = serde_json::json!({
+        "api_version": "v1",
+        "kind": "snapshot",
+        "metadata": {
+            "name": "snapshot-transform-v1"
+        },
+        "source": {
+            "sandbox_id": "sbx-123"
+        },
+        "distribution": {
+            "mode": "cached",
+            "targets": ["node-a"]
+        }
+    })
+    .to_string();
+
+    let created = void_control::bridge::handle_bridge_request_with_dirs_for_test(
+        "POST",
+        "/v1/snapshots",
+        Some(&body),
+        &spec_dir,
+        &execution_dir,
+    )
+    .expect("create response");
+    assert_eq!(created.status, 200);
+    assert_eq!(created.json["kind"], "snapshot");
+    let snapshot_id = created.json["snapshot"]["snapshot_id"]
+        .as_str()
+        .expect("snapshot id")
+        .to_string();
+    assert_eq!(created.json["snapshot"]["source_sandbox_id"], "sbx-123");
+
+    let listed = void_control::bridge::handle_bridge_request_with_dirs_for_test(
+        "GET",
+        "/v1/snapshots",
+        None,
+        &spec_dir,
+        &execution_dir,
+    )
+    .expect("list response");
+    assert_eq!(listed.status, 200);
+    assert_eq!(listed.json["kind"], "snapshot_list");
+    assert_eq!(
+        listed.json["snapshots"].as_array().map(|items| items.len()),
+        Some(1)
+    );
+
+    let fetched = void_control::bridge::handle_bridge_request_with_dirs_for_test(
+        "GET",
+        &format!("/v1/snapshots/{snapshot_id}"),
+        None,
+        &spec_dir,
+        &execution_dir,
+    )
+    .expect("get response");
+    assert_eq!(fetched.status, 200);
+    assert_eq!(fetched.json["snapshot"]["snapshot_id"], snapshot_id);
+
+    let replicate_body = serde_json::json!({
+        "mode": "copy",
+        "targets": ["node-a", "node-b", "node-c"]
+    })
+    .to_string();
+    let replicated = void_control::bridge::handle_bridge_request_with_dirs_for_test(
+        "POST",
+        &format!("/v1/snapshots/{snapshot_id}/replicate"),
+        Some(&replicate_body),
+        &spec_dir,
+        &execution_dir,
+    )
+    .expect("replicate response");
+    assert_eq!(replicated.status, 200);
+    assert_eq!(replicated.json["kind"], "snapshot");
+    assert_eq!(replicated.json["snapshot"]["distribution"]["mode"], "copy");
+    assert_eq!(
+        replicated.json["snapshot"]["distribution"]["targets"]
+            .as_array()
+            .map(|items| items.len()),
+        Some(3)
+    );
+
+    let deleted = void_control::bridge::handle_bridge_request_with_dirs_for_test(
+        "DELETE",
+        &format!("/v1/snapshots/{snapshot_id}"),
+        None,
+        &spec_dir,
+        &execution_dir,
+    )
+    .expect("delete response");
+    assert_eq!(deleted.status, 200);
+    assert_eq!(deleted.json["kind"], "snapshot_deleted");
+    assert_eq!(deleted.json["snapshot_id"], snapshot_id);
+}
