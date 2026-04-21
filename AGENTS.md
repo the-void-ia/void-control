@@ -199,6 +199,10 @@ Important:
   - `/template get <template-id>`
   - `/template dry-run <template-id> <inputs-json-path>`
   - `/template execute <template-id> <inputs-json-path>`
+  - `/batch dry-run <spec-path>`
+  - `/batch run <spec-path>`
+  - `/yolo dry-run <spec-path>`
+  - `/yolo run <spec-path>`
 - `batch` is the canonical high-level remote background execution surface
 - `yolo` is an accepted alias for `batch`
 - use `voidctl execution ...` for terminal operator workflows; use the bridge

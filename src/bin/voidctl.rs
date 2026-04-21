@@ -774,6 +774,33 @@ fn print_batch_compilation_summary(detail: &serde_json::Value) {
 }
 
 #[cfg(feature = "serde")]
+fn print_batch_run_summary(detail: &serde_json::Value) {
+    println!(
+        "kind={} run_id={} compiled_primitive={} status={} goal={}",
+        detail
+            .get("kind")
+            .and_then(|value| value.as_str())
+            .unwrap_or("-"),
+        detail
+            .get("run_id")
+            .and_then(|value| value.as_str())
+            .unwrap_or("-"),
+        detail
+            .get("compiled_primitive")
+            .and_then(|value| value.as_str())
+            .unwrap_or("-"),
+        detail
+            .get("status")
+            .and_then(|value| value.as_str())
+            .unwrap_or("unknown"),
+        detail
+            .get("goal")
+            .and_then(|value| value.as_str())
+            .unwrap_or("-"),
+    );
+}
+
+#[cfg(feature = "serde")]
 fn select_runtime_run(
     detail: &serde_json::Value,
     requested_candidate_id: Option<&str>,
@@ -951,6 +978,8 @@ fn run() -> Result<(), String> {
                 "/resume",
                 "/execution",
                 "/template",
+                "/batch",
+                "/yolo",
                 "/help",
                 "/exit",
             ];
@@ -989,6 +1018,7 @@ fn run() -> Result<(), String> {
                     "create", "dry-run", "list", "status", "pause", "resume", "cancel", "patch",
                 ]),
                 "/template" => options.extend(["list", "get", "dry-run", "execute"]),
+                "/batch" | "/yolo" => options.extend(["dry-run", "run"]),
                 "/events" => options.push("--from"),
                 "/logs" => options.push("--follow"),
                 "/cancel" => options.push("--reason"),
@@ -1080,6 +1110,14 @@ fn run() -> Result<(), String> {
         TemplateExecute {
             template_id: String,
             inputs: String,
+        },
+        BatchDryRun {
+            spec: String,
+            alias: String,
+        },
+        BatchRun {
+            spec: String,
+            alias: String,
         },
         Help,
         Exit,
@@ -1432,6 +1470,29 @@ fn run() -> Result<(), String> {
                     other => Err(format!("unknown /template action '{other}'")),
                 }
             }
+            "/batch" | "/yolo" => {
+                let alias = head.trim_start_matches('/').to_string();
+                let action = tokens
+                    .next()
+                    .ok_or_else(|| format!("usage: /{alias} <dry-run|run> <spec_file>"))?;
+                match action {
+                    "dry-run" => Ok(Command::BatchDryRun {
+                        spec: tokens
+                            .next()
+                            .ok_or_else(|| format!("usage: /{alias} dry-run <spec_file>"))?
+                            .to_string(),
+                        alias,
+                    }),
+                    "run" => Ok(Command::BatchRun {
+                        spec: tokens
+                            .next()
+                            .ok_or_else(|| format!("usage: /{alias} run <spec_file>"))?
+                            .to_string(),
+                        alias,
+                    }),
+                    other => Err(format!("unknown /{alias} action '{other}'")),
+                }
+            }
             "/help" => Ok(Command::Help),
             "/exit" | "/quit" => Ok(Command::Exit),
             other => Err(format!("unknown command '{other}'")),
@@ -1460,6 +1521,10 @@ fn run() -> Result<(), String> {
   /template get <template_id>
   /template dry-run <template_id> <inputs_json_file>
   /template execute <template_id> <inputs_json_file>
+  /batch dry-run <spec_file>
+  /batch run <spec_file>
+  /yolo dry-run <spec_file>
+  /yolo run <spec_file>
   /help
   /exit
 
@@ -2725,6 +2790,44 @@ Policy presets: fast | balanced | safe"
                     Err(err) => println!("error: {err}"),
                 }
             }
+            Command::BatchDryRun { spec, alias } => {
+                let path = if alias == "yolo" {
+                    "/v1/yolo/dry-run"
+                } else {
+                    "/v1/batch/dry-run"
+                };
+                match load_execution_spec_file(&spec).and_then(|spec_text| {
+                    bridge_request(&bridge_base_url, "POST", path, Some(&spec_text))
+                }) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            println!("error: {}", bridge_error_message(&response));
+                            continue;
+                        }
+                        print_batch_compilation_summary(&response.json);
+                    }
+                    Err(err) => println!("error: {err}"),
+                }
+            }
+            Command::BatchRun { spec, alias } => {
+                let path = if alias == "yolo" {
+                    "/v1/yolo/run"
+                } else {
+                    "/v1/batch/run"
+                };
+                match load_execution_spec_file(&spec).and_then(|spec_text| {
+                    bridge_request(&bridge_base_url, "POST", path, Some(&spec_text))
+                }) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            println!("error: {}", bridge_error_message(&response));
+                            continue;
+                        }
+                        print_batch_run_summary(&response.json);
+                    }
+                    Err(err) => println!("error: {err}"),
+                }
+            }
         }
 
         if let Err(e) = save_session(&session_file, &session) {
@@ -2889,6 +2992,20 @@ mod tests {
     }
 
     #[test]
+    fn parses_batch_run_alias() {
+        let command =
+            parse_cli_args(["yolo", "run", "examples/batch/background_repo_work.yaml"]).unwrap();
+        assert_eq!(
+            command,
+            CliCommand::Batch(BatchCommand::Run {
+                spec: Some("examples/batch/background_repo_work.yaml".to_string()),
+                stdin: false,
+                alias: "yolo".to_string(),
+            })
+        );
+    }
+
+    #[test]
     fn rejects_extra_execution_watch_args() {
         let err = parse_cli_args(["execution", "watch", "exec-1", "extra"]).unwrap_err();
         assert!(err.contains("usage: voidctl execution watch <execution_id>"));
@@ -2935,6 +3052,13 @@ mod tests {
     }
 
     #[test]
+    fn completes_batch_subcommands() {
+        let completions = batch_subcommand_candidates();
+        assert!(completions.contains(&"dry-run"));
+        assert!(completions.contains(&"run"));
+    }
+
+    #[test]
     fn top_level_help_mentions_execution_commands() {
         let help = top_level_help_text();
         assert!(help.contains("voidctl execution submit <spec-path>"));
@@ -2952,6 +3076,10 @@ mod tests {
         assert!(
             help.contains("voidctl template execute <template-id> [<inputs-json-path> | --stdin]")
         );
+        assert!(help.contains("voidctl batch dry-run <spec-path>"));
+        assert!(help.contains("voidctl batch run --stdin"));
+        assert!(help.contains("voidctl yolo dry-run <spec-path>"));
+        assert!(help.contains("voidctl yolo run --stdin"));
     }
 
     #[test]

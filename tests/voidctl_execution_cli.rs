@@ -1,8 +1,10 @@
 #![cfg(feature = "serde")]
 
 use std::collections::VecDeque;
+use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpListener;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -20,6 +22,12 @@ struct RecordedRequest {
     method: String,
     path: String,
     body: String,
+}
+
+fn temp_inputs_path(name: &str) -> PathBuf {
+    let mut path = std::env::temp_dir();
+    path.push(format!("voidctl-test-{}-{name}", std::process::id()));
+    path
 }
 
 fn spawn_fake_bridge(
@@ -734,6 +742,115 @@ fn interactive_template_get_prints_error_for_bridge_failure() {
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).expect("stdout");
     assert!(stdout.contains("error: template 'missing-template' not found"));
+}
+
+#[test]
+fn interactive_batch_dry_run_posts_spec_and_prints_compiled_summary() {
+    let (base_url, requests, server) = spawn_fake_bridge(vec![FakeResponse {
+        status: 200,
+        body: json!({
+            "kind": "batch",
+            "compiled_primitive": "swarm",
+            "compiled": {
+                "goal": "repo-background-work",
+                "workflow_template": "examples/runtime-templates/warm_agent_basic.yaml",
+                "mode": "swarm",
+                "variation_source": "explicit",
+                "candidates_per_iteration": 2,
+                "candidate_overrides": [
+                    { "agent.prompt": "Fix failing auth tests" },
+                    { "agent.prompt": "Improve retry logging" }
+                ],
+                "overrides": {
+                    "agent.prompt": "Fix failing auth tests"
+                }
+            }
+        }),
+    }]);
+
+    let inputs_path = temp_inputs_path("batch.json");
+    fs::write(
+        &inputs_path,
+        r#"{"api_version":"v1","kind":"batch","worker":{"template":"examples/runtime-templates/warm_agent_basic.yaml"},"mode":{"parallelism":2},"jobs":[{"prompt":"Fix failing auth tests"},{"prompt":"Improve retry logging"}]}"#,
+    )
+    .expect("write inputs");
+
+    let mut child = voidctl_command(&base_url)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn voidctl");
+    let command = format!("/batch dry-run {}\n/exit\n", inputs_path.display());
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(command.as_bytes())
+        .expect("write stdin");
+
+    let output = child.wait_with_output().expect("wait output");
+    server.join().expect("join fake bridge");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout");
+    assert!(stdout.contains("kind=batch"));
+    assert!(stdout.contains("compiled_primitive=swarm"));
+    assert!(stdout.contains("workflow_template=examples/runtime-templates/warm_agent_basic.yaml"));
+
+    let requests = requests.lock().expect("lock requests");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "POST");
+    assert_eq!(requests[0].path, "/v1/batch/dry-run");
+}
+
+#[test]
+fn interactive_yolo_run_alias_posts_to_yolo_route() {
+    let (base_url, requests, server) = spawn_fake_bridge(vec![FakeResponse {
+        status: 200,
+        body: json!({
+            "kind": "batch",
+            "run_id": "exec-yolo-2",
+            "execution_id": "exec-yolo-2",
+            "compiled_primitive": "swarm",
+            "status": "Pending",
+            "goal": "run 1 background jobs"
+        }),
+    }]);
+
+    let inputs_path = temp_inputs_path("yolo.json");
+    fs::write(
+        &inputs_path,
+        r#"{"api_version":"v1","kind":"yolo","worker":{"template":"examples/runtime-templates/warm_agent_basic.yaml"},"jobs":[{"prompt":"Review migration safety"}]}"#,
+    )
+    .expect("write inputs");
+
+    let mut child = voidctl_command(&base_url)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn voidctl");
+    let command = format!("/yolo run {}\n/exit\n", inputs_path.display());
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(command.as_bytes())
+        .expect("write stdin");
+
+    let output = child.wait_with_output().expect("wait output");
+    server.join().expect("join fake bridge");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout");
+    assert!(stdout.contains("run_id=exec-yolo-2"));
+    assert!(stdout.contains("compiled_primitive=swarm"));
+
+    let requests = requests.lock().expect("lock requests");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "POST");
+    assert_eq!(requests[0].path, "/v1/yolo/run");
 }
 
 #[test]

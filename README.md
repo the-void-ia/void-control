@@ -329,6 +329,14 @@ voidctl batch run examples/batch/background_repo_work.yaml
 cat examples/batch/background_repo_work.yaml | voidctl yolo run --stdin
 ```
 
+Interactive console:
+
+```text
+/batch dry-run examples/batch/background_repo_work.yaml
+/batch run examples/batch/background_repo_work.yaml
+/yolo run examples/batch/background_repo_work.yaml
+```
+
 ### 7) Run the supervision example
 
 Use the checked-in supervision example to exercise the flat
