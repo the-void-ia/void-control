@@ -509,3 +509,91 @@ fn snapshot_bridge_create_list_get_replicate_and_delete_round_trip() {
     assert_eq!(deleted.json["kind"], "snapshot_deleted");
     assert_eq!(deleted.json["snapshot_id"], snapshot_id);
 }
+
+#[test]
+fn pool_bridge_create_get_and_scale_round_trip() {
+    let root = temp_root("pool-bridge");
+    let spec_dir = root.join("specs");
+    let execution_dir = root.join("executions");
+    let body = serde_json::json!({
+        "api_version": "v1",
+        "kind": "sandbox_pool",
+        "metadata": {
+            "name": "benchmark-python-pool"
+        },
+        "sandbox_spec": {
+            "runtime": {
+                "image": "python:3.12-slim",
+                "cpus": 2,
+                "memory_mb": 2048
+            },
+            "snapshot": {
+                "restore_from": "snapshot-transform-v1"
+            },
+            "lifecycle": {
+                "prewarm": true,
+                "idle_timeout_secs": 900
+            },
+            "identity": {
+                "reusable": true,
+                "pool": "benchmark-python"
+            }
+        },
+        "capacity": {
+            "warm": 5,
+            "max": 20
+        }
+    })
+    .to_string();
+
+    let created = void_control::bridge::handle_bridge_request_with_dirs_for_test(
+        "POST",
+        "/v1/pools",
+        Some(&body),
+        &spec_dir,
+        &execution_dir,
+    )
+    .expect("create response");
+    assert_eq!(created.status, 200);
+    assert_eq!(created.json["kind"], "pool");
+    let pool_id = created.json["pool"]["pool_id"]
+        .as_str()
+        .expect("pool id")
+        .to_string();
+    assert_eq!(created.json["pool"]["capacity"]["warm"], 5);
+    assert_eq!(created.json["pool"]["capacity"]["max"], 20);
+
+    let fetched = void_control::bridge::handle_bridge_request_with_dirs_for_test(
+        "GET",
+        &format!("/v1/pools/{pool_id}"),
+        None,
+        &spec_dir,
+        &execution_dir,
+    )
+    .expect("get response");
+    assert_eq!(fetched.status, 200);
+    assert_eq!(fetched.json["kind"], "pool");
+    assert_eq!(fetched.json["pool"]["pool_id"], pool_id);
+    assert_eq!(
+        fetched.json["pool"]["sandbox_spec"]["snapshot"]["restore_from"],
+        "snapshot-transform-v1"
+    );
+
+    let scale_body = serde_json::json!({
+        "warm": 8,
+        "max": 24
+    })
+    .to_string();
+    let scaled = void_control::bridge::handle_bridge_request_with_dirs_for_test(
+        "POST",
+        &format!("/v1/pools/{pool_id}/scale"),
+        Some(&scale_body),
+        &spec_dir,
+        &execution_dir,
+    )
+    .expect("scale response");
+    assert_eq!(scaled.status, 200);
+    assert_eq!(scaled.json["kind"], "pool");
+    assert_eq!(scaled.json["pool"]["capacity"]["warm"], 8);
+    assert_eq!(scaled.json["pool"]["capacity"]["max"], 24);
+}

@@ -421,6 +421,62 @@ curl -sS -X POST http://127.0.0.1:43210/v1/sandboxes/<sandbox-id>/stop \
 curl -sS -X DELETE http://127.0.0.1:43210/v1/sandboxes/<sandbox-id>
 ```
 
+### Pool
+
+`pool` is a `void-control` control-plane abstraction over reusable sandbox
+shapes. It is where prewarm targets, warm capacity, and future lease policy
+belong.
+
+Current limitation:
+- pool routes are bridge-managed and mock-backed
+- they define desired warm capacity, but they do not yet drive a live
+  `void-box` daemon fleet
+
+HTTP:
+
+```bash
+curl -sS -X POST http://127.0.0.1:43210/v1/pools \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "api_version": "v1",
+    "kind": "sandbox_pool",
+    "metadata": {
+      "name": "benchmark-python-pool"
+    },
+    "sandbox_spec": {
+      "runtime": {
+        "image": "python:3.12-slim",
+        "cpus": 2,
+        "memory_mb": 2048
+      },
+      "snapshot": {
+        "restore_from": "snapshot-transform-v1"
+      },
+      "lifecycle": {
+        "prewarm": true,
+        "idle_timeout_secs": 900
+      },
+      "identity": {
+        "reusable": true,
+        "pool": "benchmark-python"
+      }
+    },
+    "capacity": {
+      "warm": 5,
+      "max": 20
+    }
+  }'
+
+curl -sS http://127.0.0.1:43210/v1/pools/<pool-id>
+
+curl -sS -X POST http://127.0.0.1:43210/v1/pools/<pool-id>/scale \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "warm": 8,
+    "max": 24
+  }'
+```
+
 ### 7) Run the supervision example
 
 Use the checked-in supervision example to exercise the flat

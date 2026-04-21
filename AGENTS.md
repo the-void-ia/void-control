@@ -214,6 +214,8 @@ Important:
 - `team` is the phase-1 high-level multi-agent authoring surface
 - `sandbox` is the contract-first compute bridge surface for reusable
   environments and snapshot-based restore flows
+- `pool` is the contract-first compute control-plane surface for warm capacity
+  and future leasing over sandbox specs
 - current phase-1 `team` limitations:
   - `depends_on` is not supported yet
   - `sequential` preserves ordering only; task outputs are not threaded between agents
@@ -221,6 +223,10 @@ Important:
   - bridge routes are mock-backed and persisted by `void-control`
   - the live `VoidBoxRuntimeClient` still reports sandbox lifecycle calls as
     unsupported until the `void-box` daemon exposes matching routes
+- current phase-1 `pool` limitation:
+  - pool routes are mock-backed and persisted by `void-control`
+  - they express desired warm capacity only; they do not yet drive live daemon
+    prewarm behavior
 - use `voidctl execution ...` for terminal operator workflows; use the bridge
   HTTP API or UI when you need direct API-driven inspection or browser workflows
 - quote URLs that contain `?` when using `curl` from `zsh`
@@ -248,6 +254,10 @@ Important:
   - `POST /v1/sandboxes/{id}/exec`
   - `POST /v1/sandboxes/{id}/stop`
   - `DELETE /v1/sandboxes/{id}`
+- pool bridge endpoints:
+  - `POST /v1/pools`
+  - `GET /v1/pools/{id}`
+  - `POST /v1/pools/{id}/scale`
 
 ## Runtime compatibility commands
 

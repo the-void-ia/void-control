@@ -261,6 +261,28 @@ struct StoredSnapshotRecord {
 }
 
 #[cfg(feature = "serde")]
+#[derive(Debug, Deserialize)]
+struct PoolScaleRequestBody {
+    warm: u32,
+    max: u32,
+}
+
+#[cfg(feature = "serde")]
+#[derive(Debug, Serialize, Deserialize)]
+struct PoolRecordView {
+    pool_id: String,
+    sandbox_spec: sandbox::SandboxPoolSandboxSpec,
+    capacity: sandbox::PoolCapacity,
+}
+
+#[cfg(feature = "serde")]
+#[derive(Debug, Serialize, Deserialize)]
+struct StoredPoolRecord {
+    pool: PoolRecordView,
+    spec: sandbox::SandboxPoolSpec,
+}
+
+#[cfg(feature = "serde")]
 #[derive(Debug, Serialize)]
 struct ApiError {
     code: &'static str,
@@ -539,6 +561,21 @@ fn handle_bridge_request(
 
     if method == Some(BridgeMethod::Delete) && path.starts_with("/v1/snapshots/") {
         return handle_snapshot_delete(path, config);
+    }
+
+    if method == Some(BridgeMethod::Post) && path == "/v1/pools" {
+        return handle_pool_create(body, config);
+    }
+
+    if method == Some(BridgeMethod::Post)
+        && path.starts_with("/v1/pools/")
+        && path.ends_with("/scale")
+    {
+        return handle_pool_scale(path, body, config);
+    }
+
+    if method == Some(BridgeMethod::Get) && path.starts_with("/v1/pools/") {
+        return handle_pool_get(path, config);
     }
 
     if method == Some(BridgeMethod::Post)
@@ -1456,6 +1493,155 @@ fn handle_snapshot_delete(path: &str, config: &BridgeConfig) -> JsonHttpResponse
 }
 
 #[cfg(feature = "serde")]
+fn handle_pool_create(body: &str, config: &BridgeConfig) -> JsonHttpResponse {
+    let spec = match parse_submitted_pool_spec(body) {
+        Ok(spec) => spec,
+        Err(response) => return response,
+    };
+    let pool_id = format!("pool-{}", now_ms());
+    let record = StoredPoolRecord {
+        pool: PoolRecordView {
+            pool_id: pool_id.clone(),
+            sandbox_spec: spec.sandbox_spec.clone(),
+            capacity: spec.capacity.clone(),
+        },
+        spec,
+    };
+    if let Err(err) = save_pool_record(config, &record) {
+        return json_response(
+            500,
+            &ApiError {
+                code: "INTERNAL_ERROR",
+                message: err.to_string(),
+                retryable: true,
+            },
+        );
+    }
+    json_response(
+        200,
+        &json!({
+            "kind": "pool",
+            "pool": record.pool
+        }),
+    )
+}
+
+#[cfg(feature = "serde")]
+fn handle_pool_get(path: &str, config: &BridgeConfig) -> JsonHttpResponse {
+    let Some(pool_id) = path.strip_prefix("/v1/pools/") else {
+        return json_response(
+            404,
+            &ApiError {
+                code: "NOT_FOUND",
+                message: format!("no route for GET {path}"),
+                retryable: false,
+            },
+        );
+    };
+    if pool_id.contains('/') {
+        return json_response(
+            404,
+            &ApiError {
+                code: "NOT_FOUND",
+                message: format!("no route for GET {path}"),
+                retryable: false,
+            },
+        );
+    }
+    match load_pool_record(config, pool_id) {
+        Ok(record) => json_response(
+            200,
+            &json!({
+                "kind": "pool",
+                "pool": record.pool
+            }),
+        ),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => json_response(
+            404,
+            &ApiError {
+                code: "NOT_FOUND",
+                message: format!("pool '{pool_id}' not found"),
+                retryable: false,
+            },
+        ),
+        Err(err) => json_response(
+            500,
+            &ApiError {
+                code: "INTERNAL_ERROR",
+                message: err.to_string(),
+                retryable: true,
+            },
+        ),
+    }
+}
+
+#[cfg(feature = "serde")]
+fn handle_pool_scale(path: &str, body: &str, config: &BridgeConfig) -> JsonHttpResponse {
+    let Some(pool_id) = path
+        .strip_prefix("/v1/pools/")
+        .and_then(|rest| rest.strip_suffix("/scale"))
+    else {
+        return json_response(
+            404,
+            &ApiError {
+                code: "NOT_FOUND",
+                message: format!("no route for POST {path}"),
+                retryable: false,
+            },
+        );
+    };
+    let request = match parse_pool_scale_request(body) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    let mut record = match load_pool_record(config, pool_id) {
+        Ok(record) => record,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return json_response(
+                404,
+                &ApiError {
+                    code: "NOT_FOUND",
+                    message: format!("pool '{pool_id}' not found"),
+                    retryable: false,
+                },
+            )
+        }
+        Err(err) => {
+            return json_response(
+                500,
+                &ApiError {
+                    code: "INTERNAL_ERROR",
+                    message: err.to_string(),
+                    retryable: true,
+                },
+            )
+        }
+    };
+    record.pool.capacity = sandbox::PoolCapacity {
+        warm: request.warm,
+        max: request.max,
+    };
+    record.spec.capacity = record.pool.capacity.clone();
+    if let Err(err) = save_pool_record(config, &record) {
+        return json_response(
+            500,
+            &ApiError {
+                code: "INTERNAL_ERROR",
+                message: err.to_string(),
+                retryable: true,
+            },
+        );
+    }
+    json_response(
+        200,
+        &json!({
+            "kind": "pool",
+            "pool": record.pool
+        }),
+    )
+}
+
+#[cfg(feature = "serde")]
 fn parse_submitted_batch_spec(body: &str) -> Result<batch::BatchSpec, JsonHttpResponse> {
     let trimmed = body.trim_start();
     let parsed = if trimmed.starts_with('{') || trimmed.starts_with('[') {
@@ -1528,6 +1714,26 @@ fn parse_submitted_snapshot_spec(body: &str) -> Result<sandbox::SnapshotSpec, Js
             400,
             &ApiError {
                 code: "INVALID_SNAPSHOT",
+                message: err.to_string(),
+                retryable: false,
+            },
+        )
+    })
+}
+
+#[cfg(feature = "serde")]
+fn parse_submitted_pool_spec(body: &str) -> Result<sandbox::SandboxPoolSpec, JsonHttpResponse> {
+    let trimmed = body.trim_start();
+    let parsed = if trimmed.starts_with('{') || trimmed.starts_with('[') {
+        sandbox::parse_pool_json(body)
+    } else {
+        sandbox::parse_pool_yaml(body)
+    };
+    parsed.map_err(|err| {
+        json_response(
+            400,
+            &ApiError {
+                code: "INVALID_POOL",
                 message: err.to_string(),
                 retryable: false,
             },
@@ -1639,6 +1845,50 @@ fn parse_snapshot_replicate_request(
 }
 
 #[cfg(feature = "serde")]
+fn parse_pool_scale_request(body: &str) -> Result<PoolScaleRequestBody, JsonHttpResponse> {
+    let request: PoolScaleRequestBody = serde_json::from_str(body).or_else(|json_err| {
+        serde_yaml::from_str(body).map_err(|yaml_err| {
+            format!(
+                "invalid pool scale body: JSON parse error: {json_err}; YAML parse error: {yaml_err}"
+            )
+        })
+    })
+    .map_err(|err| {
+        json_response(
+            400,
+            &ApiError {
+                code: "INVALID_POOL_SCALE",
+                message: err,
+                retryable: false,
+            },
+        )
+    })?;
+
+    if request.max == 0 {
+        return Err(json_response(
+            400,
+            &ApiError {
+                code: "INVALID_POOL_SCALE",
+                message: "max must be positive".to_string(),
+                retryable: false,
+            },
+        ));
+    }
+    if request.warm > request.max {
+        return Err(json_response(
+            400,
+            &ApiError {
+                code: "INVALID_POOL_SCALE",
+                message: "warm must not exceed max".to_string(),
+                retryable: false,
+            },
+        ));
+    }
+
+    Ok(request)
+}
+
+#[cfg(feature = "serde")]
 fn sandbox_dir(config: &BridgeConfig) -> PathBuf {
     config.execution_dir.join("sandboxes")
 }
@@ -1744,6 +1994,32 @@ fn list_snapshot_records(config: &BridgeConfig) -> std::io::Result<Vec<StoredSna
     }
     records.sort_by(|left, right| left.snapshot.snapshot_id.cmp(&right.snapshot.snapshot_id));
     Ok(records)
+}
+
+#[cfg(feature = "serde")]
+fn pool_dir(config: &BridgeConfig) -> PathBuf {
+    config.execution_dir.join("pools")
+}
+
+#[cfg(feature = "serde")]
+fn pool_file_path(config: &BridgeConfig, pool_id: &str) -> PathBuf {
+    pool_dir(config).join(format!("{pool_id}.json"))
+}
+
+#[cfg(feature = "serde")]
+fn save_pool_record(config: &BridgeConfig, record: &StoredPoolRecord) -> std::io::Result<()> {
+    let dir = pool_dir(config);
+    fs::create_dir_all(&dir)?;
+    let bytes =
+        serde_json::to_vec_pretty(record).map_err(|err| std::io::Error::other(err.to_string()))?;
+    fs::write(pool_file_path(config, &record.pool.pool_id), bytes)
+}
+
+#[cfg(feature = "serde")]
+fn load_pool_record(config: &BridgeConfig, pool_id: &str) -> std::io::Result<StoredPoolRecord> {
+    let path = pool_file_path(config, pool_id);
+    let bytes = fs::read(path)?;
+    serde_json::from_slice(&bytes).map_err(|err| std::io::Error::other(err.to_string()))
 }
 
 #[cfg(feature = "serde")]
