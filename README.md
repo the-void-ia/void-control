@@ -593,6 +593,39 @@ The interactive `voidctl` console exposes the same path:
 /template execute warm-agent-basic template-inputs.json
 ```
 
+The contract-first compute surface is available from the same CLI. These routes
+are bridge-managed today, so they are good for contract work and mocks even
+before live `void-box` daemon support lands.
+
+Create and inspect reusable sandboxes:
+
+```bash
+voidctl sandbox create sandbox.json
+cat sandbox.json | voidctl sandbox create --stdin
+voidctl sandbox list
+voidctl sandbox get <sandbox-id>
+voidctl sandbox stop <sandbox-id>
+voidctl sandbox delete <sandbox-id>
+```
+
+Create and replicate snapshots:
+
+```bash
+voidctl snapshot create snapshot.json
+cat replicate.json | voidctl snapshot replicate <snapshot-id> --stdin
+voidctl snapshot list
+voidctl snapshot get <snapshot-id>
+voidctl snapshot delete <snapshot-id>
+```
+
+Manage pool warm-capacity targets in the control plane:
+
+```bash
+voidctl pool create pool.json
+voidctl pool get <pool-id>
+cat scale.json | voidctl pool scale <pool-id> --stdin
+```
+
 Example execution:
 
 ```text

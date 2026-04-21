@@ -229,6 +229,21 @@ Important:
     prewarm behavior
 - use `voidctl execution ...` for terminal operator workflows; use the bridge
   HTTP API or UI when you need direct API-driven inspection or browser workflows
+- non-interactive compute commands:
+  - `voidctl sandbox create [<spec-path> | --stdin]`
+  - `voidctl sandbox list`
+  - `voidctl sandbox get <sandbox-id>`
+  - `voidctl sandbox exec <sandbox-id> [<request-path> | --stdin]`
+  - `voidctl sandbox stop <sandbox-id>`
+  - `voidctl sandbox delete <sandbox-id>`
+  - `voidctl snapshot create [<spec-path> | --stdin]`
+  - `voidctl snapshot list`
+  - `voidctl snapshot get <snapshot-id>`
+  - `voidctl snapshot replicate <snapshot-id> [<request-path> | --stdin]`
+  - `voidctl snapshot delete <snapshot-id>`
+  - `voidctl pool create [<spec-path> | --stdin]`
+  - `voidctl pool get <pool-id>`
+  - `voidctl pool scale <pool-id> [<request-path> | --stdin]`
 - quote URLs that contain `?` when using `curl` from `zsh`
 - template-first bridge endpoints:
   - `GET /v1/templates`
@@ -254,6 +269,12 @@ Important:
   - `POST /v1/sandboxes/{id}/exec`
   - `POST /v1/sandboxes/{id}/stop`
   - `DELETE /v1/sandboxes/{id}`
+- snapshot bridge endpoints:
+  - `POST /v1/snapshots`
+  - `GET /v1/snapshots`
+  - `GET /v1/snapshots/{id}`
+  - `POST /v1/snapshots/{id}/replicate`
+  - `DELETE /v1/snapshots/{id}`
 - pool bridge endpoints:
   - `POST /v1/pools`
   - `GET /v1/pools/{id}`

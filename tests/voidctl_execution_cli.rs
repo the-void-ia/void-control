@@ -1323,3 +1323,298 @@ fn yolo_run_alias_posts_to_yolo_route() {
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].path, "/v1/yolo/run");
 }
+
+#[test]
+fn sandbox_create_from_stdin_posts_spec_and_prints_summary() {
+    let (base_url, requests, server) = spawn_fake_bridge(vec![FakeResponse {
+        status: 200,
+        body: json!({
+            "kind": "sandbox",
+            "sandbox": {
+                "sandbox_id": "sbx-1",
+                "state": "running",
+                "image": "python:3.12-slim",
+                "cpus": 2,
+                "memory_mb": 2048
+            }
+        }),
+    }]);
+
+    let mut child = voidctl_command(&base_url)
+        .args(["sandbox", "create", "--stdin"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn voidctl");
+    let spec = r#"{"api_version":"v1","kind":"sandbox","runtime":{"image":"python:3.12-slim","cpus":2,"memory_mb":2048}}"#;
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(spec.as_bytes())
+        .expect("write stdin");
+
+    let output = child.wait_with_output().expect("wait output");
+    server.join().expect("join fake bridge");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout");
+    assert!(stdout.contains("sandbox_id=sbx-1"));
+    assert!(stdout.contains("state=running"));
+    assert!(stdout.contains("image=python:3.12-slim"));
+
+    let requests = requests.lock().expect("lock requests");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "POST");
+    assert_eq!(requests[0].path, "/v1/sandboxes");
+    assert_eq!(requests[0].body, spec);
+}
+
+#[test]
+fn sandbox_list_prints_available_sandboxes() {
+    let (base_url, requests, server) = spawn_fake_bridge(vec![FakeResponse {
+        status: 200,
+        body: json!({
+            "kind": "sandbox_list",
+            "sandboxes": [
+                {
+                    "sandbox_id": "sbx-1",
+                    "state": "running",
+                    "image": "python:3.12-slim",
+                    "cpus": 2,
+                    "memory_mb": 2048
+                },
+                {
+                    "sandbox_id": "sbx-2",
+                    "state": "stopped",
+                    "image": "node:22-slim",
+                    "cpus": 1,
+                    "memory_mb": 1024
+                }
+            ]
+        }),
+    }]);
+
+    let output = voidctl_command(&base_url)
+        .args(["sandbox", "list"])
+        .output()
+        .expect("sandbox list output");
+    server.join().expect("join fake bridge");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout");
+    assert!(stdout.contains("sandbox_id=sbx-1"));
+    assert!(stdout.contains("sandbox_id=sbx-2"));
+    assert!(stdout.contains("state=running"));
+    assert!(stdout.contains("state=stopped"));
+
+    let requests = requests.lock().expect("lock requests");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "GET");
+    assert_eq!(requests[0].path, "/v1/sandboxes");
+}
+
+#[test]
+fn snapshot_create_from_stdin_posts_spec_and_prints_summary() {
+    let (base_url, requests, server) = spawn_fake_bridge(vec![FakeResponse {
+        status: 200,
+        body: json!({
+            "kind": "snapshot",
+            "snapshot": {
+                "snapshot_id": "snap-1",
+                "source_sandbox_id": "sbx-1",
+                "distribution": {
+                    "mode": "cached",
+                    "targets": ["node-a", "node-b"]
+                }
+            }
+        }),
+    }]);
+
+    let mut child = voidctl_command(&base_url)
+        .args(["snapshot", "create", "--stdin"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn voidctl");
+    let spec = r#"{"api_version":"v1","kind":"snapshot","source":{"sandbox_id":"sbx-1"},"distribution":{"mode":"cached","targets":["node-a","node-b"]}}"#;
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(spec.as_bytes())
+        .expect("write stdin");
+
+    let output = child.wait_with_output().expect("wait output");
+    server.join().expect("join fake bridge");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout");
+    assert!(stdout.contains("snapshot_id=snap-1"));
+    assert!(stdout.contains("source_sandbox_id=sbx-1"));
+    assert!(stdout.contains("mode=cached"));
+    assert!(stdout.contains("targets=node-a,node-b"));
+
+    let requests = requests.lock().expect("lock requests");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "POST");
+    assert_eq!(requests[0].path, "/v1/snapshots");
+    assert_eq!(requests[0].body, spec);
+}
+
+#[test]
+fn snapshot_replicate_from_stdin_posts_request_and_prints_summary() {
+    let (base_url, requests, server) = spawn_fake_bridge(vec![FakeResponse {
+        status: 200,
+        body: json!({
+            "kind": "snapshot",
+            "snapshot": {
+                "snapshot_id": "snap-1",
+                "source_sandbox_id": "sbx-1",
+                "distribution": {
+                    "mode": "copy",
+                    "targets": ["node-a", "node-c"]
+                }
+            }
+        }),
+    }]);
+
+    let mut child = voidctl_command(&base_url)
+        .args(["snapshot", "replicate", "snap-1", "--stdin"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn voidctl");
+    let body = r#"{"mode":"copy","targets":["node-a","node-c"]}"#;
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(body.as_bytes())
+        .expect("write stdin");
+
+    let output = child.wait_with_output().expect("wait output");
+    server.join().expect("join fake bridge");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout");
+    assert!(stdout.contains("snapshot_id=snap-1"));
+    assert!(stdout.contains("mode=copy"));
+    assert!(stdout.contains("targets=node-a,node-c"));
+
+    let requests = requests.lock().expect("lock requests");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "POST");
+    assert_eq!(requests[0].path, "/v1/snapshots/snap-1/replicate");
+    assert_eq!(requests[0].body, body);
+}
+
+#[test]
+fn pool_create_from_stdin_posts_spec_and_prints_summary() {
+    let (base_url, requests, server) = spawn_fake_bridge(vec![FakeResponse {
+        status: 200,
+        body: json!({
+            "kind": "pool",
+            "pool": {
+                "pool_id": "pool-1",
+                "sandbox_spec": {
+                    "runtime": {
+                        "image": "python:3.12-slim",
+                        "cpus": 2,
+                        "memory_mb": 2048
+                    }
+                },
+                "capacity": {
+                    "warm": 5,
+                    "max": 20
+                }
+            }
+        }),
+    }]);
+
+    let mut child = voidctl_command(&base_url)
+        .args(["pool", "create", "--stdin"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn voidctl");
+    let spec = r#"{"api_version":"v1","kind":"sandbox_pool","sandbox_spec":{"runtime":{"image":"python:3.12-slim","cpus":2,"memory_mb":2048}},"capacity":{"warm":5,"max":20}}"#;
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(spec.as_bytes())
+        .expect("write stdin");
+
+    let output = child.wait_with_output().expect("wait output");
+    server.join().expect("join fake bridge");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout");
+    assert!(stdout.contains("pool_id=pool-1"));
+    assert!(stdout.contains("warm=5"));
+    assert!(stdout.contains("max=20"));
+    assert!(stdout.contains("image=python:3.12-slim"));
+
+    let requests = requests.lock().expect("lock requests");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "POST");
+    assert_eq!(requests[0].path, "/v1/pools");
+    assert_eq!(requests[0].body, spec);
+}
+
+#[test]
+fn pool_scale_from_stdin_posts_request_and_prints_summary() {
+    let (base_url, requests, server) = spawn_fake_bridge(vec![FakeResponse {
+        status: 200,
+        body: json!({
+            "kind": "pool",
+            "pool": {
+                "pool_id": "pool-1",
+                "sandbox_spec": {
+                    "runtime": {
+                        "image": "python:3.12-slim"
+                    }
+                },
+                "capacity": {
+                    "warm": 8,
+                    "max": 24
+                }
+            }
+        }),
+    }]);
+
+    let mut child = voidctl_command(&base_url)
+        .args(["pool", "scale", "pool-1", "--stdin"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn voidctl");
+    let body = r#"{"warm":8,"max":24}"#;
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(body.as_bytes())
+        .expect("write stdin");
+
+    let output = child.wait_with_output().expect("wait output");
+    server.join().expect("join fake bridge");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout");
+    assert!(stdout.contains("pool_id=pool-1"));
+    assert!(stdout.contains("warm=8"));
+    assert!(stdout.contains("max=24"));
+
+    let requests = requests.lock().expect("lock requests");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "POST");
+    assert_eq!(requests[0].path, "/v1/pools/pool-1/scale");
+    assert_eq!(requests[0].body, body);
+}

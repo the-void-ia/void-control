@@ -84,6 +84,68 @@ enum TeamCommand {
 
 #[cfg(feature = "serde")]
 #[derive(Debug, Clone, PartialEq, Eq)]
+enum SandboxCommand {
+    Create {
+        spec: Option<String>,
+        stdin: bool,
+    },
+    Get {
+        sandbox_id: String,
+    },
+    List,
+    Exec {
+        sandbox_id: String,
+        request: Option<String>,
+        stdin: bool,
+    },
+    Stop {
+        sandbox_id: String,
+    },
+    Delete {
+        sandbox_id: String,
+    },
+}
+
+#[cfg(feature = "serde")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SnapshotCommand {
+    Create {
+        spec: Option<String>,
+        stdin: bool,
+    },
+    Get {
+        snapshot_id: String,
+    },
+    List,
+    Replicate {
+        snapshot_id: String,
+        request: Option<String>,
+        stdin: bool,
+    },
+    Delete {
+        snapshot_id: String,
+    },
+}
+
+#[cfg(feature = "serde")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PoolCommand {
+    Create {
+        spec: Option<String>,
+        stdin: bool,
+    },
+    Get {
+        pool_id: String,
+    },
+    Scale {
+        pool_id: String,
+        request: Option<String>,
+        stdin: bool,
+    },
+}
+
+#[cfg(feature = "serde")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum CliCommand {
     Serve,
     Help,
@@ -92,6 +154,9 @@ enum CliCommand {
     Template(TemplateCommand),
     Batch(BatchCommand),
     Team(TeamCommand),
+    Sandbox(SandboxCommand),
+    Snapshot(SnapshotCommand),
+    Pool(PoolCommand),
 }
 
 #[cfg(feature = "serde")]
@@ -130,6 +195,21 @@ fn batch_subcommand_candidates() -> &'static [&'static str] {
 #[cfg(feature = "serde")]
 fn team_subcommand_candidates() -> &'static [&'static str] {
     &["dry-run", "run"]
+}
+
+#[cfg(feature = "serde")]
+fn sandbox_subcommand_candidates() -> &'static [&'static str] {
+    &["create", "get", "list", "exec", "stop", "delete"]
+}
+
+#[cfg(feature = "serde")]
+fn snapshot_subcommand_candidates() -> &'static [&'static str] {
+    &["create", "get", "list", "replicate", "delete"]
+}
+
+#[cfg(feature = "serde")]
+fn pool_subcommand_candidates() -> &'static [&'static str] {
+    &["create", "get", "scale"]
 }
 
 #[cfg(feature = "serde")]
@@ -354,10 +434,214 @@ where
                 )),
             }
         }
+        "sandbox" => {
+            let action = iter.next().ok_or_else(|| {
+                "usage: voidctl sandbox <create|get|list|exec|stop|delete> [args]".to_string()
+            })?;
+            match action {
+                "create" => parse_spec_or_stdin(
+                    &mut iter,
+                    "usage: voidctl sandbox create [<spec-path> | --stdin]",
+                )
+                .map(|(spec, stdin)| CliCommand::Sandbox(SandboxCommand::Create { spec, stdin })),
+                "get" => {
+                    let sandbox_id = iter
+                        .next()
+                        .ok_or_else(|| "usage: voidctl sandbox get <sandbox-id>".to_string())?
+                        .to_string();
+                    expect_no_more_args(&mut iter, "usage: voidctl sandbox get <sandbox-id>")?;
+                    Ok(CliCommand::Sandbox(SandboxCommand::Get { sandbox_id }))
+                }
+                "list" => {
+                    expect_no_more_args(&mut iter, "usage: voidctl sandbox list")?;
+                    Ok(CliCommand::Sandbox(SandboxCommand::List))
+                }
+                "exec" => {
+                    let sandbox_id = iter
+                        .next()
+                        .ok_or_else(|| {
+                            "usage: voidctl sandbox exec <sandbox-id> [<request-path> | --stdin]"
+                                .to_string()
+                        })?
+                        .to_string();
+                    parse_spec_or_stdin(
+                        &mut iter,
+                        "usage: voidctl sandbox exec <sandbox-id> [<request-path> | --stdin]",
+                    )
+                    .map(|(request, stdin)| {
+                        CliCommand::Sandbox(SandboxCommand::Exec {
+                            sandbox_id,
+                            request,
+                            stdin,
+                        })
+                    })
+                }
+                "stop" => {
+                    let sandbox_id = iter
+                        .next()
+                        .ok_or_else(|| "usage: voidctl sandbox stop <sandbox-id>".to_string())?
+                        .to_string();
+                    expect_no_more_args(&mut iter, "usage: voidctl sandbox stop <sandbox-id>")?;
+                    Ok(CliCommand::Sandbox(SandboxCommand::Stop { sandbox_id }))
+                }
+                "delete" => {
+                    let sandbox_id = iter
+                        .next()
+                        .ok_or_else(|| "usage: voidctl sandbox delete <sandbox-id>".to_string())?
+                        .to_string();
+                    expect_no_more_args(&mut iter, "usage: voidctl sandbox delete <sandbox-id>")?;
+                    Ok(CliCommand::Sandbox(SandboxCommand::Delete { sandbox_id }))
+                }
+                other => Err(format!(
+                    "unknown sandbox subcommand '{other}'. supported: {}",
+                    sandbox_subcommand_candidates().join(", ")
+                )),
+            }
+        }
+        "snapshot" => {
+            let action = iter.next().ok_or_else(|| {
+                "usage: voidctl snapshot <create|get|list|replicate|delete> [args]".to_string()
+            })?;
+            match action {
+                "create" => parse_spec_or_stdin(
+                    &mut iter,
+                    "usage: voidctl snapshot create [<spec-path> | --stdin]",
+                )
+                .map(|(spec, stdin)| CliCommand::Snapshot(SnapshotCommand::Create { spec, stdin })),
+                "get" => {
+                    let snapshot_id = iter
+                        .next()
+                        .ok_or_else(|| "usage: voidctl snapshot get <snapshot-id>".to_string())?
+                        .to_string();
+                    expect_no_more_args(&mut iter, "usage: voidctl snapshot get <snapshot-id>")?;
+                    Ok(CliCommand::Snapshot(SnapshotCommand::Get { snapshot_id }))
+                }
+                "list" => {
+                    expect_no_more_args(&mut iter, "usage: voidctl snapshot list")?;
+                    Ok(CliCommand::Snapshot(SnapshotCommand::List))
+                }
+                "replicate" => {
+                    let snapshot_id = iter
+                        .next()
+                        .ok_or_else(|| {
+                            "usage: voidctl snapshot replicate <snapshot-id> [<request-path> | --stdin]"
+                                .to_string()
+                        })?
+                        .to_string();
+                    parse_spec_or_stdin(
+                        &mut iter,
+                        "usage: voidctl snapshot replicate <snapshot-id> [<request-path> | --stdin]",
+                    )
+                    .map(|(request, stdin)| {
+                        CliCommand::Snapshot(SnapshotCommand::Replicate {
+                            snapshot_id,
+                            request,
+                            stdin,
+                        })
+                    })
+                }
+                "delete" => {
+                    let snapshot_id = iter
+                        .next()
+                        .ok_or_else(|| {
+                            "usage: voidctl snapshot delete <snapshot-id>".to_string()
+                        })?
+                        .to_string();
+                    expect_no_more_args(
+                        &mut iter,
+                        "usage: voidctl snapshot delete <snapshot-id>",
+                    )?;
+                    Ok(CliCommand::Snapshot(SnapshotCommand::Delete { snapshot_id }))
+                }
+                other => Err(format!(
+                    "unknown snapshot subcommand '{other}'. supported: {}",
+                    snapshot_subcommand_candidates().join(", ")
+                )),
+            }
+        }
+        "pool" => {
+            let action = iter.next().ok_or_else(|| {
+                "usage: voidctl pool <create|get|scale> [args]".to_string()
+            })?;
+            match action {
+                "create" => parse_spec_or_stdin(
+                    &mut iter,
+                    "usage: voidctl pool create [<spec-path> | --stdin]",
+                )
+                .map(|(spec, stdin)| CliCommand::Pool(PoolCommand::Create { spec, stdin })),
+                "get" => {
+                    let pool_id = iter
+                        .next()
+                        .ok_or_else(|| "usage: voidctl pool get <pool-id>".to_string())?
+                        .to_string();
+                    expect_no_more_args(&mut iter, "usage: voidctl pool get <pool-id>")?;
+                    Ok(CliCommand::Pool(PoolCommand::Get { pool_id }))
+                }
+                "scale" => {
+                    let pool_id = iter
+                        .next()
+                        .ok_or_else(|| {
+                            "usage: voidctl pool scale <pool-id> [<request-path> | --stdin]"
+                                .to_string()
+                        })?
+                        .to_string();
+                    parse_spec_or_stdin(
+                        &mut iter,
+                        "usage: voidctl pool scale <pool-id> [<request-path> | --stdin]",
+                    )
+                    .map(|(request, stdin)| {
+                        CliCommand::Pool(PoolCommand::Scale {
+                            pool_id,
+                            request,
+                            stdin,
+                        })
+                    })
+                }
+                other => Err(format!(
+                    "unknown pool subcommand '{other}'. supported: {}",
+                    pool_subcommand_candidates().join(", ")
+                )),
+            }
+        }
         other => Err(format!(
-            "unknown command '{other}'. supported: serve, help, execution, template, batch, yolo, team"
+            "unknown command '{other}'. supported: serve, help, execution, template, batch, yolo, team, sandbox, snapshot, pool"
         )),
     }
+}
+
+#[cfg(feature = "serde")]
+fn parse_spec_or_stdin<'a, I>(iter: &mut I, usage: &str) -> Result<(Option<String>, bool), String>
+where
+    I: Iterator<Item = &'a str>,
+{
+    let mut spec = None;
+    let mut stdin = false;
+    for token in iter.by_ref() {
+        match token {
+            "--stdin" => {
+                if stdin || spec.is_some() {
+                    return Err(usage.to_string());
+                }
+                stdin = true;
+            }
+            other => {
+                if stdin {
+                    return Err(format!("unexpected extra argument '{other}'"));
+                }
+                if spec.is_none() {
+                    spec = Some(other.to_string());
+                } else {
+                    return Err(format!("unexpected extra argument '{other}'"));
+                }
+            }
+        }
+    }
+
+    if !stdin && spec.is_none() {
+        return Err(usage.to_string());
+    }
+
+    Ok((spec, stdin))
 }
 
 #[cfg(feature = "serde")]
@@ -484,7 +768,21 @@ fn top_level_help_text() -> &'static str {
   voidctl team dry-run <spec-path>
   voidctl team dry-run --stdin
   voidctl team run <spec-path>
-  voidctl team run --stdin"
+  voidctl team run --stdin
+  voidctl sandbox create [<spec-path> | --stdin]
+  voidctl sandbox get <sandbox-id>
+  voidctl sandbox list
+  voidctl sandbox exec <sandbox-id> [<request-path> | --stdin]
+  voidctl sandbox stop <sandbox-id>
+  voidctl sandbox delete <sandbox-id>
+  voidctl snapshot create [<spec-path> | --stdin]
+  voidctl snapshot get <snapshot-id>
+  voidctl snapshot list
+  voidctl snapshot replicate <snapshot-id> [<request-path> | --stdin]
+  voidctl snapshot delete <snapshot-id>
+  voidctl pool create [<spec-path> | --stdin]
+  voidctl pool get <pool-id>
+  voidctl pool scale <pool-id> [<request-path> | --stdin]"
 }
 
 #[cfg(feature = "serde")]
@@ -551,23 +849,7 @@ fn load_execution_spec_file(path: &str) -> Result<String, String> {
 
 #[cfg(feature = "serde")]
 fn load_execution_spec_input(spec: Option<&str>, stdin: bool) -> Result<String, String> {
-    use std::io::Read;
-
-    if stdin {
-        let mut spec = String::new();
-        std::io::stdin()
-            .read_to_string(&mut spec)
-            .map_err(|e| format!("read stdin failed: {e}"))?;
-        if spec.trim().is_empty() {
-            return Err("stdin spec is empty".to_string());
-        }
-        return Ok(spec);
-    }
-
-    let Some(spec) = spec else {
-        return Err("spec path is required unless --stdin is used".to_string());
-    };
-    load_execution_spec_file(spec)
+    load_bridge_body_input(spec, stdin, "spec", load_execution_spec_file)
 }
 
 #[cfg(feature = "serde")]
@@ -577,6 +859,19 @@ fn load_json_input_file(path: &str) -> Result<String, String> {
 
 #[cfg(feature = "serde")]
 fn load_json_input(inputs: Option<&str>, stdin: bool) -> Result<String, String> {
+    load_bridge_body_input(inputs, stdin, "template input", load_json_input_file)
+}
+
+#[cfg(feature = "serde")]
+fn load_bridge_body_input<F>(
+    path: Option<&str>,
+    stdin: bool,
+    label: &str,
+    load_file: F,
+) -> Result<String, String>
+where
+    F: FnOnce(&str) -> Result<String, String>,
+{
     use std::io::Read;
 
     if stdin {
@@ -585,15 +880,15 @@ fn load_json_input(inputs: Option<&str>, stdin: bool) -> Result<String, String> 
             .read_to_string(&mut body)
             .map_err(|e| format!("read stdin failed: {e}"))?;
         if body.trim().is_empty() {
-            return Err("stdin template input is empty".to_string());
+            return Err(format!("stdin {label} is empty"));
         }
         return Ok(body);
     }
 
-    let Some(inputs) = inputs else {
-        return Err("template input path is required unless --stdin is used".to_string());
+    let Some(path) = path else {
+        return Err(format!("{label} path is required unless --stdin is used"));
     };
-    load_json_input_file(inputs)
+    load_file(path)
 }
 
 #[cfg(feature = "serde")]
@@ -836,6 +1131,112 @@ fn print_batch_run_summary(detail: &serde_json::Value) {
 }
 
 #[cfg(feature = "serde")]
+fn print_sandbox_summary(detail: &serde_json::Value) {
+    let sandbox = detail
+        .get("sandbox")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    println!(
+        "sandbox_id={} state={} image={} cpus={} memory_mb={}",
+        sandbox
+            .get("sandbox_id")
+            .and_then(|value| value.as_str())
+            .unwrap_or("-"),
+        sandbox
+            .get("state")
+            .and_then(|value| value.as_str())
+            .unwrap_or("-"),
+        sandbox
+            .get("image")
+            .and_then(|value| value.as_str())
+            .unwrap_or("-"),
+        sandbox
+            .get("cpus")
+            .and_then(|value| value.as_u64())
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "-".to_string()),
+        sandbox
+            .get("memory_mb")
+            .and_then(|value| value.as_u64())
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "-".to_string()),
+    );
+}
+
+#[cfg(feature = "serde")]
+fn print_snapshot_summary(detail: &serde_json::Value) {
+    let snapshot = detail
+        .get("snapshot")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let distribution = snapshot
+        .get("distribution")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let targets = distribution
+        .get("targets")
+        .and_then(|value| value.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let mut formatted_targets = Vec::new();
+    for target in targets {
+        let Some(target) = target.as_str() else {
+            continue;
+        };
+        formatted_targets.push(target.to_string());
+    }
+    println!(
+        "snapshot_id={} source_sandbox_id={} mode={} targets={}",
+        snapshot
+            .get("snapshot_id")
+            .and_then(|value| value.as_str())
+            .unwrap_or("-"),
+        snapshot
+            .get("source_sandbox_id")
+            .and_then(|value| value.as_str())
+            .unwrap_or("-"),
+        distribution
+            .get("mode")
+            .and_then(|value| value.as_str())
+            .unwrap_or("-"),
+        if formatted_targets.is_empty() {
+            "-".to_string()
+        } else {
+            formatted_targets.join(",")
+        },
+    );
+}
+
+#[cfg(feature = "serde")]
+fn print_pool_summary(detail: &serde_json::Value) {
+    let pool = detail
+        .get("pool")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    println!(
+        "pool_id={} warm={} max={} image={}",
+        pool.get("pool_id")
+            .and_then(|value| value.as_str())
+            .unwrap_or("-"),
+        pool.get("capacity")
+            .and_then(|value| value.get("warm"))
+            .and_then(|value| value.as_u64())
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "-".to_string()),
+        pool.get("capacity")
+            .and_then(|value| value.get("max"))
+            .and_then(|value| value.as_u64())
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "-".to_string()),
+        pool.get("sandbox_spec")
+            .and_then(|value| value.get("runtime"))
+            .and_then(|value| value.get("image"))
+            .and_then(|value| value.as_str())
+            .unwrap_or("-"),
+    );
+}
+
+#[cfg(feature = "serde")]
 fn select_runtime_run(
     detail: &serde_json::Value,
     requested_candidate_id: Option<&str>,
@@ -970,6 +1371,9 @@ fn run() -> Result<(), String> {
         CliCommand::Template(_) => {}
         CliCommand::Batch(_) => {}
         CliCommand::Team(_) => {}
+        CliCommand::Sandbox(_) => {}
+        CliCommand::Snapshot(_) => {}
+        CliCommand::Pool(_) => {}
         CliCommand::Interactive => {}
     }
 
@@ -2386,6 +2790,322 @@ Policy presets: fast | balanced | safe"
         }
     }
 
+    if let CliCommand::Sandbox(command) = parsed_cli {
+        match command {
+            SandboxCommand::Create { spec, stdin } => {
+                let spec = load_bridge_body_input(
+                    spec.as_deref(),
+                    stdin,
+                    "sandbox spec",
+                    load_execution_spec_file,
+                )?;
+                match bridge_request(&bridge_base_url, "POST", "/v1/sandboxes", Some(&spec)) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            return Err(bridge_error_message(&response));
+                        }
+                        print_sandbox_summary(&response.json);
+                    }
+                    Err(err) => return Err(err),
+                }
+                return Ok(());
+            }
+            SandboxCommand::Get { sandbox_id } => {
+                let path = format!("/v1/sandboxes/{sandbox_id}");
+                match bridge_request(&bridge_base_url, "GET", &path, None) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            return Err(bridge_error_message(&response));
+                        }
+                        print_sandbox_summary(&response.json);
+                    }
+                    Err(err) => return Err(err),
+                }
+                return Ok(());
+            }
+            SandboxCommand::List => {
+                match bridge_request(&bridge_base_url, "GET", "/v1/sandboxes", None) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            return Err(bridge_error_message(&response));
+                        }
+                        let sandboxes = response
+                            .json
+                            .get("sandboxes")
+                            .and_then(|value| value.as_array())
+                            .cloned()
+                            .unwrap_or_default();
+                        if sandboxes.is_empty() {
+                            println!("no sandboxes");
+                        } else {
+                            for sandbox in sandboxes {
+                                print_sandbox_summary(&serde_json::json!({ "sandbox": sandbox }));
+                            }
+                        }
+                    }
+                    Err(err) => return Err(err),
+                }
+                return Ok(());
+            }
+            SandboxCommand::Exec {
+                sandbox_id,
+                request,
+                stdin,
+            } => {
+                let body = load_bridge_body_input(
+                    request.as_deref(),
+                    stdin,
+                    "sandbox exec request",
+                    load_execution_spec_file,
+                )?;
+                let path = format!("/v1/sandboxes/{sandbox_id}/exec");
+                match bridge_request(&bridge_base_url, "POST", &path, Some(&body)) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            return Err(bridge_error_message(&response));
+                        }
+                        println!(
+                            "kind={} exit_code={} stdout={} stderr={}",
+                            response
+                                .json
+                                .get("kind")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                            response
+                                .json
+                                .get("result")
+                                .and_then(|value| value.get("exit_code"))
+                                .and_then(|value| value.as_i64())
+                                .map(|value| value.to_string())
+                                .unwrap_or_else(|| "-".to_string()),
+                            response
+                                .json
+                                .get("result")
+                                .and_then(|value| value.get("stdout"))
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                            response
+                                .json
+                                .get("result")
+                                .and_then(|value| value.get("stderr"))
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                        );
+                    }
+                    Err(err) => return Err(err),
+                }
+                return Ok(());
+            }
+            SandboxCommand::Stop { sandbox_id } => {
+                let path = format!("/v1/sandboxes/{sandbox_id}/stop");
+                match bridge_request(&bridge_base_url, "POST", &path, None) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            return Err(bridge_error_message(&response));
+                        }
+                        print_sandbox_summary(&response.json);
+                    }
+                    Err(err) => return Err(err),
+                }
+                return Ok(());
+            }
+            SandboxCommand::Delete { sandbox_id } => {
+                let path = format!("/v1/sandboxes/{sandbox_id}");
+                match bridge_request(&bridge_base_url, "DELETE", &path, None) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            return Err(bridge_error_message(&response));
+                        }
+                        println!(
+                            "kind={} sandbox_id={}",
+                            response
+                                .json
+                                .get("kind")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                            response
+                                .json
+                                .get("sandbox_id")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                        );
+                    }
+                    Err(err) => return Err(err),
+                }
+                return Ok(());
+            }
+        }
+    }
+
+    if let CliCommand::Snapshot(command) = parsed_cli {
+        match command {
+            SnapshotCommand::Create { spec, stdin } => {
+                let spec = load_bridge_body_input(
+                    spec.as_deref(),
+                    stdin,
+                    "snapshot spec",
+                    load_execution_spec_file,
+                )?;
+                match bridge_request(&bridge_base_url, "POST", "/v1/snapshots", Some(&spec)) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            return Err(bridge_error_message(&response));
+                        }
+                        print_snapshot_summary(&response.json);
+                    }
+                    Err(err) => return Err(err),
+                }
+                return Ok(());
+            }
+            SnapshotCommand::Get { snapshot_id } => {
+                let path = format!("/v1/snapshots/{snapshot_id}");
+                match bridge_request(&bridge_base_url, "GET", &path, None) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            return Err(bridge_error_message(&response));
+                        }
+                        print_snapshot_summary(&response.json);
+                    }
+                    Err(err) => return Err(err),
+                }
+                return Ok(());
+            }
+            SnapshotCommand::List => {
+                match bridge_request(&bridge_base_url, "GET", "/v1/snapshots", None) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            return Err(bridge_error_message(&response));
+                        }
+                        let snapshots = response
+                            .json
+                            .get("snapshots")
+                            .and_then(|value| value.as_array())
+                            .cloned()
+                            .unwrap_or_default();
+                        if snapshots.is_empty() {
+                            println!("no snapshots");
+                        } else {
+                            for snapshot in snapshots {
+                                print_snapshot_summary(
+                                    &serde_json::json!({ "snapshot": snapshot }),
+                                );
+                            }
+                        }
+                    }
+                    Err(err) => return Err(err),
+                }
+                return Ok(());
+            }
+            SnapshotCommand::Replicate {
+                snapshot_id,
+                request,
+                stdin,
+            } => {
+                let body = load_bridge_body_input(
+                    request.as_deref(),
+                    stdin,
+                    "snapshot replicate request",
+                    load_execution_spec_file,
+                )?;
+                let path = format!("/v1/snapshots/{snapshot_id}/replicate");
+                match bridge_request(&bridge_base_url, "POST", &path, Some(&body)) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            return Err(bridge_error_message(&response));
+                        }
+                        print_snapshot_summary(&response.json);
+                    }
+                    Err(err) => return Err(err),
+                }
+                return Ok(());
+            }
+            SnapshotCommand::Delete { snapshot_id } => {
+                let path = format!("/v1/snapshots/{snapshot_id}");
+                match bridge_request(&bridge_base_url, "DELETE", &path, None) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            return Err(bridge_error_message(&response));
+                        }
+                        println!(
+                            "kind={} snapshot_id={}",
+                            response
+                                .json
+                                .get("kind")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                            response
+                                .json
+                                .get("snapshot_id")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                        );
+                    }
+                    Err(err) => return Err(err),
+                }
+                return Ok(());
+            }
+        }
+    }
+
+    if let CliCommand::Pool(command) = parsed_cli {
+        match command {
+            PoolCommand::Create { spec, stdin } => {
+                let spec = load_bridge_body_input(
+                    spec.as_deref(),
+                    stdin,
+                    "pool spec",
+                    load_execution_spec_file,
+                )?;
+                match bridge_request(&bridge_base_url, "POST", "/v1/pools", Some(&spec)) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            return Err(bridge_error_message(&response));
+                        }
+                        print_pool_summary(&response.json);
+                    }
+                    Err(err) => return Err(err),
+                }
+                return Ok(());
+            }
+            PoolCommand::Get { pool_id } => {
+                let path = format!("/v1/pools/{pool_id}");
+                match bridge_request(&bridge_base_url, "GET", &path, None) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            return Err(bridge_error_message(&response));
+                        }
+                        print_pool_summary(&response.json);
+                    }
+                    Err(err) => return Err(err),
+                }
+                return Ok(());
+            }
+            PoolCommand::Scale {
+                pool_id,
+                request,
+                stdin,
+            } => {
+                let body = load_bridge_body_input(
+                    request.as_deref(),
+                    stdin,
+                    "pool scale request",
+                    load_execution_spec_file,
+                )?;
+                let path = format!("/v1/pools/{pool_id}/scale");
+                match bridge_request(&bridge_base_url, "POST", &path, Some(&body)) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            return Err(bridge_error_message(&response));
+                        }
+                        print_pool_summary(&response.json);
+                    }
+                    Err(err) => return Err(err),
+                }
+                return Ok(());
+            }
+        }
+    }
+
     let client = VoidBoxRuntimeClient::new(base_url.clone(), 250);
     let session_file = session_path();
     let mut session = load_session(&session_file);
@@ -3203,6 +3923,45 @@ mod tests {
     }
 
     #[test]
+    fn parses_sandbox_create_from_stdin() {
+        let command = parse_cli_args(["sandbox", "create", "--stdin"]).unwrap();
+        assert_eq!(
+            command,
+            CliCommand::Sandbox(SandboxCommand::Create {
+                spec: None,
+                stdin: true,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_snapshot_replicate_with_request_path() {
+        let command =
+            parse_cli_args(["snapshot", "replicate", "snap-1", "replicate.json"]).unwrap();
+        assert_eq!(
+            command,
+            CliCommand::Snapshot(SnapshotCommand::Replicate {
+                snapshot_id: "snap-1".to_string(),
+                request: Some("replicate.json".to_string()),
+                stdin: false,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_pool_scale_from_stdin() {
+        let command = parse_cli_args(["pool", "scale", "pool-1", "--stdin"]).unwrap();
+        assert_eq!(
+            command,
+            CliCommand::Pool(PoolCommand::Scale {
+                pool_id: "pool-1".to_string(),
+                request: None,
+                stdin: true,
+            })
+        );
+    }
+
+    #[test]
     fn rejects_extra_execution_watch_args() {
         let err = parse_cli_args(["execution", "watch", "exec-1", "extra"]).unwrap_err();
         assert!(err.contains("usage: voidctl execution watch <execution_id>"));
@@ -3263,6 +4022,35 @@ mod tests {
     }
 
     #[test]
+    fn completes_sandbox_subcommands() {
+        let completions = sandbox_subcommand_candidates();
+        assert!(completions.contains(&"create"));
+        assert!(completions.contains(&"get"));
+        assert!(completions.contains(&"list"));
+        assert!(completions.contains(&"exec"));
+        assert!(completions.contains(&"stop"));
+        assert!(completions.contains(&"delete"));
+    }
+
+    #[test]
+    fn completes_snapshot_subcommands() {
+        let completions = snapshot_subcommand_candidates();
+        assert!(completions.contains(&"create"));
+        assert!(completions.contains(&"get"));
+        assert!(completions.contains(&"list"));
+        assert!(completions.contains(&"replicate"));
+        assert!(completions.contains(&"delete"));
+    }
+
+    #[test]
+    fn completes_pool_subcommands() {
+        let completions = pool_subcommand_candidates();
+        assert!(completions.contains(&"create"));
+        assert!(completions.contains(&"get"));
+        assert!(completions.contains(&"scale"));
+    }
+
+    #[test]
     fn top_level_help_mentions_execution_commands() {
         let help = top_level_help_text();
         assert!(help.contains("voidctl execution submit <spec-path>"));
@@ -3286,6 +4074,12 @@ mod tests {
         assert!(help.contains("voidctl yolo run --stdin"));
         assert!(help.contains("voidctl team dry-run <spec-path>"));
         assert!(help.contains("voidctl team run --stdin"));
+        assert!(help.contains("voidctl sandbox create [<spec-path> | --stdin]"));
+        assert!(help.contains("voidctl sandbox list"));
+        assert!(
+            help.contains("voidctl snapshot replicate <snapshot-id> [<request-path> | --stdin]")
+        );
+        assert!(help.contains("voidctl pool scale <pool-id> [<request-path> | --stdin]"));
     }
 
     #[test]
