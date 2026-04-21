@@ -1,4 +1,6 @@
 #[cfg(feature = "serde")]
+pub mod batch;
+#[cfg(feature = "serde")]
 pub mod bridge;
 pub mod contract;
 pub mod orchestration;

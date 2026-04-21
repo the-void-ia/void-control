@@ -186,11 +186,21 @@ Important:
   - `template get <template-id>`
   - `template dry-run <template-id> [<inputs-json-path> | --stdin]`
   - `template execute <template-id> [<inputs-json-path> | --stdin]`
+  - `batch dry-run <spec-path>`
+  - `batch dry-run --stdin`
+  - `batch run <spec-path>`
+  - `batch run --stdin`
+  - `yolo dry-run <spec-path>`
+  - `yolo dry-run --stdin`
+  - `yolo run <spec-path>`
+  - `yolo run --stdin`
 - interactive `voidctl` console also exposes:
   - `/template list`
   - `/template get <template-id>`
   - `/template dry-run <template-id> <inputs-json-path>`
   - `/template execute <template-id> <inputs-json-path>`
+- `batch` is the canonical high-level remote background execution surface
+- `yolo` is an accepted alias for `batch`
 - use `voidctl execution ...` for terminal operator workflows; use the bridge
   HTTP API or UI when you need direct API-driven inspection or browser workflows
 - quote URLs that contain `?` when using `curl` from `zsh`
@@ -199,6 +209,14 @@ Important:
   - `GET /v1/templates/{id}`
   - `POST /v1/templates/{id}/dry-run`
   - `POST /v1/templates/{id}/execute`
+- batch bridge endpoints:
+  - `POST /v1/batch/dry-run`
+  - `POST /v1/batch/run`
+  - `GET /v1/batch-runs/{id}`
+- accepted aliases:
+  - `POST /v1/yolo/dry-run`
+  - `POST /v1/yolo/run`
+  - `GET /v1/yolo-runs/{id}`
 
 ## Runtime compatibility commands
 

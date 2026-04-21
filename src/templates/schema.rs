@@ -94,7 +94,7 @@ impl ControlTemplate {
         }
         if !matches!(
             self.template.execution_kind.as_str(),
-            "single_agent" | "warm_agent"
+            "single_agent" | "warm_agent" | "execution"
         ) {
             return Err(TemplateValidationError::new(format!(
                 "unsupported execution_kind '{}'",
@@ -134,6 +134,14 @@ impl ControlTemplate {
                         other, name
                     )))
                 }
+            }
+        }
+        for binding in &self.compile.bindings {
+            if !self.inputs.contains_key(&binding.input) {
+                return Err(TemplateValidationError::new(format!(
+                    "binding references unknown input '{}'",
+                    binding.input
+                )));
             }
         }
         Ok(())

@@ -25,12 +25,21 @@ pub fn compile_template(
     execution_spec.workflow.template = template.defaults.workflow_template.clone();
 
     for binding in &template.compile.bindings {
-        let value = normalized_inputs.get(&binding.input).ok_or_else(|| {
-            TemplateValidationError::new(format!(
-                "binding references unknown normalized input '{}'",
-                binding.input
-            ))
-        })?;
+        let Some(value) = normalized_inputs.get(&binding.input) else {
+            let field = template.inputs.get(&binding.input).ok_or_else(|| {
+                TemplateValidationError::new(format!(
+                    "binding references unknown normalized input '{}'",
+                    binding.input
+                ))
+            })?;
+            if field.required || field.default.is_some() {
+                return Err(TemplateValidationError::new(format!(
+                    "binding references missing normalized input '{}'",
+                    binding.input
+                )));
+            }
+            continue;
+        };
         apply_binding(&mut execution_spec, &binding.target, value)?;
     }
 
@@ -198,16 +207,16 @@ fn apply_binding(
         return Ok(());
     }
 
-    if let Some(key) = target.strip_prefix("variation.explicit[0].overrides.") {
+    if let Some((index, key)) = parse_explicit_override_target(target)? {
         let raw = value_to_string(value)?;
         let proposal = execution_spec
             .variation
             .explicit
-            .get_mut(0)
+            .get_mut(index)
             .ok_or_else(|| {
-                TemplateValidationError::new(
-                    "variation.explicit[0] is required for override bindings",
-                )
+                TemplateValidationError::new(format!(
+                    "variation.explicit[{index}] is required for override bindings"
+                ))
             })?;
         proposal.overrides.insert(key.to_string(), raw);
         return Ok(());
@@ -217,6 +226,37 @@ fn apply_binding(
         "unsupported binding target '{}'",
         target
     )))
+}
+
+fn parse_explicit_override_target(
+    target: &str,
+) -> Result<Option<(usize, &str)>, TemplateValidationError> {
+    let Some(rest) = target.strip_prefix("variation.explicit[") else {
+        return Ok(None);
+    };
+    let Some(close) = rest.find(']') else {
+        return Err(TemplateValidationError::new(format!(
+            "unsupported binding target '{}'",
+            target
+        )));
+    };
+    let index = rest[..close].parse::<usize>().map_err(|_| {
+        TemplateValidationError::new(format!("unsupported binding target '{}'", target))
+    })?;
+    let suffix = &rest[close + 1..];
+    let Some(key) = suffix.strip_prefix(".overrides.") else {
+        return Err(TemplateValidationError::new(format!(
+            "unsupported binding target '{}'",
+            target
+        )));
+    };
+    if key.is_empty() {
+        return Err(TemplateValidationError::new(format!(
+            "unsupported binding target '{}'",
+            target
+        )));
+    }
+    Ok(Some((index, key)))
 }
 
 fn set_json_path(

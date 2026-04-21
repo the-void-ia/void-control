@@ -137,6 +137,21 @@ fn template_loader_loads_warm_agent_template() {
 
 #[cfg(feature = "serde")]
 #[test]
+fn template_loader_loads_benchmark_runner_python_template() {
+    let template =
+        templates::load_template("benchmark-runner-python").expect("load benchmark template");
+    assert_eq!(template.template.id, "benchmark-runner-python");
+    assert_eq!(template.template.execution_kind.as_str(), "execution");
+    assert_eq!(
+        template.defaults.workflow_template,
+        "examples/runtime-templates/transform_optimizer_agent.yaml"
+    );
+    assert_eq!(template.defaults.execution_spec.variation.explicit.len(), 3);
+    assert!(template.inputs.contains_key("snapshot"));
+}
+
+#[cfg(feature = "serde")]
+#[test]
 fn template_compile_builds_single_agent_execution_spec() {
     let template = templates::load_template("single-agent-basic").expect("load single agent");
     let inputs = serde_json::json!({
@@ -228,4 +243,81 @@ fn template_compile_rejects_invalid_enum_input() {
         err.to_string().contains("input 'provider' must be one of"),
         "unexpected error: {err}"
     );
+}
+
+#[cfg(feature = "serde")]
+#[test]
+fn template_compile_builds_benchmark_runner_python_execution_spec() {
+    let template =
+        templates::load_template("benchmark-runner-python").expect("load benchmark template");
+    let inputs = serde_json::json!({
+        "goal": "Compare transform benchmark candidates",
+        "provider": "claude",
+        "snapshot": "snap-transform-01"
+    });
+
+    let compiled = templates::compile_template(&template, &inputs).expect("compile benchmark");
+    assert_eq!(
+        compiled.execution_spec.goal,
+        "Compare transform benchmark candidates"
+    );
+    assert_eq!(
+        compiled.execution_spec.workflow.template,
+        "examples/runtime-templates/transform_optimizer_agent.yaml"
+    );
+    assert_eq!(compiled.execution_spec.variation.source, "explicit");
+    assert_eq!(compiled.execution_spec.variation.explicit.len(), 3);
+    assert_eq!(
+        compiled.execution_spec.variation.candidates_per_iteration,
+        3
+    );
+    assert_eq!(
+        compiled.execution_spec.variation.explicit[0]
+            .overrides
+            .get("sandbox.env.TRANSFORM_ROLE")
+            .map(String::as_str),
+        Some("latency-baseline")
+    );
+    assert_eq!(
+        compiled.execution_spec.variation.explicit[1]
+            .overrides
+            .get("sandbox.env.TRANSFORM_ROLE")
+            .map(String::as_str),
+        Some("cache-locality")
+    );
+    assert_eq!(
+        compiled.execution_spec.variation.explicit[2]
+            .overrides
+            .get("sandbox.env.TRANSFORM_ROLE")
+            .map(String::as_str),
+        Some("max-throughput")
+    );
+    for proposal in &compiled.execution_spec.variation.explicit {
+        assert_eq!(
+            proposal.overrides.get("llm.provider").map(String::as_str),
+            Some("claude")
+        );
+        assert_eq!(
+            proposal.overrides.get("snapshot").map(String::as_str),
+            Some("snap-transform-01")
+        );
+    }
+}
+
+#[cfg(feature = "serde")]
+#[test]
+fn template_compile_skips_optional_benchmark_snapshot_binding_when_omitted() {
+    let template =
+        templates::load_template("benchmark-runner-python").expect("load benchmark template");
+    let inputs = serde_json::json!({
+        "goal": "Compare transform benchmark candidates"
+    });
+
+    let compiled = templates::compile_template(&template, &inputs).expect("compile benchmark");
+    for proposal in &compiled.execution_spec.variation.explicit {
+        assert!(
+            !proposal.overrides.contains_key("snapshot"),
+            "snapshot override should be omitted when no snapshot input is provided"
+        );
+    }
 }

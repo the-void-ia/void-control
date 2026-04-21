@@ -62,12 +62,28 @@ enum TemplateCommand {
 
 #[cfg(feature = "serde")]
 #[derive(Debug, Clone, PartialEq, Eq)]
+enum BatchCommand {
+    DryRun {
+        spec: Option<String>,
+        stdin: bool,
+        alias: String,
+    },
+    Run {
+        spec: Option<String>,
+        stdin: bool,
+        alias: String,
+    },
+}
+
+#[cfg(feature = "serde")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum CliCommand {
     Serve,
     Help,
     Interactive,
     Execution(ExecutionCommand),
     Template(TemplateCommand),
+    Batch(BatchCommand),
 }
 
 #[cfg(feature = "serde")]
@@ -96,6 +112,11 @@ fn execution_subcommand_candidates() -> &'static [&'static str] {
 #[cfg(feature = "serde")]
 fn template_subcommand_candidates() -> &'static [&'static str] {
     &["list", "get", "dry-run", "execute"]
+}
+
+#[cfg(feature = "serde")]
+fn batch_subcommand_candidates() -> &'static [&'static str] {
+    &["dry-run", "run"]
 }
 
 #[cfg(feature = "serde")]
@@ -274,8 +295,36 @@ where
                 )),
             }
         }
+        "batch" | "yolo" => {
+            let alias = head;
+            let action = iter.next().ok_or_else(|| {
+                format!("usage: voidctl {alias} <dry-run|run> [<spec-path> | --stdin]")
+            })?;
+            match action {
+                "dry-run" => {
+                    parse_execution_file_or_stdin(&mut iter, "dry-run").map(|(spec, stdin)| {
+                        CliCommand::Batch(BatchCommand::DryRun {
+                            spec,
+                            stdin,
+                            alias: alias.to_string(),
+                        })
+                    })
+                }
+                "run" => parse_execution_file_or_stdin(&mut iter, "run").map(|(spec, stdin)| {
+                    CliCommand::Batch(BatchCommand::Run {
+                        spec,
+                        stdin,
+                        alias: alias.to_string(),
+                    })
+                }),
+                other => Err(format!(
+                    "unknown {alias} subcommand '{other}'. supported: {}",
+                    batch_subcommand_candidates().join(", ")
+                )),
+            }
+        }
         other => Err(format!(
-            "unknown command '{other}'. supported: serve, help, execution, template"
+            "unknown command '{other}'. supported: serve, help, execution, template, batch, yolo"
         )),
     }
 }
@@ -392,7 +441,15 @@ fn top_level_help_text() -> &'static str {
   voidctl template list
   voidctl template get <template-id>
   voidctl template dry-run <template-id> [<inputs-json-path> | --stdin]
-  voidctl template execute <template-id> [<inputs-json-path> | --stdin]"
+  voidctl template execute <template-id> [<inputs-json-path> | --stdin]
+  voidctl batch dry-run <spec-path>
+  voidctl batch dry-run --stdin
+  voidctl batch run <spec-path>
+  voidctl batch run --stdin
+  voidctl yolo dry-run <spec-path>
+  voidctl yolo dry-run --stdin
+  voidctl yolo run <spec-path>
+  voidctl yolo run --stdin"
 }
 
 #[cfg(feature = "serde")]
@@ -681,6 +738,42 @@ fn print_template_compilation_summary(detail: &serde_json::Value) {
 }
 
 #[cfg(feature = "serde")]
+fn print_batch_compilation_summary(detail: &serde_json::Value) {
+    println!(
+        "kind={} compiled_primitive={} workflow_template={} mode={} variation_source={} candidates_per_iteration={}",
+        detail
+            .get("kind")
+            .and_then(|value| value.as_str())
+            .unwrap_or("-"),
+        detail
+            .get("compiled_primitive")
+            .and_then(|value| value.as_str())
+            .unwrap_or("-"),
+        detail
+            .get("compiled")
+            .and_then(|value| value.get("workflow_template"))
+            .and_then(|value| value.as_str())
+            .unwrap_or("-"),
+        detail
+            .get("compiled")
+            .and_then(|value| value.get("mode"))
+            .and_then(|value| value.as_str())
+            .unwrap_or("-"),
+        detail
+            .get("compiled")
+            .and_then(|value| value.get("variation_source"))
+            .and_then(|value| value.as_str())
+            .unwrap_or("-"),
+        detail
+            .get("compiled")
+            .and_then(|value| value.get("candidates_per_iteration"))
+            .and_then(|value| value.as_u64())
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "-".to_string()),
+    );
+}
+
+#[cfg(feature = "serde")]
 fn select_runtime_run(
     detail: &serde_json::Value,
     requested_candidate_id: Option<&str>,
@@ -813,6 +906,7 @@ fn run() -> Result<(), String> {
         }
         CliCommand::Execution(_) => {}
         CliCommand::Template(_) => {}
+        CliCommand::Batch(_) => {}
         CliCommand::Interactive => {}
     }
 
@@ -2014,6 +2108,74 @@ Policy presets: fast | balanced | safe"
                                 .json
                                 .get("template")
                                 .and_then(|value| value.get("execution_kind"))
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                            response
+                                .json
+                                .get("status")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("unknown"),
+                            response
+                                .json
+                                .get("goal")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                        );
+                    }
+                    Err(err) => return Err(err),
+                }
+                return Ok(());
+            }
+        }
+    }
+
+    if let CliCommand::Batch(command) = parsed_cli {
+        match command {
+            BatchCommand::DryRun { spec, stdin, alias } => {
+                let spec = load_execution_spec_input(spec.as_deref(), stdin)?;
+                let path = if alias == "yolo" {
+                    "/v1/yolo/dry-run"
+                } else {
+                    "/v1/batch/dry-run"
+                };
+                match bridge_request(&bridge_base_url, "POST", path, Some(&spec)) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            return Err(bridge_error_message(&response));
+                        }
+                        print_batch_compilation_summary(&response.json);
+                    }
+                    Err(err) => return Err(err),
+                }
+                return Ok(());
+            }
+            BatchCommand::Run { spec, stdin, alias } => {
+                let spec = load_execution_spec_input(spec.as_deref(), stdin)?;
+                let path = if alias == "yolo" {
+                    "/v1/yolo/run"
+                } else {
+                    "/v1/batch/run"
+                };
+                match bridge_request(&bridge_base_url, "POST", path, Some(&spec)) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            return Err(bridge_error_message(&response));
+                        }
+                        println!(
+                            "kind={} run_id={} compiled_primitive={} status={} goal={}",
+                            response
+                                .json
+                                .get("kind")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                            response
+                                .json
+                                .get("run_id")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                            response
+                                .json
+                                .get("compiled_primitive")
                                 .and_then(|value| value.as_str())
                                 .unwrap_or("-"),
                             response

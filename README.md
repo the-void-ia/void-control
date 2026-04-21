@@ -279,6 +279,56 @@ Inside the interactive `voidctl` console, the same surface is available as:
 /template execute warm-agent-basic template-inputs.json
 ```
 
+### Batch / yolo
+
+`batch` is the canonical high-level surface for remote background work that
+fans out one worker template across multiple prompts. `yolo` is an accepted
+alias for the same API and CLI path.
+
+Bridge routes:
+
+```bash
+curl -sS -X POST http://127.0.0.1:43210/v1/batch/dry-run \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "api_version": "v1",
+    "kind": "batch",
+    "worker": {
+      "template": "examples/runtime-templates/warm_agent_basic.yaml",
+      "provider": "claude"
+    },
+    "mode": {
+      "parallelism": 2
+    },
+    "jobs": [
+      { "prompt": "Fix failing auth tests" },
+      { "prompt": "Improve retry logging" },
+      { "prompt": "Review DB migration safety" }
+    ]
+  }'
+
+curl -sS -X POST http://127.0.0.1:43210/v1/yolo/run \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "api_version": "v1",
+    "kind": "yolo",
+    "worker": {
+      "template": "examples/runtime-templates/warm_agent_basic.yaml"
+    },
+    "jobs": [
+      { "prompt": "Review migration safety" }
+    ]
+  }'
+```
+
+CLI:
+
+```bash
+voidctl batch dry-run examples/batch/background_repo_work.yaml
+voidctl batch run examples/batch/background_repo_work.yaml
+cat examples/batch/background_repo_work.yaml | voidctl yolo run --stdin
+```
+
 ### 7) Run the supervision example
 
 Use the checked-in supervision example to exercise the flat
