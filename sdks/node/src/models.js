@@ -74,3 +74,37 @@ export function toExecutionDetail(payload) {
     candidates: payload.candidates ?? []
   };
 }
+
+export function toSandboxRecord(payload) {
+  return {
+    sandboxId: String(payload.sandbox.sandbox_id),
+    state: String(payload.sandbox.state),
+    image: String(payload.sandbox.image ?? ""),
+    cpus: Number(payload.sandbox.cpus ?? 0),
+    memoryMb: Number(payload.sandbox.memory_mb ?? 0)
+  };
+}
+
+export function toSandboxExecResult(payload) {
+  return {
+    exitCode: Number(payload.result?.exit_code ?? 0),
+    stdout: String(payload.result?.stdout ?? ""),
+    stderr: String(payload.result?.stderr ?? "")
+  };
+}
+
+export function toSnapshotRecord(payload) {
+  return {
+    snapshotId: String(payload.snapshot.snapshot_id),
+    sourceSandboxId: String(payload.snapshot.source_sandbox_id ?? ""),
+    distribution: payload.snapshot.distribution ?? {}
+  };
+}
+
+export function toPoolRecord(payload) {
+  return {
+    poolId: String(payload.pool.pool_id),
+    sandboxSpec: payload.pool.sandbox_spec ?? {},
+    capacity: payload.pool.capacity ?? {}
+  };
+}

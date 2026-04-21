@@ -92,3 +92,29 @@ type BatchRunDetail struct {
 	Result     ExecutionResult `json:"result"`
 	Candidates []any           `json:"candidates"`
 }
+
+type SandboxRecord struct {
+	SandboxID string `json:"sandbox_id"`
+	State     string `json:"state"`
+	Image     string `json:"image"`
+	CPUs      int    `json:"cpus"`
+	MemoryMB  int    `json:"memory_mb"`
+}
+
+type SandboxExecResult struct {
+	ExitCode int    `json:"exit_code"`
+	Stdout   string `json:"stdout"`
+	Stderr   string `json:"stderr"`
+}
+
+type SnapshotRecord struct {
+	SnapshotID      string         `json:"snapshot_id"`
+	SourceSandboxID string         `json:"source_sandbox_id"`
+	Distribution    map[string]any `json:"distribution"`
+}
+
+type PoolRecord struct {
+	PoolID      string         `json:"pool_id"`
+	SandboxSpec map[string]any `json:"sandbox_spec"`
+	Capacity    map[string]any `json:"capacity"`
+}

@@ -32,6 +32,15 @@ func TestClientExposesTemplateAndExecutionClients(t *testing.T) {
 	if client.YoloRuns == nil {
 		t.Fatalf("YoloRuns client should be initialized")
 	}
+	if client.Sandboxes == nil {
+		t.Fatalf("Sandboxes client should be initialized")
+	}
+	if client.Snapshots == nil {
+		t.Fatalf("Snapshots client should be initialized")
+	}
+	if client.Pools == nil {
+		t.Fatalf("Pools client should be initialized")
+	}
 }
 
 func TestTemplateAndExecutionMethods(t *testing.T) {
@@ -350,6 +359,214 @@ func TestBatchAndYoloMethods(t *testing.T) {
 		t.Fatalf("waitedYolo.Execution.Status = %q", waitedYolo.Execution.Status)
 	}
 	if len(requests) != 5 {
+		t.Fatalf("len(requests) = %d", len(requests))
+	}
+}
+
+func TestComputeMethods(t *testing.T) {
+	responses := []map[string]any{
+		{
+			"kind": "sandbox",
+			"sandbox": map[string]any{
+				"sandbox_id": "sbx-1",
+				"state":      "running",
+				"image":      "python:3.12-slim",
+				"cpus":       float64(2),
+				"memory_mb":  float64(2048),
+			},
+		},
+		{
+			"kind": "sandbox_list",
+			"sandboxes": []map[string]any{
+				{
+					"sandbox_id": "sbx-1",
+					"state":      "running",
+					"image":      "python:3.12-slim",
+					"cpus":       float64(2),
+					"memory_mb":  float64(2048),
+				},
+			},
+		},
+		{
+			"kind": "sandbox_exec",
+			"result": map[string]any{
+				"exit_code": float64(0),
+				"stdout":    "hello\n",
+				"stderr":    "",
+			},
+		},
+		{
+			"kind": "snapshot",
+			"snapshot": map[string]any{
+				"snapshot_id":       "snap-1",
+				"source_sandbox_id": "sbx-1",
+				"distribution": map[string]any{
+					"mode":    "cached",
+					"targets": []string{"node-a", "node-b"},
+				},
+			},
+		},
+		{
+			"kind": "snapshot",
+			"snapshot": map[string]any{
+				"snapshot_id":       "snap-1",
+				"source_sandbox_id": "sbx-1",
+				"distribution": map[string]any{
+					"mode":    "copy",
+					"targets": []string{"node-a", "node-c"},
+				},
+			},
+		},
+		{
+			"kind": "pool",
+			"pool": map[string]any{
+				"pool_id": "pool-1",
+				"sandbox_spec": map[string]any{
+					"runtime": map[string]any{
+						"image":     "python:3.12-slim",
+						"cpus":      float64(2),
+						"memory_mb": float64(2048),
+					},
+				},
+				"capacity": map[string]any{
+					"warm": float64(5),
+					"max":  float64(20),
+				},
+			},
+		},
+		{
+			"kind": "pool",
+			"pool": map[string]any{
+				"pool_id": "pool-1",
+				"sandbox_spec": map[string]any{
+					"runtime": map[string]any{
+						"image":     "python:3.12-slim",
+						"cpus":      float64(2),
+						"memory_mb": float64(2048),
+					},
+				},
+				"capacity": map[string]any{
+					"warm": float64(8),
+					"max":  float64(24),
+				},
+			},
+		},
+	}
+	requests := make([]string, 0, len(responses))
+
+	client := NewClient("http://void-control.test")
+	client.HTTPClient = &http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			requests = append(requests, r.Method+" "+r.URL.Path)
+			if len(responses) == 0 {
+				t.Fatalf("received unexpected request %s %s", r.Method, r.URL.Path)
+			}
+			body, err := json.Marshal(responses[0])
+			if err != nil {
+				t.Fatalf("marshal response: %v", err)
+			}
+			responses = responses[1:]
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(bytes.NewReader(body)),
+				Request:    r,
+			}, nil
+		}),
+	}
+
+	sandbox, err := client.Sandboxes.Create(map[string]any{
+		"api_version": "v1",
+		"kind":        "sandbox",
+		"runtime": map[string]any{
+			"image":     "python:3.12-slim",
+			"cpus":      2,
+			"memory_mb": 2048,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Sandboxes.Create: %v", err)
+	}
+	sandboxes, err := client.Sandboxes.List()
+	if err != nil {
+		t.Fatalf("Sandboxes.List: %v", err)
+	}
+	execResult, err := client.Sandboxes.Exec("sbx-1", map[string]any{
+		"kind":    "command",
+		"command": []string{"python3", "-c", "print('hello')"},
+	})
+	if err != nil {
+		t.Fatalf("Sandboxes.Exec: %v", err)
+	}
+	snapshot, err := client.Snapshots.Create(map[string]any{
+		"api_version": "v1",
+		"kind":        "snapshot",
+		"source": map[string]any{
+			"sandbox_id": "sbx-1",
+		},
+		"distribution": map[string]any{
+			"mode":    "cached",
+			"targets": []string{"node-a", "node-b"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Snapshots.Create: %v", err)
+	}
+	replicated, err := client.Snapshots.Replicate("snap-1", map[string]any{
+		"mode":    "copy",
+		"targets": []string{"node-a", "node-c"},
+	})
+	if err != nil {
+		t.Fatalf("Snapshots.Replicate: %v", err)
+	}
+	pool, err := client.Pools.Create(map[string]any{
+		"api_version": "v1",
+		"kind":        "sandbox_pool",
+		"sandbox_spec": map[string]any{
+			"runtime": map[string]any{
+				"image":     "python:3.12-slim",
+				"cpus":      2,
+				"memory_mb": 2048,
+			},
+		},
+		"capacity": map[string]any{
+			"warm": 5,
+			"max":  20,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Pools.Create: %v", err)
+	}
+	scaled, err := client.Pools.Scale("pool-1", map[string]any{
+		"warm": 8,
+		"max":  24,
+	})
+	if err != nil {
+		t.Fatalf("Pools.Scale: %v", err)
+	}
+
+	if sandbox.SandboxID != "sbx-1" {
+		t.Fatalf("sandbox.SandboxID = %q", sandbox.SandboxID)
+	}
+	if sandboxes[0].State != "running" {
+		t.Fatalf("sandboxes[0].State = %q", sandboxes[0].State)
+	}
+	if execResult.ExitCode != 0 {
+		t.Fatalf("execResult.ExitCode = %d", execResult.ExitCode)
+	}
+	if snapshot.SnapshotID != "snap-1" {
+		t.Fatalf("snapshot.SnapshotID = %q", snapshot.SnapshotID)
+	}
+	if replicated.Distribution["mode"] != "copy" {
+		t.Fatalf("replicated.Distribution = %#v", replicated.Distribution)
+	}
+	if pool.PoolID != "pool-1" {
+		t.Fatalf("pool.PoolID = %q", pool.PoolID)
+	}
+	if scaled.Capacity["warm"] != float64(8) {
+		t.Fatalf("scaled.Capacity = %#v", scaled.Capacity)
+	}
+	if len(requests) != 7 {
 		t.Fatalf("len(requests) = %d", len(requests))
 	}
 }

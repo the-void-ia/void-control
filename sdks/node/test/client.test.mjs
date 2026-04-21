@@ -13,6 +13,9 @@ test("client exposes template and execution subclients", () => {
   assert.ok(client.batchRuns);
   assert.ok(client.yolo);
   assert.ok(client.yoloRuns);
+  assert.ok(client.sandboxes);
+  assert.ok(client.snapshots);
+  assert.ok(client.pools);
 });
 
 test("template and execution methods use the bridge API", async () => {
@@ -304,4 +307,177 @@ test("batch and yolo methods use the bridge API", async () => {
   assert.equal(requests[2].path, "/v1/batch-runs/exec-batch-1");
   assert.equal(requests[3].path, "/v1/yolo/run");
   assert.equal(requests[4].path, "/v1/yolo-runs/exec-yolo-1");
+});
+
+test("compute methods use the bridge API", async () => {
+  const responses = [
+    {
+      kind: "sandbox",
+      sandbox: {
+        sandbox_id: "sbx-1",
+        state: "running",
+        image: "python:3.12-slim",
+        cpus: 2,
+        memory_mb: 2048
+      }
+    },
+    {
+      kind: "sandbox_list",
+      sandboxes: [
+        {
+          sandbox_id: "sbx-1",
+          state: "running",
+          image: "python:3.12-slim",
+          cpus: 2,
+          memory_mb: 2048
+        }
+      ]
+    },
+    {
+      kind: "sandbox_exec",
+      result: {
+        exit_code: 0,
+        stdout: "hello\n",
+        stderr: ""
+      }
+    },
+    {
+      kind: "snapshot",
+      snapshot: {
+        snapshot_id: "snap-1",
+        source_sandbox_id: "sbx-1",
+        distribution: {
+          mode: "cached",
+          targets: ["node-a", "node-b"]
+        }
+      }
+    },
+    {
+      kind: "snapshot",
+      snapshot: {
+        snapshot_id: "snap-1",
+        source_sandbox_id: "sbx-1",
+        distribution: {
+          mode: "copy",
+          targets: ["node-a", "node-c"]
+        }
+      }
+    },
+    {
+      kind: "pool",
+      pool: {
+        pool_id: "pool-1",
+        sandbox_spec: {
+          runtime: {
+            image: "python:3.12-slim",
+            cpus: 2,
+            memory_mb: 2048
+          }
+        },
+        capacity: {
+          warm: 5,
+          max: 20
+        }
+      }
+    },
+    {
+      kind: "pool",
+      pool: {
+        pool_id: "pool-1",
+        sandbox_spec: {
+          runtime: {
+            image: "python:3.12-slim",
+            cpus: 2,
+            memory_mb: 2048
+          }
+        },
+        capacity: {
+          warm: 8,
+          max: 24
+        }
+      }
+    }
+  ];
+  const requests = [];
+  const fetchImpl = async (url, init = {}) => {
+    const body = init.body ?? null;
+    requests.push({
+      method: init.method ?? "GET",
+      path: new URL(url).pathname,
+      body
+    });
+    const payload = responses.shift();
+    return new Response(JSON.stringify(payload), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    });
+  };
+
+  const client = new VoidControlClient({
+    baseUrl: "http://127.0.0.1:43210",
+    fetchImpl
+  });
+
+  const sandbox = await client.sandboxes.create({
+    api_version: "v1",
+    kind: "sandbox",
+    runtime: {
+      image: "python:3.12-slim",
+      cpus: 2,
+      memory_mb: 2048
+    }
+  });
+  const sandboxes = await client.sandboxes.list();
+  const execResult = await client.sandboxes.exec("sbx-1", {
+    kind: "command",
+    command: ["python3", "-c", "print('hello')"]
+  });
+  const snapshot = await client.snapshots.create({
+    api_version: "v1",
+    kind: "snapshot",
+    source: { sandbox_id: "sbx-1" },
+    distribution: {
+      mode: "cached",
+      targets: ["node-a", "node-b"]
+    }
+  });
+  const replicated = await client.snapshots.replicate("snap-1", {
+    mode: "copy",
+    targets: ["node-a", "node-c"]
+  });
+  const pool = await client.pools.create({
+    api_version: "v1",
+    kind: "sandbox_pool",
+    sandbox_spec: {
+      runtime: {
+        image: "python:3.12-slim",
+        cpus: 2,
+        memory_mb: 2048
+      }
+    },
+    capacity: {
+      warm: 5,
+      max: 20
+    }
+  });
+  const scaled = await client.pools.scale("pool-1", {
+    warm: 8,
+    max: 24
+  });
+
+  assert.equal(sandbox.sandboxId, "sbx-1");
+  assert.equal(sandboxes[0].state, "running");
+  assert.equal(execResult.exitCode, 0);
+  assert.equal(snapshot.snapshotId, "snap-1");
+  assert.equal(replicated.distribution.mode, "copy");
+  assert.equal(pool.poolId, "pool-1");
+  assert.equal(scaled.capacity.warm, 8);
+
+  assert.equal(requests[0].path, "/v1/sandboxes");
+  assert.equal(requests[1].path, "/v1/sandboxes");
+  assert.equal(requests[2].path, "/v1/sandboxes/sbx-1/exec");
+  assert.equal(requests[3].path, "/v1/snapshots");
+  assert.equal(requests[4].path, "/v1/snapshots/snap-1/replicate");
+  assert.equal(requests[5].path, "/v1/pools");
+  assert.equal(requests[6].path, "/v1/pools/pool-1/scale");
 });

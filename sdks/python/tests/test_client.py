@@ -26,6 +26,9 @@ class ClientScaffoldTest(unittest.TestCase):
         self.assertIsNotNone(client.batch_runs)
         self.assertIsNotNone(client.yolo)
         self.assertIsNotNone(client.yolo_runs)
+        self.assertIsNotNone(client.sandboxes)
+        self.assertIsNotNone(client.snapshots)
+        self.assertIsNotNone(client.pools)
 
 
 class ClientMethodsTest(unittest.IsolatedAsyncioTestCase):
@@ -303,6 +306,180 @@ class ClientMethodsTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(requests[2][:2], ("GET", "/v1/batch-runs/exec-batch-1"))
         self.assertEqual(requests[3][:2], ("POST", "/v1/yolo/run"))
         self.assertEqual(requests[4][:2], ("GET", "/v1/yolo-runs/exec-yolo-1"))
+
+    async def test_compute_methods(self) -> None:
+        from void_control import VoidControlClient
+
+        responses = [
+            {
+                "kind": "sandbox",
+                "sandbox": {
+                    "sandbox_id": "sbx-1",
+                    "state": "running",
+                    "image": "python:3.12-slim",
+                    "cpus": 2,
+                    "memory_mb": 2048,
+                },
+            },
+            {
+                "kind": "sandbox_list",
+                "sandboxes": [
+                    {
+                        "sandbox_id": "sbx-1",
+                        "state": "running",
+                        "image": "python:3.12-slim",
+                        "cpus": 2,
+                        "memory_mb": 2048,
+                    }
+                ],
+            },
+            {
+                "kind": "sandbox_exec",
+                "result": {
+                    "exit_code": 0,
+                    "stdout": "hello\n",
+                    "stderr": "",
+                },
+            },
+            {
+                "kind": "snapshot",
+                "snapshot": {
+                    "snapshot_id": "snap-1",
+                    "source_sandbox_id": "sbx-1",
+                    "distribution": {
+                        "mode": "cached",
+                        "targets": ["node-a", "node-b"],
+                    },
+                },
+            },
+            {
+                "kind": "snapshot",
+                "snapshot": {
+                    "snapshot_id": "snap-1",
+                    "source_sandbox_id": "sbx-1",
+                    "distribution": {
+                        "mode": "copy",
+                        "targets": ["node-a", "node-c"],
+                    },
+                },
+            },
+            {
+                "kind": "pool",
+                "pool": {
+                    "pool_id": "pool-1",
+                    "sandbox_spec": {
+                        "runtime": {
+                            "image": "python:3.12-slim",
+                            "cpus": 2,
+                            "memory_mb": 2048,
+                        }
+                    },
+                    "capacity": {
+                        "warm": 5,
+                        "max": 20,
+                    },
+                },
+            },
+            {
+                "kind": "pool",
+                "pool": {
+                    "pool_id": "pool-1",
+                    "sandbox_spec": {
+                        "runtime": {
+                            "image": "python:3.12-slim",
+                            "cpus": 2,
+                            "memory_mb": 2048,
+                        }
+                    },
+                    "capacity": {
+                        "warm": 8,
+                        "max": 24,
+                    },
+                },
+            },
+        ]
+        requests: list[tuple[str, str, str | None]] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            body = request.content.decode() if request.content else None
+            requests.append((request.method, request.url.path, body))
+            payload = responses.pop(0)
+            return httpx.Response(200, json=payload)
+
+        client = VoidControlClient(
+            base_url="http://127.0.0.1:43210",
+            transport=httpx.MockTransport(handler),
+        )
+
+        sandbox = await client.sandboxes.create(
+            {
+                "api_version": "v1",
+                "kind": "sandbox",
+                "runtime": {
+                    "image": "python:3.12-slim",
+                    "cpus": 2,
+                    "memory_mb": 2048,
+                },
+            }
+        )
+        sandboxes = await client.sandboxes.list()
+        exec_result = await client.sandboxes.exec(
+            "sbx-1",
+            {
+                "kind": "command",
+                "command": ["python3", "-c", "print('hello')"],
+            },
+        )
+        snapshot = await client.snapshots.create(
+            {
+                "api_version": "v1",
+                "kind": "snapshot",
+                "source": {"sandbox_id": "sbx-1"},
+                "distribution": {
+                    "mode": "cached",
+                    "targets": ["node-a", "node-b"],
+                },
+            }
+        )
+        replicated = await client.snapshots.replicate(
+            "snap-1",
+            {
+                "mode": "copy",
+                "targets": ["node-a", "node-c"],
+            },
+        )
+        pool = await client.pools.create(
+            {
+                "api_version": "v1",
+                "kind": "sandbox_pool",
+                "sandbox_spec": {
+                    "runtime": {
+                        "image": "python:3.12-slim",
+                        "cpus": 2,
+                        "memory_mb": 2048,
+                    }
+                },
+                "capacity": {"warm": 5, "max": 20},
+            }
+        )
+        scaled = await client.pools.scale("pool-1", {"warm": 8, "max": 24})
+        await client.aclose()
+
+        self.assertEqual(sandbox.sandbox_id, "sbx-1")
+        self.assertEqual(sandboxes[0].state, "running")
+        self.assertEqual(exec_result.exit_code, 0)
+        self.assertEqual(snapshot.snapshot_id, "snap-1")
+        self.assertEqual(replicated.distribution["mode"], "copy")
+        self.assertEqual(pool.pool_id, "pool-1")
+        self.assertEqual(scaled.capacity["warm"], 8)
+
+        self.assertEqual(requests[0][:2], ("POST", "/v1/sandboxes"))
+        self.assertEqual(requests[1][:2], ("GET", "/v1/sandboxes"))
+        self.assertEqual(requests[2][:2], ("POST", "/v1/sandboxes/sbx-1/exec"))
+        self.assertEqual(requests[3][:2], ("POST", "/v1/snapshots"))
+        self.assertEqual(requests[4][:2], ("POST", "/v1/snapshots/snap-1/replicate"))
+        self.assertEqual(requests[5][:2], ("POST", "/v1/pools"))
+        self.assertEqual(requests[6][:2], ("POST", "/v1/pools/pool-1/scale"))
 
 
 if __name__ == "__main__":

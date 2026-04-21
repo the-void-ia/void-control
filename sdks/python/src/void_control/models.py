@@ -206,3 +206,71 @@ class BatchRunDetail:
             result=ExecutionResult.from_json(dict(payload.get("result", {}))),
             candidates=list(payload.get("candidates", [])),
         )
+
+
+@dataclass(slots=True)
+class SandboxRecord:
+    sandbox_id: str
+    state: str
+    image: str
+    cpus: int
+    memory_mb: int
+
+    @classmethod
+    def from_json(cls, payload: dict[str, Any]) -> "SandboxRecord":
+        sandbox = payload["sandbox"]
+        return cls(
+            sandbox_id=str(sandbox["sandbox_id"]),
+            state=str(sandbox["state"]),
+            image=str(sandbox.get("image", "")),
+            cpus=int(sandbox.get("cpus", 0)),
+            memory_mb=int(sandbox.get("memory_mb", 0)),
+        )
+
+
+@dataclass(slots=True)
+class SandboxExecResult:
+    exit_code: int
+    stdout: str
+    stderr: str
+
+    @classmethod
+    def from_json(cls, payload: dict[str, Any]) -> "SandboxExecResult":
+        result = payload["result"]
+        return cls(
+            exit_code=int(result.get("exit_code", 0)),
+            stdout=str(result.get("stdout", "")),
+            stderr=str(result.get("stderr", "")),
+        )
+
+
+@dataclass(slots=True)
+class SnapshotRecord:
+    snapshot_id: str
+    source_sandbox_id: str
+    distribution: dict[str, Any]
+
+    @classmethod
+    def from_json(cls, payload: dict[str, Any]) -> "SnapshotRecord":
+        snapshot = payload["snapshot"]
+        return cls(
+            snapshot_id=str(snapshot["snapshot_id"]),
+            source_sandbox_id=str(snapshot.get("source_sandbox_id", "")),
+            distribution=dict(snapshot.get("distribution", {})),
+        )
+
+
+@dataclass(slots=True)
+class PoolRecord:
+    pool_id: str
+    sandbox_spec: dict[str, Any]
+    capacity: dict[str, Any]
+
+    @classmethod
+    def from_json(cls, payload: dict[str, Any]) -> "PoolRecord":
+        pool = payload["pool"]
+        return cls(
+            pool_id=str(pool["pool_id"]),
+            sandbox_spec=dict(pool.get("sandbox_spec", {})),
+            capacity=dict(pool.get("capacity", {})),
+        )

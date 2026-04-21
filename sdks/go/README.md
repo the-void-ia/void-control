@@ -8,11 +8,15 @@ The first supported surface is:
 - executions get/wait
 - batch run/dry-run/get/wait
 - yolo run/dry-run/get/wait
+- sandboxes create/get/list/exec/stop/delete
+- snapshots create/get/list/replicate/delete
+- pools create/get/scale
 
 Examples under `examples/` are bridge examples against `void-control`:
 
 - `template_execute`
 - `batch_run`
+- `sandbox_create`
 
 `batch` is the canonical remote-background execution API. `yolo` is an alias
 for the same high-level surface.

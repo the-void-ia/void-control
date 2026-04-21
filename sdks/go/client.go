@@ -17,6 +17,9 @@ type Client struct {
 	BatchRuns  *BatchRunsClient
 	Yolo       *BatchClient
 	YoloRuns   *BatchRunsClient
+	Sandboxes  *SandboxesClient
+	Snapshots  *SnapshotsClient
+	Pools      *PoolsClient
 }
 
 func NewClient(baseURL string) *Client {
@@ -30,6 +33,9 @@ func NewClient(baseURL string) *Client {
 	client.BatchRuns = &BatchRunsClient{client: client, routeBase: "/v1/batch"}
 	client.Yolo = &BatchClient{client: client, routeBase: "/v1/yolo"}
 	client.YoloRuns = &BatchRunsClient{client: client, routeBase: "/v1/yolo"}
+	client.Sandboxes = &SandboxesClient{client: client}
+	client.Snapshots = &SnapshotsClient{client: client}
+	client.Pools = &PoolsClient{client: client}
 	return client
 }
 
@@ -51,6 +57,14 @@ func (client *Client) postJSON(path string, payload any, out any) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	return client.do(req, out)
+}
+
+func (client *Client) deleteJSON(path string, out any) error {
+	req, err := http.NewRequest(http.MethodDelete, client.BaseURL+path, nil)
+	if err != nil {
+		return err
+	}
 	return client.do(req, out)
 }
 

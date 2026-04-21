@@ -6,6 +6,9 @@ import httpx
 
 from .batch import BatchClient, BatchRunsClient
 from .executions import ExecutionsClient
+from .pools import PoolsClient
+from .sandboxes import SandboxesClient
+from .snapshots import SnapshotsClient
 from .templates import TemplatesClient
 from .models import BridgeError
 
@@ -30,6 +33,9 @@ class VoidControlClient:
         self.batch_runs = BatchRunsClient(self, route_base="/v1/batch")
         self.yolo = BatchClient(self, route_base="/v1/yolo")
         self.yolo_runs = BatchRunsClient(self, route_base="/v1/yolo")
+        self.sandboxes = SandboxesClient(self)
+        self.snapshots = SnapshotsClient(self)
+        self.pools = PoolsClient(self)
 
     async def aclose(self) -> None:
         await self._http.aclose()
@@ -46,6 +52,10 @@ class VoidControlClient:
 
     async def post_json(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         response = await self._http.post(path, json=payload)
+        return await self._decode_response(response)
+
+    async def delete_json(self, path: str) -> dict[str, Any]:
+        response = await self._http.delete(path)
         return await self._decode_response(response)
 
     async def _decode_response(self, response: httpx.Response) -> dict[str, Any]:
