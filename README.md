@@ -374,6 +374,53 @@ Interactive console:
 /team run examples/team/rust_article_team.yaml
 ```
 
+### Sandbox
+
+`sandbox` is the new compute-oriented bridge surface for contract-first work on
+reusable environments, snapshots, and prewarm flows.
+
+Current limitation:
+- these routes are currently bridge-managed and mock-backed
+- the live `VoidBoxRuntimeClient` still returns unsupported for sandbox
+  lifecycle calls until the `void-box` daemon exposes matching routes
+
+HTTP:
+
+```bash
+curl -sS -X POST http://127.0.0.1:43210/v1/sandboxes \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "api_version": "v1",
+    "kind": "sandbox",
+    "metadata": {
+      "name": "python-benchmark-box"
+    },
+    "runtime": {
+      "image": "python:3.12-slim",
+      "cpus": 2,
+      "memory_mb": 2048
+    },
+    "snapshot": {
+      "restore_from": "snapshot-transform-v1"
+    }
+  }'
+
+curl -sS http://127.0.0.1:43210/v1/sandboxes
+
+curl -sS -X POST http://127.0.0.1:43210/v1/sandboxes/<sandbox-id>/exec \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "kind": "command",
+    "command": ["python3", "-V"]
+  }'
+
+curl -sS -X POST http://127.0.0.1:43210/v1/sandboxes/<sandbox-id>/stop \
+  -H 'Content-Type: application/json' \
+  -d '{}'
+
+curl -sS -X DELETE http://127.0.0.1:43210/v1/sandboxes/<sandbox-id>
+```
+
 ### 7) Run the supervision example
 
 Use the checked-in supervision example to exercise the flat

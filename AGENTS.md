@@ -212,9 +212,15 @@ Important:
 - `batch` is the canonical high-level remote background execution surface
 - `yolo` is an accepted alias for `batch`
 - `team` is the phase-1 high-level multi-agent authoring surface
+- `sandbox` is the contract-first compute bridge surface for reusable
+  environments and snapshot-based restore flows
 - current phase-1 `team` limitations:
   - `depends_on` is not supported yet
   - `sequential` preserves ordering only; task outputs are not threaded between agents
+- current phase-1 `sandbox` limitation:
+  - bridge routes are mock-backed and persisted by `void-control`
+  - the live `VoidBoxRuntimeClient` still reports sandbox lifecycle calls as
+    unsupported until the `void-box` daemon exposes matching routes
 - use `voidctl execution ...` for terminal operator workflows; use the bridge
   HTTP API or UI when you need direct API-driven inspection or browser workflows
 - quote URLs that contain `?` when using `curl` from `zsh`
@@ -235,6 +241,13 @@ Important:
   - `POST /v1/teams/dry-run`
   - `POST /v1/teams/run`
   - `GET /v1/team-runs/{id}`
+- sandbox bridge endpoints:
+  - `POST /v1/sandboxes`
+  - `GET /v1/sandboxes`
+  - `GET /v1/sandboxes/{id}`
+  - `POST /v1/sandboxes/{id}/exec`
+  - `POST /v1/sandboxes/{id}/stop`
+  - `DELETE /v1/sandboxes/{id}`
 
 ## Runtime compatibility commands
 

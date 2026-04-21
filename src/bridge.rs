@@ -27,7 +27,11 @@ use crate::orchestration::{
     WorkflowTemplateRef,
 };
 #[cfg(feature = "serde")]
-use crate::runtime::{MockRuntime, VoidBoxRuntimeClient};
+use crate::runtime::{
+    MockRuntime, SandboxExecResult, SandboxRecord, SandboxState, VoidBoxRuntimeClient,
+};
+#[cfg(feature = "serde")]
+use crate::sandbox;
 #[cfg(feature = "serde")]
 use crate::team;
 #[cfg(feature = "serde")]
@@ -216,6 +220,22 @@ struct LaunchResponse {
 #[derive(Debug, Deserialize)]
 struct TemplateRequestBody {
     inputs: Value,
+}
+
+#[cfg(feature = "serde")]
+#[derive(Debug, Deserialize)]
+struct SandboxExecRequestBody {
+    kind: String,
+    command: Option<Vec<String>>,
+    runtime: Option<String>,
+    code: Option<String>,
+}
+
+#[cfg(feature = "serde")]
+#[derive(Debug, Serialize, Deserialize)]
+struct StoredSandboxRecord {
+    sandbox: SandboxRecord,
+    spec: sandbox::SandboxSpec,
 }
 
 #[cfg(feature = "serde")]
@@ -421,6 +441,30 @@ fn handle_bridge_request(
 
     if method == "POST" && path == "/v1/executions/dry-run" {
         return handle_execution_dry_run(body);
+    }
+
+    if method == "POST" && path == "/v1/sandboxes" {
+        return handle_sandbox_create(body, config);
+    }
+
+    if method == "GET" && path == "/v1/sandboxes" {
+        return handle_sandbox_list(config);
+    }
+
+    if method == "POST" && path.starts_with("/v1/sandboxes/") && path.ends_with("/exec") {
+        return handle_sandbox_exec(path, body, config);
+    }
+
+    if method == "POST" && path.starts_with("/v1/sandboxes/") && path.ends_with("/stop") {
+        return handle_sandbox_stop(path, config);
+    }
+
+    if method == "GET" && path.starts_with("/v1/sandboxes/") {
+        return handle_sandbox_get(path, config);
+    }
+
+    if method == "DELETE" && path.starts_with("/v1/sandboxes/") {
+        return handle_sandbox_delete(path, config);
     }
 
     if method == "POST" && (path == "/v1/batch/dry-run" || path == "/v1/yolo/dry-run") {
@@ -792,6 +836,303 @@ fn handle_batch_get(path: &str, config: &BridgeConfig) -> JsonHttpResponse {
 }
 
 #[cfg(feature = "serde")]
+fn handle_sandbox_create(body: &str, config: &BridgeConfig) -> JsonHttpResponse {
+    let spec = match parse_submitted_sandbox_spec(body) {
+        Ok(spec) => spec,
+        Err(response) => return response,
+    };
+    let sandbox_id = format!("sbx-{}", now_ms());
+    let record = StoredSandboxRecord {
+        sandbox: SandboxRecord {
+            sandbox_id: sandbox_id.clone(),
+            state: SandboxState::Running,
+            restore_from_snapshot: spec
+                .snapshot
+                .as_ref()
+                .and_then(|snapshot| snapshot.restore_from.clone()),
+        },
+        spec,
+    };
+    if let Err(err) = save_sandbox_record(config, &record) {
+        return json_response(
+            500,
+            &ApiError {
+                code: "INTERNAL_ERROR",
+                message: err.to_string(),
+                retryable: true,
+            },
+        );
+    }
+    json_response(
+        200,
+        &json!({
+            "kind": "sandbox",
+            "sandbox": record.sandbox
+        }),
+    )
+}
+
+#[cfg(feature = "serde")]
+fn handle_sandbox_list(config: &BridgeConfig) -> JsonHttpResponse {
+    match list_sandbox_records(config) {
+        Ok(records) => {
+            let mut sandboxes = Vec::new();
+            for record in records {
+                sandboxes.push(record.sandbox);
+            }
+            json_response(
+                200,
+                &json!({ "kind": "sandbox_list", "sandboxes": sandboxes }),
+            )
+        }
+        Err(err) => json_response(
+            500,
+            &ApiError {
+                code: "INTERNAL_ERROR",
+                message: err.to_string(),
+                retryable: true,
+            },
+        ),
+    }
+}
+
+#[cfg(feature = "serde")]
+fn handle_sandbox_get(path: &str, config: &BridgeConfig) -> JsonHttpResponse {
+    let Some(sandbox_id) = path.strip_prefix("/v1/sandboxes/") else {
+        return json_response(
+            404,
+            &ApiError {
+                code: "NOT_FOUND",
+                message: format!("no route for GET {path}"),
+                retryable: false,
+            },
+        );
+    };
+    if sandbox_id.contains('/') {
+        return json_response(
+            404,
+            &ApiError {
+                code: "NOT_FOUND",
+                message: format!("no route for GET {path}"),
+                retryable: false,
+            },
+        );
+    }
+    match load_sandbox_record(config, sandbox_id) {
+        Ok(record) => json_response(
+            200,
+            &json!({
+                "kind": "sandbox",
+                "sandbox": record.sandbox
+            }),
+        ),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => json_response(
+            404,
+            &ApiError {
+                code: "NOT_FOUND",
+                message: format!("sandbox '{sandbox_id}' not found"),
+                retryable: false,
+            },
+        ),
+        Err(err) => json_response(
+            500,
+            &ApiError {
+                code: "INTERNAL_ERROR",
+                message: err.to_string(),
+                retryable: true,
+            },
+        ),
+    }
+}
+
+#[cfg(feature = "serde")]
+fn handle_sandbox_exec(path: &str, body: &str, config: &BridgeConfig) -> JsonHttpResponse {
+    let Some(sandbox_id) = path
+        .strip_prefix("/v1/sandboxes/")
+        .and_then(|rest| rest.strip_suffix("/exec"))
+    else {
+        return json_response(
+            404,
+            &ApiError {
+                code: "NOT_FOUND",
+                message: format!("no route for POST {path}"),
+                retryable: false,
+            },
+        );
+    };
+    let record = match load_sandbox_record(config, sandbox_id) {
+        Ok(record) => record,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return json_response(
+                404,
+                &ApiError {
+                    code: "NOT_FOUND",
+                    message: format!("sandbox '{sandbox_id}' not found"),
+                    retryable: false,
+                },
+            )
+        }
+        Err(err) => {
+            return json_response(
+                500,
+                &ApiError {
+                    code: "INTERNAL_ERROR",
+                    message: err.to_string(),
+                    retryable: true,
+                },
+            )
+        }
+    };
+    if record.sandbox.state != SandboxState::Running {
+        return json_response(
+            400,
+            &ApiError {
+                code: "INVALID_STATE",
+                message: format!("sandbox '{sandbox_id}' is not running"),
+                retryable: false,
+            },
+        );
+    }
+    let request = match parse_sandbox_exec_request(body) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    let result = match request.kind.as_str() {
+        "command" => SandboxExecResult {
+            exit_code: 0,
+            stdout: request.command.unwrap_or_default().join(" "),
+            stderr: String::new(),
+        },
+        "code" => SandboxExecResult {
+            exit_code: 0,
+            stdout: format!(
+                "{}: {}",
+                request.runtime.unwrap_or_else(|| "unknown".to_string()),
+                request.code.unwrap_or_default()
+            ),
+            stderr: String::new(),
+        },
+        _ => unreachable!("validated sandbox exec kind"),
+    };
+    json_response(
+        200,
+        &json!({
+            "kind": "sandbox_exec",
+            "sandbox_id": sandbox_id,
+            "result": result
+        }),
+    )
+}
+
+#[cfg(feature = "serde")]
+fn handle_sandbox_stop(path: &str, config: &BridgeConfig) -> JsonHttpResponse {
+    let Some(sandbox_id) = path
+        .strip_prefix("/v1/sandboxes/")
+        .and_then(|rest| rest.strip_suffix("/stop"))
+    else {
+        return json_response(
+            404,
+            &ApiError {
+                code: "NOT_FOUND",
+                message: format!("no route for POST {path}"),
+                retryable: false,
+            },
+        );
+    };
+    let mut record = match load_sandbox_record(config, sandbox_id) {
+        Ok(record) => record,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return json_response(
+                404,
+                &ApiError {
+                    code: "NOT_FOUND",
+                    message: format!("sandbox '{sandbox_id}' not found"),
+                    retryable: false,
+                },
+            )
+        }
+        Err(err) => {
+            return json_response(
+                500,
+                &ApiError {
+                    code: "INTERNAL_ERROR",
+                    message: err.to_string(),
+                    retryable: true,
+                },
+            )
+        }
+    };
+    record.sandbox.state = SandboxState::Stopped;
+    if let Err(err) = save_sandbox_record(config, &record) {
+        return json_response(
+            500,
+            &ApiError {
+                code: "INTERNAL_ERROR",
+                message: err.to_string(),
+                retryable: true,
+            },
+        );
+    }
+    json_response(
+        200,
+        &json!({
+            "kind": "sandbox",
+            "sandbox": record.sandbox
+        }),
+    )
+}
+
+#[cfg(feature = "serde")]
+fn handle_sandbox_delete(path: &str, config: &BridgeConfig) -> JsonHttpResponse {
+    let Some(sandbox_id) = path.strip_prefix("/v1/sandboxes/") else {
+        return json_response(
+            404,
+            &ApiError {
+                code: "NOT_FOUND",
+                message: format!("no route for DELETE {path}"),
+                retryable: false,
+            },
+        );
+    };
+    if sandbox_id.contains('/') {
+        return json_response(
+            404,
+            &ApiError {
+                code: "NOT_FOUND",
+                message: format!("no route for DELETE {path}"),
+                retryable: false,
+            },
+        );
+    }
+    let sandbox_path = sandbox_file_path(config, sandbox_id);
+    match fs::remove_file(&sandbox_path) {
+        Ok(()) => json_response(
+            200,
+            &json!({
+                "kind": "sandbox_deleted",
+                "sandbox_id": sandbox_id
+            }),
+        ),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => json_response(
+            404,
+            &ApiError {
+                code: "NOT_FOUND",
+                message: format!("sandbox '{sandbox_id}' not found"),
+                retryable: false,
+            },
+        ),
+        Err(err) => json_response(
+            500,
+            &ApiError {
+                code: "INTERNAL_ERROR",
+                message: err.to_string(),
+                retryable: true,
+            },
+        ),
+    }
+}
+
+#[cfg(feature = "serde")]
 fn parse_submitted_batch_spec(body: &str) -> Result<batch::BatchSpec, JsonHttpResponse> {
     let trimmed = body.trim_start();
     let parsed = if trimmed.starts_with('{') || trimmed.starts_with('[') {
@@ -829,6 +1170,132 @@ fn parse_submitted_team_spec(body: &str) -> Result<team::TeamSpec, JsonHttpRespo
             },
         )
     })
+}
+
+#[cfg(feature = "serde")]
+fn parse_submitted_sandbox_spec(body: &str) -> Result<sandbox::SandboxSpec, JsonHttpResponse> {
+    let trimmed = body.trim_start();
+    let parsed = if trimmed.starts_with('{') || trimmed.starts_with('[') {
+        sandbox::parse_sandbox_json(body)
+    } else {
+        sandbox::parse_sandbox_yaml(body)
+    };
+    parsed.map_err(|err| {
+        json_response(
+            400,
+            &ApiError {
+                code: "INVALID_SANDBOX",
+                message: err.to_string(),
+                retryable: false,
+            },
+        )
+    })
+}
+
+#[cfg(feature = "serde")]
+fn parse_sandbox_exec_request(body: &str) -> Result<SandboxExecRequestBody, JsonHttpResponse> {
+    let request: SandboxExecRequestBody = serde_json::from_str(body).or_else(|json_err| {
+        serde_yaml::from_str(body).map_err(|yaml_err| {
+            format!("invalid sandbox exec body: JSON parse error: {json_err}; YAML parse error: {yaml_err}")
+        })
+    })
+    .map_err(|err| {
+        json_response(
+            400,
+            &ApiError {
+                code: "INVALID_SANDBOX_EXEC",
+                message: err,
+                retryable: false,
+            },
+        )
+    })?;
+
+    match request.kind.as_str() {
+        "command" => {}
+        "code" => {}
+        _ => {
+            return Err(json_response(
+                400,
+                &ApiError {
+                    code: "INVALID_SANDBOX_EXEC",
+                    message: "kind must be 'command' or 'code'".to_string(),
+                    retryable: false,
+                },
+            ))
+        }
+    }
+    if request.kind == "command" && request.command.as_ref().is_none_or(Vec::is_empty) {
+        return Err(json_response(
+            400,
+            &ApiError {
+                code: "INVALID_SANDBOX_EXEC",
+                message: "command exec requires a non-empty command".to_string(),
+                retryable: false,
+            },
+        ));
+    }
+    if request.kind == "code" && request.code.as_deref().unwrap_or("").trim().is_empty() {
+        return Err(json_response(
+            400,
+            &ApiError {
+                code: "INVALID_SANDBOX_EXEC",
+                message: "code exec requires non-empty code".to_string(),
+                retryable: false,
+            },
+        ));
+    }
+    Ok(request)
+}
+
+#[cfg(feature = "serde")]
+fn sandbox_dir(config: &BridgeConfig) -> PathBuf {
+    config.execution_dir.join("sandboxes")
+}
+
+#[cfg(feature = "serde")]
+fn sandbox_file_path(config: &BridgeConfig, sandbox_id: &str) -> PathBuf {
+    sandbox_dir(config).join(format!("{sandbox_id}.json"))
+}
+
+#[cfg(feature = "serde")]
+fn save_sandbox_record(config: &BridgeConfig, record: &StoredSandboxRecord) -> std::io::Result<()> {
+    let dir = sandbox_dir(config);
+    fs::create_dir_all(&dir)?;
+    let bytes =
+        serde_json::to_vec_pretty(record).map_err(|err| std::io::Error::other(err.to_string()))?;
+    fs::write(sandbox_file_path(config, &record.sandbox.sandbox_id), bytes)
+}
+
+#[cfg(feature = "serde")]
+fn load_sandbox_record(
+    config: &BridgeConfig,
+    sandbox_id: &str,
+) -> std::io::Result<StoredSandboxRecord> {
+    let path = sandbox_file_path(config, sandbox_id);
+    let bytes = fs::read(path)?;
+    serde_json::from_slice(&bytes).map_err(|err| std::io::Error::other(err.to_string()))
+}
+
+#[cfg(feature = "serde")]
+fn list_sandbox_records(config: &BridgeConfig) -> std::io::Result<Vec<StoredSandboxRecord>> {
+    let dir = sandbox_dir(config);
+    let mut records = Vec::new();
+    if !dir.exists() {
+        return Ok(records);
+    }
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
+        let bytes = fs::read(path)?;
+        let record: StoredSandboxRecord =
+            serde_json::from_slice(&bytes).map_err(|err| std::io::Error::other(err.to_string()))?;
+        records.push(record);
+    }
+    records.sort_by(|left, right| left.sandbox.sandbox_id.cmp(&right.sandbox.sandbox_id));
+    Ok(records)
 }
 
 #[cfg(feature = "serde")]

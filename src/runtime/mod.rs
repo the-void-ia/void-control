@@ -6,8 +6,12 @@ mod mock;
 #[cfg(feature = "serde")]
 mod void_box;
 
-use crate::contract::{ContractError, RuntimeInspection, StartRequest, StartResult};
+use crate::contract::{
+    ContractError, ContractErrorCode, RuntimeInspection, StartRequest, StartResult,
+};
 use crate::orchestration::{ExecutionRuntime, StructuredOutputResult};
+#[cfg(feature = "serde")]
+use crate::sandbox::SandboxSpec;
 
 #[cfg(feature = "serde")]
 pub use delivery::{DeliveryCapability, MessageDeliveryAdapter, VoidBoxRunRef};
@@ -29,6 +33,76 @@ use std::fs;
 use std::path::Path;
 #[cfg(feature = "serde")]
 use std::time::{SystemTime, UNIX_EPOCH};
+
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SandboxState {
+    Running,
+    Stopped,
+}
+
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SandboxCreateRequest {
+    pub sandbox_id: String,
+    #[cfg(feature = "serde")]
+    pub spec: SandboxSpec,
+}
+
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SandboxRecord {
+    pub sandbox_id: String,
+    pub state: SandboxState,
+    pub restore_from_snapshot: Option<String>,
+}
+
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SandboxExecKind {
+    Command,
+    Code,
+}
+
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SandboxExecRequest {
+    pub sandbox_id: String,
+    pub kind: SandboxExecKind,
+    pub command: Option<Vec<String>>,
+    pub runtime: Option<String>,
+    pub code: Option<String>,
+}
+
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SandboxExecResult {
+    pub exit_code: i32,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+pub trait SandboxRuntime {
+    fn create_sandbox(
+        &mut self,
+        request: SandboxCreateRequest,
+    ) -> Result<SandboxRecord, ContractError>;
+
+    fn inspect_sandbox(&self, sandbox_id: &str) -> Result<SandboxRecord, ContractError>;
+
+    fn list_sandboxes(&self) -> Result<Vec<SandboxRecord>, ContractError>;
+
+    fn exec_sandbox(
+        &mut self,
+        request: SandboxExecRequest,
+    ) -> Result<SandboxExecResult, ContractError>;
+
+    fn stop_sandbox(&mut self, sandbox_id: &str) -> Result<SandboxRecord, ContractError>;
+
+    fn delete_sandbox(&mut self, sandbox_id: &str) -> Result<(), ContractError>;
+}
 
 #[cfg(feature = "serde")]
 pub trait ProviderLaunchAdapter {
@@ -246,6 +320,63 @@ impl ExecutionRuntime for VoidBoxRuntimeClient {
 
     fn delivery_run_ref(&self, handle: &str) -> Option<crate::runtime::VoidBoxRunRef> {
         self.delivery_run_ref(handle).ok()
+    }
+}
+
+#[cfg(feature = "serde")]
+impl SandboxRuntime for VoidBoxRuntimeClient {
+    fn create_sandbox(
+        &mut self,
+        _request: SandboxCreateRequest,
+    ) -> Result<SandboxRecord, ContractError> {
+        Err(ContractError::new(
+            ContractErrorCode::InternalError,
+            "sandbox api is not supported by the current void-box daemon",
+            false,
+        ))
+    }
+
+    fn inspect_sandbox(&self, _sandbox_id: &str) -> Result<SandboxRecord, ContractError> {
+        Err(ContractError::new(
+            ContractErrorCode::InternalError,
+            "sandbox api is not supported by the current void-box daemon",
+            false,
+        ))
+    }
+
+    fn list_sandboxes(&self) -> Result<Vec<SandboxRecord>, ContractError> {
+        Err(ContractError::new(
+            ContractErrorCode::InternalError,
+            "sandbox api is not supported by the current void-box daemon",
+            false,
+        ))
+    }
+
+    fn exec_sandbox(
+        &mut self,
+        _request: SandboxExecRequest,
+    ) -> Result<SandboxExecResult, ContractError> {
+        Err(ContractError::new(
+            ContractErrorCode::InternalError,
+            "sandbox api is not supported by the current void-box daemon",
+            false,
+        ))
+    }
+
+    fn stop_sandbox(&mut self, _sandbox_id: &str) -> Result<SandboxRecord, ContractError> {
+        Err(ContractError::new(
+            ContractErrorCode::InternalError,
+            "sandbox api is not supported by the current void-box daemon",
+            false,
+        ))
+    }
+
+    fn delete_sandbox(&mut self, _sandbox_id: &str) -> Result<(), ContractError> {
+        Err(ContractError::new(
+            ContractErrorCode::InternalError,
+            "sandbox api is not supported by the current void-box daemon",
+            false,
+        ))
     }
 }
 
