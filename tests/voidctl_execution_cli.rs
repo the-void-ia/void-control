@@ -935,6 +935,256 @@ fn interactive_yolo_dry_run_prints_error_for_bridge_failure() {
 }
 
 #[test]
+fn interactive_team_dry_run_posts_spec_and_prints_compiled_summary() {
+    let (base_url, requests, server) = spawn_fake_bridge(vec![FakeResponse {
+        status: 200,
+        body: json!({
+            "kind": "team",
+            "compiled_primitive": "swarm",
+            "compiled": {
+                "goal": "rust-article-team",
+                "workflow_template": "examples/runtime-templates/warm_agent_basic.yaml",
+                "mode": "swarm",
+                "variation_source": "explicit",
+                "candidates_per_iteration": 1,
+                "candidate_overrides": [
+                    { "agent.prompt": "Gather evidence", "agent.role": "Researcher", "agent.goal": "Find information" }
+                ],
+                "overrides": {
+                    "agent.prompt": "Gather evidence",
+                    "agent.role": "Researcher",
+                    "agent.goal": "Find information"
+                }
+            }
+        }),
+    }]);
+
+    let inputs_path = temp_inputs_path("team.json");
+    fs::write(
+        &inputs_path,
+        r#"{"api_version":"v1","kind":"team","metadata":{"name":"rust-article-team"},"agents":[{"name":"researcher","role":"Researcher","goal":"Find information"}],"tasks":[{"name":"research","description":"Gather evidence","agent":"researcher"}],"process":{"type":"parallel"}}"#,
+    )
+    .expect("write inputs");
+
+    let mut child = voidctl_command(&base_url)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn voidctl");
+    let command = format!("/team dry-run {}\n/exit\n", inputs_path.display());
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(command.as_bytes())
+        .expect("write stdin");
+
+    let output = child.wait_with_output().expect("wait output");
+    server.join().expect("join fake bridge");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout");
+    assert!(stdout.contains("kind=team"));
+    assert!(stdout.contains("compiled_primitive=swarm"));
+    assert!(stdout.contains("workflow_template=examples/runtime-templates/warm_agent_basic.yaml"));
+
+    let requests = requests.lock().expect("lock requests");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "POST");
+    assert_eq!(requests[0].path, "/v1/teams/dry-run");
+}
+
+#[test]
+fn interactive_team_run_posts_spec_and_prints_run_summary() {
+    let (base_url, requests, server) = spawn_fake_bridge(vec![FakeResponse {
+        status: 200,
+        body: json!({
+            "kind": "team",
+            "execution_id": "exec-team-2",
+            "compiled_primitive": "swarm",
+            "status": "Pending",
+            "goal": "rust-article-team"
+        }),
+    }]);
+
+    let inputs_path = temp_inputs_path("team-run.json");
+    fs::write(
+        &inputs_path,
+        r#"{"api_version":"v1","kind":"team","metadata":{"name":"rust-article-team"},"agents":[{"name":"researcher","role":"Researcher","goal":"Find information"}],"tasks":[{"name":"research","description":"Gather evidence","agent":"researcher"}],"process":{"type":"parallel"}}"#,
+    )
+    .expect("write inputs");
+
+    let mut child = voidctl_command(&base_url)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn voidctl");
+    let command = format!("/team run {}\n/exit\n", inputs_path.display());
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(command.as_bytes())
+        .expect("write stdin");
+
+    let output = child.wait_with_output().expect("wait output");
+    server.join().expect("join fake bridge");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout");
+    assert!(stdout.contains("kind=team"));
+    assert!(stdout.contains("execution_id=exec-team-2"));
+    assert!(stdout.contains("compiled_primitive=swarm"));
+    assert!(stdout.contains("status=Pending"));
+
+    let requests = requests.lock().expect("lock requests");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "POST");
+    assert_eq!(requests[0].path, "/v1/teams/run");
+}
+
+#[test]
+fn interactive_team_dry_run_prints_error_for_bridge_failure() {
+    let (base_url, _requests, server) = spawn_fake_bridge(vec![FakeResponse {
+        status: 400,
+        body: json!({
+            "message": "team spec must include at least one task"
+        }),
+    }]);
+
+    let inputs_path = temp_inputs_path("team-invalid.json");
+    fs::write(
+        &inputs_path,
+        r#"{"api_version":"v1","kind":"team","agents":[{"name":"researcher","role":"Researcher","goal":"Find information"}],"tasks":[],"process":{"type":"parallel"}}"#,
+    )
+    .expect("write inputs");
+
+    let mut child = voidctl_command(&base_url)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn voidctl");
+    let command = format!("/team dry-run {}\n/exit\n", inputs_path.display());
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(command.as_bytes())
+        .expect("write stdin");
+
+    let output = child.wait_with_output().expect("wait output");
+    server.join().expect("join fake bridge");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout");
+    assert!(stdout.contains("error: team spec must include at least one task"));
+}
+
+#[test]
+fn team_dry_run_from_stdin_posts_spec_and_prints_compiled_summary() {
+    let (base_url, requests, server) = spawn_fake_bridge(vec![FakeResponse {
+        status: 200,
+        body: json!({
+            "kind": "team",
+            "compiled_primitive": "swarm",
+            "compiled": {
+                "goal": "rust-article-team",
+                "workflow_template": "examples/runtime-templates/warm_agent_basic.yaml",
+                "mode": "swarm",
+                "variation_source": "explicit",
+                "candidates_per_iteration": 1,
+                "candidate_overrides": [
+                    { "agent.prompt": "Gather evidence", "agent.role": "Researcher", "agent.goal": "Find information" }
+                ],
+                "overrides": {
+                    "agent.prompt": "Gather evidence",
+                    "agent.role": "Researcher",
+                    "agent.goal": "Find information"
+                }
+            }
+        }),
+    }]);
+
+    let mut child = voidctl_command(&base_url)
+        .args(["team", "dry-run", "--stdin"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn voidctl");
+    let spec = r#"{"api_version":"v1","kind":"team","metadata":{"name":"rust-article-team"},"agents":[{"name":"researcher","role":"Researcher","goal":"Find information"}],"tasks":[{"name":"research","description":"Gather evidence","agent":"researcher"}],"process":{"type":"parallel"}}"#;
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(spec.as_bytes())
+        .expect("write stdin");
+
+    let output = child.wait_with_output().expect("wait output");
+    server.join().expect("join fake bridge");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout");
+    assert!(stdout.contains("kind=team"));
+    assert!(stdout.contains("compiled_primitive=swarm"));
+    assert!(stdout.contains("workflow_template=examples/runtime-templates/warm_agent_basic.yaml"));
+
+    let requests = requests.lock().expect("lock requests");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "POST");
+    assert_eq!(requests[0].path, "/v1/teams/dry-run");
+    assert_eq!(requests[0].body, spec);
+}
+
+#[test]
+fn team_run_from_stdin_posts_spec_and_prints_run_summary() {
+    let (base_url, requests, server) = spawn_fake_bridge(vec![FakeResponse {
+        status: 200,
+        body: json!({
+            "kind": "team",
+            "execution_id": "exec-team-1",
+            "compiled_primitive": "swarm",
+            "status": "Pending",
+            "goal": "rust-article-team"
+        }),
+    }]);
+
+    let mut child = voidctl_command(&base_url)
+        .args(["team", "run", "--stdin"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn voidctl");
+    let spec = r#"{"api_version":"v1","kind":"team","metadata":{"name":"rust-article-team"},"agents":[{"name":"researcher","role":"Researcher","goal":"Find information"}],"tasks":[{"name":"research","description":"Gather evidence","agent":"researcher"}],"process":{"type":"parallel"}}"#;
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(spec.as_bytes())
+        .expect("write stdin");
+
+    let output = child.wait_with_output().expect("wait output");
+    server.join().expect("join fake bridge");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout");
+    assert!(stdout.contains("kind=team"));
+    assert!(stdout.contains("execution_id=exec-team-1"));
+    assert!(stdout.contains("compiled_primitive=swarm"));
+    assert!(stdout.contains("status=Pending"));
+
+    let requests = requests.lock().expect("lock requests");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "POST");
+    assert_eq!(requests[0].path, "/v1/teams/run");
+    assert_eq!(requests[0].body, spec);
+}
+
+#[test]
 fn batch_dry_run_from_stdin_posts_spec_and_prints_compiled_summary() {
     let (base_url, requests, server) = spawn_fake_bridge(vec![FakeResponse {
         status: 200,

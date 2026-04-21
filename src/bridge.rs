@@ -29,6 +29,8 @@ use crate::orchestration::{
 #[cfg(feature = "serde")]
 use crate::runtime::{MockRuntime, VoidBoxRuntimeClient};
 #[cfg(feature = "serde")]
+use crate::team;
+#[cfg(feature = "serde")]
 use crate::templates;
 
 #[cfg(feature = "serde")]
@@ -425,6 +427,18 @@ fn handle_bridge_request(
         return handle_batch_dry_run(body);
     }
 
+    if method == "POST" && path == "/v1/teams/dry-run" {
+        return handle_team_dry_run(body);
+    }
+
+    if method == "POST" && path == "/v1/teams/run" {
+        return handle_team_run(body, config);
+    }
+
+    if method == "GET" && path.starts_with("/v1/team-runs/") {
+        return handle_team_get(path, config);
+    }
+
     if method == "POST" && (path == "/v1/batch/run" || path == "/v1/yolo/run") {
         return handle_batch_run(body, config);
     }
@@ -587,6 +601,112 @@ fn handle_batch_dry_run(body: &str) -> JsonHttpResponse {
 }
 
 #[cfg(feature = "serde")]
+fn handle_team_dry_run(body: &str) -> JsonHttpResponse {
+    let spec = match parse_submitted_team_spec(body) {
+        Ok(spec) => spec,
+        Err(response) => return response,
+    };
+    let execution = match team::compile_team_spec(&spec) {
+        Ok(execution) => execution,
+        Err(err) => {
+            return json_response(
+                400,
+                &ApiError {
+                    code: "INVALID_TEAM",
+                    message: err.to_string(),
+                    retryable: false,
+                },
+            )
+        }
+    };
+
+    json_response(
+        200,
+        &json!({
+            "kind": "team",
+            "compiled_primitive": execution.mode,
+            "compiled": compiled_execution_summary(&execution)
+        }),
+    )
+}
+
+#[cfg(feature = "serde")]
+fn handle_team_run(body: &str, config: &BridgeConfig) -> JsonHttpResponse {
+    let spec = match parse_submitted_team_spec(body) {
+        Ok(spec) => spec,
+        Err(response) => return response,
+    };
+    let execution_spec = match team::compile_team_spec(&spec) {
+        Ok(execution) => execution,
+        Err(err) => {
+            return json_response(
+                400,
+                &ApiError {
+                    code: "INVALID_TEAM",
+                    message: err.to_string(),
+                    retryable: false,
+                },
+            )
+        }
+    };
+
+    let store = FsExecutionStore::new(config.execution_dir.clone());
+    let execution_id = format!("exec-{}", now_ms());
+    match ExecutionService::<MockRuntime>::submit_execution(&store, &execution_id, &execution_spec)
+    {
+        Ok(execution) => json_response(
+            200,
+            &json!({
+                "kind": "team",
+                "execution_id": execution.execution_id,
+                "compiled_primitive": execution_spec.mode,
+                "status": execution.status,
+                "goal": execution.goal
+            }),
+        ),
+        Err(err) => json_response(
+            500,
+            &ApiError {
+                code: "INTERNAL_ERROR",
+                message: err.to_string(),
+                retryable: true,
+            },
+        ),
+    }
+}
+
+#[cfg(feature = "serde")]
+fn handle_team_get(path: &str, config: &BridgeConfig) -> JsonHttpResponse {
+    let Some(execution_id) = path.strip_prefix("/v1/team-runs/") else {
+        return json_response(
+            404,
+            &ApiError {
+                code: "NOT_FOUND",
+                message: format!("no route for GET {path}"),
+                retryable: false,
+            },
+        );
+    };
+
+    let execution_path = format!("/v1/executions/{execution_id}");
+    let response = handle_execution_get(&execution_path, config);
+    let Ok(mut value) = serde_json::from_slice::<Value>(&response.body) else {
+        return response;
+    };
+    if response.status == 200 {
+        let Some(object) = value.as_object_mut() else {
+            return response;
+        };
+        object.insert("kind".to_string(), Value::String("team".to_string()));
+        object.insert(
+            "run_id".to_string(),
+            Value::String(execution_id.to_string()),
+        );
+    }
+    json_response(response.status, &value)
+}
+
+#[cfg(feature = "serde")]
 fn handle_batch_run(body: &str, config: &BridgeConfig) -> JsonHttpResponse {
     let spec = match parse_submitted_batch_spec(body) {
         Ok(spec) => spec,
@@ -684,6 +804,26 @@ fn parse_submitted_batch_spec(body: &str) -> Result<batch::BatchSpec, JsonHttpRe
             400,
             &ApiError {
                 code: "INVALID_BATCH",
+                message: err.to_string(),
+                retryable: false,
+            },
+        )
+    })
+}
+
+#[cfg(feature = "serde")]
+fn parse_submitted_team_spec(body: &str) -> Result<team::TeamSpec, JsonHttpResponse> {
+    let trimmed = body.trim_start();
+    let parsed = if trimmed.starts_with('{') || trimmed.starts_with('[') {
+        team::parse_team_json(body)
+    } else {
+        team::parse_team_yaml(body)
+    };
+    parsed.map_err(|err| {
+        json_response(
+            400,
+            &ApiError {
+                code: "INVALID_TEAM",
                 message: err.to_string(),
                 retryable: false,
             },

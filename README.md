@@ -337,6 +337,39 @@ Interactive console:
 /yolo run examples/batch/background_repo_work.yaml
 ```
 
+### Team
+
+`team` is the phase-1 high-level multi-agent authoring surface. Users define
+`agents`, `tasks`, and a `process`, and `void-control` compiles that into the
+existing orchestration engine.
+
+HTTP:
+
+```bash
+curl -sS -X POST http://127.0.0.1:43210/v1/teams/dry-run \
+  -H 'Content-Type: text/yaml' \
+  --data-binary @examples/team/rust_article_team.yaml
+
+curl -sS -X POST http://127.0.0.1:43210/v1/teams/run \
+  -H 'Content-Type: text/yaml' \
+  --data-binary @examples/team/rust_article_team.yaml
+```
+
+CLI:
+
+```bash
+voidctl team dry-run examples/team/rust_article_team.yaml
+voidctl team run examples/team/rust_article_team.yaml
+cat examples/team/rust_article_team.yaml | voidctl team run --stdin
+```
+
+Interactive console:
+
+```text
+/team dry-run examples/team/rust_article_team.yaml
+/team run examples/team/rust_article_team.yaml
+```
+
 ### 7) Run the supervision example
 
 Use the checked-in supervision example to exercise the flat

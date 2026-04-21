@@ -194,6 +194,10 @@ Important:
   - `yolo dry-run --stdin`
   - `yolo run <spec-path>`
   - `yolo run --stdin`
+  - `team dry-run <spec-path>`
+  - `team dry-run --stdin`
+  - `team run <spec-path>`
+  - `team run --stdin`
 - interactive `voidctl` console also exposes:
   - `/template list`
   - `/template get <template-id>`
@@ -203,8 +207,11 @@ Important:
   - `/batch run <spec-path>`
   - `/yolo dry-run <spec-path>`
   - `/yolo run <spec-path>`
+  - `/team dry-run <spec-path>`
+  - `/team run <spec-path>`
 - `batch` is the canonical high-level remote background execution surface
 - `yolo` is an accepted alias for `batch`
+- `team` is the phase-1 high-level multi-agent authoring surface
 - use `voidctl execution ...` for terminal operator workflows; use the bridge
   HTTP API or UI when you need direct API-driven inspection or browser workflows
 - quote URLs that contain `?` when using `curl` from `zsh`
@@ -221,6 +228,10 @@ Important:
   - `POST /v1/yolo/dry-run`
   - `POST /v1/yolo/run`
   - `GET /v1/yolo-runs/{id}`
+- team bridge endpoints:
+  - `POST /v1/teams/dry-run`
+  - `POST /v1/teams/run`
+  - `GET /v1/team-runs/{id}`
 
 ## Runtime compatibility commands
 

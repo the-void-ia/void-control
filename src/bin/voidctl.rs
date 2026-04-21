@@ -77,6 +77,13 @@ enum BatchCommand {
 
 #[cfg(feature = "serde")]
 #[derive(Debug, Clone, PartialEq, Eq)]
+enum TeamCommand {
+    DryRun { spec: Option<String>, stdin: bool },
+    Run { spec: Option<String>, stdin: bool },
+}
+
+#[cfg(feature = "serde")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum CliCommand {
     Serve,
     Help,
@@ -84,6 +91,7 @@ enum CliCommand {
     Execution(ExecutionCommand),
     Template(TemplateCommand),
     Batch(BatchCommand),
+    Team(TeamCommand),
 }
 
 #[cfg(feature = "serde")]
@@ -116,6 +124,11 @@ fn template_subcommand_candidates() -> &'static [&'static str] {
 
 #[cfg(feature = "serde")]
 fn batch_subcommand_candidates() -> &'static [&'static str] {
+    &["dry-run", "run"]
+}
+
+#[cfg(feature = "serde")]
+fn team_subcommand_candidates() -> &'static [&'static str] {
     &["dry-run", "run"]
 }
 
@@ -323,8 +336,26 @@ where
                 )),
             }
         }
+        "team" => {
+            let action = iter.next().ok_or_else(|| {
+                "usage: voidctl team <dry-run|run> [<spec-path> | --stdin]".to_string()
+            })?;
+            match action {
+                "dry-run" => {
+                    parse_execution_file_or_stdin(&mut iter, "dry-run").map(|(spec, stdin)| {
+                        CliCommand::Team(TeamCommand::DryRun { spec, stdin })
+                    })
+                }
+                "run" => parse_execution_file_or_stdin(&mut iter, "run")
+                    .map(|(spec, stdin)| CliCommand::Team(TeamCommand::Run { spec, stdin })),
+                other => Err(format!(
+                    "unknown team subcommand '{other}'. supported: {}",
+                    team_subcommand_candidates().join(", ")
+                )),
+            }
+        }
         other => Err(format!(
-            "unknown command '{other}'. supported: serve, help, execution, template, batch, yolo"
+            "unknown command '{other}'. supported: serve, help, execution, template, batch, yolo, team"
         )),
     }
 }
@@ -449,7 +480,11 @@ fn top_level_help_text() -> &'static str {
   voidctl yolo dry-run <spec-path>
   voidctl yolo dry-run --stdin
   voidctl yolo run <spec-path>
-  voidctl yolo run --stdin"
+  voidctl yolo run --stdin
+  voidctl team dry-run <spec-path>
+  voidctl team dry-run --stdin
+  voidctl team run <spec-path>
+  voidctl team run --stdin"
 }
 
 #[cfg(feature = "serde")]
@@ -934,6 +969,7 @@ fn run() -> Result<(), String> {
         CliCommand::Execution(_) => {}
         CliCommand::Template(_) => {}
         CliCommand::Batch(_) => {}
+        CliCommand::Team(_) => {}
         CliCommand::Interactive => {}
     }
 
@@ -980,6 +1016,7 @@ fn run() -> Result<(), String> {
                 "/template",
                 "/batch",
                 "/yolo",
+                "/team",
                 "/help",
                 "/exit",
             ];
@@ -1019,6 +1056,7 @@ fn run() -> Result<(), String> {
                 ]),
                 "/template" => options.extend(["list", "get", "dry-run", "execute"]),
                 "/batch" | "/yolo" => options.extend(["dry-run", "run"]),
+                "/team" => options.extend(["dry-run", "run"]),
                 "/events" => options.push("--from"),
                 "/logs" => options.push("--follow"),
                 "/cancel" => options.push("--reason"),
@@ -1118,6 +1156,12 @@ fn run() -> Result<(), String> {
         BatchRun {
             spec: String,
             alias: String,
+        },
+        TeamDryRun {
+            spec: String,
+        },
+        TeamRun {
+            spec: String,
         },
         Help,
         Exit,
@@ -1493,6 +1537,26 @@ fn run() -> Result<(), String> {
                     other => Err(format!("unknown /{alias} action '{other}'")),
                 }
             }
+            "/team" => {
+                let action = tokens
+                    .next()
+                    .ok_or_else(|| "usage: /team <dry-run|run> <spec_file>".to_string())?;
+                match action {
+                    "dry-run" => Ok(Command::TeamDryRun {
+                        spec: tokens
+                            .next()
+                            .ok_or_else(|| "usage: /team dry-run <spec_file>".to_string())?
+                            .to_string(),
+                    }),
+                    "run" => Ok(Command::TeamRun {
+                        spec: tokens
+                            .next()
+                            .ok_or_else(|| "usage: /team run <spec_file>".to_string())?
+                            .to_string(),
+                    }),
+                    other => Err(format!("unknown /team action '{other}'")),
+                }
+            }
             "/help" => Ok(Command::Help),
             "/exit" | "/quit" => Ok(Command::Exit),
             other => Err(format!("unknown command '{other}'")),
@@ -1525,6 +1589,8 @@ fn run() -> Result<(), String> {
   /batch run <spec_file>
   /yolo dry-run <spec_file>
   /yolo run <spec_file>
+  /team dry-run <spec_file>
+  /team run <spec_file>
   /help
   /exit
 
@@ -2262,6 +2328,64 @@ Policy presets: fast | balanced | safe"
         }
     }
 
+    if let CliCommand::Team(command) = parsed_cli {
+        match command {
+            TeamCommand::DryRun { spec, stdin } => {
+                let spec = load_execution_spec_input(spec.as_deref(), stdin)?;
+                match bridge_request(&bridge_base_url, "POST", "/v1/teams/dry-run", Some(&spec)) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            return Err(bridge_error_message(&response));
+                        }
+                        print_batch_compilation_summary(&response.json);
+                    }
+                    Err(err) => return Err(err),
+                }
+                return Ok(());
+            }
+            TeamCommand::Run { spec, stdin } => {
+                let spec = load_execution_spec_input(spec.as_deref(), stdin)?;
+                match bridge_request(&bridge_base_url, "POST", "/v1/teams/run", Some(&spec)) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            return Err(bridge_error_message(&response));
+                        }
+                        println!(
+                            "kind={} execution_id={} compiled_primitive={} status={} goal={}",
+                            response
+                                .json
+                                .get("kind")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                            response
+                                .json
+                                .get("execution_id")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                            response
+                                .json
+                                .get("compiled_primitive")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                            response
+                                .json
+                                .get("status")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("unknown"),
+                            response
+                                .json
+                                .get("goal")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                        );
+                    }
+                    Err(err) => return Err(err),
+                }
+                return Ok(());
+            }
+        }
+    }
+
     let client = VoidBoxRuntimeClient::new(base_url.clone(), 250);
     let session_file = session_path();
     let mut session = load_session(&session_file);
@@ -2828,6 +2952,66 @@ Policy presets: fast | balanced | safe"
                     Err(err) => println!("error: {err}"),
                 }
             }
+            Command::TeamDryRun { spec } => {
+                match load_execution_spec_file(&spec).and_then(|spec_text| {
+                    bridge_request(
+                        &bridge_base_url,
+                        "POST",
+                        "/v1/teams/dry-run",
+                        Some(&spec_text),
+                    )
+                }) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            println!("error: {}", bridge_error_message(&response));
+                            continue;
+                        }
+                        print_batch_compilation_summary(&response.json);
+                    }
+                    Err(err) => println!("error: {err}"),
+                }
+            }
+            Command::TeamRun { spec } => {
+                match load_execution_spec_file(&spec).and_then(|spec_text| {
+                    bridge_request(&bridge_base_url, "POST", "/v1/teams/run", Some(&spec_text))
+                }) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            println!("error: {}", bridge_error_message(&response));
+                            continue;
+                        }
+                        println!(
+                            "kind={} execution_id={} compiled_primitive={} status={} goal={}",
+                            response
+                                .json
+                                .get("kind")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                            response
+                                .json
+                                .get("execution_id")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                            response
+                                .json
+                                .get("compiled_primitive")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                            response
+                                .json
+                                .get("status")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("unknown"),
+                            response
+                                .json
+                                .get("goal")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                        );
+                    }
+                    Err(err) => println!("error: {err}"),
+                }
+            }
         }
 
         if let Err(e) = save_session(&session_file, &session) {
@@ -3006,6 +3190,19 @@ mod tests {
     }
 
     #[test]
+    fn parses_team_run() {
+        let command =
+            parse_cli_args(["team", "run", "examples/team/rust_article_team.yaml"]).unwrap();
+        assert_eq!(
+            command,
+            CliCommand::Team(TeamCommand::Run {
+                spec: Some("examples/team/rust_article_team.yaml".to_string()),
+                stdin: false,
+            })
+        );
+    }
+
+    #[test]
     fn rejects_extra_execution_watch_args() {
         let err = parse_cli_args(["execution", "watch", "exec-1", "extra"]).unwrap_err();
         assert!(err.contains("usage: voidctl execution watch <execution_id>"));
@@ -3059,6 +3256,13 @@ mod tests {
     }
 
     #[test]
+    fn completes_team_subcommands() {
+        let completions = team_subcommand_candidates();
+        assert!(completions.contains(&"dry-run"));
+        assert!(completions.contains(&"run"));
+    }
+
+    #[test]
     fn top_level_help_mentions_execution_commands() {
         let help = top_level_help_text();
         assert!(help.contains("voidctl execution submit <spec-path>"));
@@ -3080,6 +3284,8 @@ mod tests {
         assert!(help.contains("voidctl batch run --stdin"));
         assert!(help.contains("voidctl yolo dry-run <spec-path>"));
         assert!(help.contains("voidctl yolo run --stdin"));
+        assert!(help.contains("voidctl team dry-run <spec-path>"));
+        assert!(help.contains("voidctl team run --stdin"));
     }
 
     #[test]
