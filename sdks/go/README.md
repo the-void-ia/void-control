@@ -6,9 +6,16 @@ The first supported surface is:
 
 - templates list/get/dry-run/execute
 - executions get/wait
+- batch run/dry-run/get/wait
+- yolo run/dry-run/get/wait
 
-Examples under `examples/` are template-execution examples against the
-`void-control` bridge.
+Examples under `examples/` are bridge examples against `void-control`:
+
+- `template_execute`
+- `batch_run`
+
+`batch` is the canonical remote-background execution API. `yolo` is an alias
+for the same high-level surface.
 
 They are not ComputeSDK compatibility examples yet. A real ComputeSDK adapter
 still needs to model the sandbox lifecycle and action contract:

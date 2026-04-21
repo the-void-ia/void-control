@@ -10,8 +10,22 @@ import { VoidControlClient } from "./src/index.js";
 const client = new VoidControlClient({ baseUrl: "http://127.0.0.1:43210" });
 ```
 
-Examples under `examples/` are template-execution examples against the
-`void-control` bridge.
+The first supported surface is:
+
+- `client.templates`
+- `client.executions`
+- `client.batch`
+- `client.batchRuns`
+- `client.yolo`
+- `client.yoloRuns`
+
+Examples under `examples/` are bridge examples against `void-control`:
+
+- `templateExecute.mjs`
+- `batchRun.mjs`
+
+`batch` is the canonical remote-background execution API. `yolo` is an alias
+for the same high-level surface.
 
 They are not ComputeSDK compatibility examples yet. A real ComputeSDK adapter
 still needs to model the sandbox lifecycle and action contract:
