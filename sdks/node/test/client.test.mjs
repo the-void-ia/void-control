@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { VoidControlClient } from "../src/index.js";
+import { BridgeError } from "../src/models.js";
 
 test("client exposes template and execution subclients", () => {
   const client = new VoidControlClient({ baseUrl: "http://127.0.0.1:43210" });
@@ -559,4 +560,70 @@ test("compute methods use the bridge API", async () => {
   assert.equal(requests[10].path, "/v1/pools");
   assert.equal(requests[11].path, "/v1/pools/pool-1");
   assert.equal(requests[12].path, "/v1/pools/pool-1/scale");
+});
+
+test("compute methods preserve bridge errors", async () => {
+  const responses = [
+    {
+      status: 404,
+      body: {
+        message: "sandbox 'sbx-missing' not found",
+        code: "SANDBOX_NOT_FOUND",
+        retryable: false
+      }
+    },
+    {
+      status: 404,
+      body: {
+        message: "snapshot 'snap-missing' not found",
+        code: "SNAPSHOT_NOT_FOUND",
+        retryable: false
+      }
+    },
+    {
+      status: 503,
+      body: {
+        message: "pool controller unavailable",
+        code: "POOL_UNAVAILABLE",
+        retryable: true
+      }
+    }
+  ];
+
+  const fetchImpl = async () => {
+    const response = responses.shift();
+    return new Response(JSON.stringify(response.body), {
+      status: response.status,
+      headers: { "content-type": "application/json" }
+    });
+  };
+
+  const client = new VoidControlClient({
+    baseUrl: "http://127.0.0.1:43210",
+    fetchImpl
+  });
+
+  await assert.rejects(client.sandboxes.get("sbx-missing"), (error) => {
+    assert.ok(error instanceof BridgeError);
+    assert.equal(error.message, "sandbox 'sbx-missing' not found");
+    assert.equal(error.code, "SANDBOX_NOT_FOUND");
+    assert.equal(error.retryable, false);
+    return true;
+  });
+
+  await assert.rejects(client.snapshots.delete("snap-missing"), (error) => {
+    assert.ok(error instanceof BridgeError);
+    assert.equal(error.message, "snapshot 'snap-missing' not found");
+    assert.equal(error.code, "SNAPSHOT_NOT_FOUND");
+    assert.equal(error.retryable, false);
+    return true;
+  });
+
+  await assert.rejects(client.pools.scale("pool-1", { warm: 8, max: 24 }), (error) => {
+    assert.ok(error instanceof BridgeError);
+    assert.equal(error.message, "pool controller unavailable");
+    assert.equal(error.code, "POOL_UNAVAILABLE");
+    assert.equal(error.retryable, true);
+    return true;
+  });
 });

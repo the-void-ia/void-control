@@ -558,6 +558,66 @@ class ClientMethodsTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(requests[11][:2], ("GET", "/v1/pools/pool-1"))
         self.assertEqual(requests[12][:2], ("POST", "/v1/pools/pool-1/scale"))
 
+    async def test_compute_methods_raise_bridge_error(self) -> None:
+        from void_control import VoidControlClient
+        from void_control.models import BridgeError
+
+        responses = [
+            (
+                404,
+                {
+                    "message": "sandbox 'sbx-missing' not found",
+                    "code": "SANDBOX_NOT_FOUND",
+                    "retryable": False,
+                },
+            ),
+            (
+                404,
+                {
+                    "message": "snapshot 'snap-missing' not found",
+                    "code": "SNAPSHOT_NOT_FOUND",
+                    "retryable": False,
+                },
+            ),
+            (
+                503,
+                {
+                    "message": "pool controller unavailable",
+                    "code": "POOL_UNAVAILABLE",
+                    "retryable": True,
+                },
+            ),
+        ]
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            status, payload = responses.pop(0)
+            return httpx.Response(status, json=payload)
+
+        client = VoidControlClient(
+            base_url="http://127.0.0.1:43210",
+            transport=httpx.MockTransport(handler),
+        )
+
+        with self.assertRaises(BridgeError) as sandbox_err:
+            await client.sandboxes.get("sbx-missing")
+        self.assertEqual(str(sandbox_err.exception), "sandbox 'sbx-missing' not found")
+        self.assertEqual(sandbox_err.exception.code, "SANDBOX_NOT_FOUND")
+        self.assertFalse(sandbox_err.exception.retryable)
+
+        with self.assertRaises(BridgeError) as snapshot_err:
+            await client.snapshots.delete("snap-missing")
+        self.assertEqual(str(snapshot_err.exception), "snapshot 'snap-missing' not found")
+        self.assertEqual(snapshot_err.exception.code, "SNAPSHOT_NOT_FOUND")
+        self.assertFalse(snapshot_err.exception.retryable)
+
+        with self.assertRaises(BridgeError) as pool_err:
+            await client.pools.scale("pool-1", {"warm": 8, "max": 24})
+        self.assertEqual(str(pool_err.exception), "pool controller unavailable")
+        self.assertEqual(pool_err.exception.code, "POOL_UNAVAILABLE")
+        self.assertTrue(pool_err.exception.retryable)
+
+        await client.aclose()
+
 
 if __name__ == "__main__":
     unittest.main()

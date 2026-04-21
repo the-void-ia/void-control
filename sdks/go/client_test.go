@@ -678,6 +678,121 @@ func TestComputeMethods(t *testing.T) {
 	}
 }
 
+func TestComputeMethodsPreserveBridgeErrors(t *testing.T) {
+	responses := []FakeResponse{
+		{
+			StatusCode: http.StatusNotFound,
+			Body: map[string]any{
+				"message":   "sandbox 'sbx-missing' not found",
+				"code":      "SANDBOX_NOT_FOUND",
+				"retryable": false,
+			},
+		},
+		{
+			StatusCode: http.StatusNotFound,
+			Body: map[string]any{
+				"message":   "snapshot 'snap-missing' not found",
+				"code":      "SNAPSHOT_NOT_FOUND",
+				"retryable": false,
+			},
+		},
+		{
+			StatusCode: http.StatusServiceUnavailable,
+			Body: map[string]any{
+				"message":   "pool controller unavailable",
+				"code":      "POOL_UNAVAILABLE",
+				"retryable": true,
+			},
+		},
+	}
+
+	client := NewClient("http://void-control.test")
+	client.HTTPClient = &http.Client{
+		Transport: fakeResponseTransport(t, responses),
+	}
+
+	_, err := client.Sandboxes.Get("sbx-missing")
+	if err == nil {
+		t.Fatalf("Sandboxes.Get should fail")
+	}
+	sandboxErr, ok := err.(*BridgeError)
+	if !ok {
+		t.Fatalf("Sandboxes.Get error type = %T", err)
+	}
+	if sandboxErr.Message != "sandbox 'sbx-missing' not found" {
+		t.Fatalf("sandboxErr.Message = %q", sandboxErr.Message)
+	}
+	if sandboxErr.Code != "SANDBOX_NOT_FOUND" {
+		t.Fatalf("sandboxErr.Code = %q", sandboxErr.Code)
+	}
+	if sandboxErr.Retryable {
+		t.Fatalf("sandboxErr.Retryable = true")
+	}
+
+	_, err = client.Snapshots.Delete("snap-missing")
+	if err == nil {
+		t.Fatalf("Snapshots.Delete should fail")
+	}
+	snapshotErr, ok := err.(*BridgeError)
+	if !ok {
+		t.Fatalf("Snapshots.Delete error type = %T", err)
+	}
+	if snapshotErr.Message != "snapshot 'snap-missing' not found" {
+		t.Fatalf("snapshotErr.Message = %q", snapshotErr.Message)
+	}
+	if snapshotErr.Code != "SNAPSHOT_NOT_FOUND" {
+		t.Fatalf("snapshotErr.Code = %q", snapshotErr.Code)
+	}
+	if snapshotErr.Retryable {
+		t.Fatalf("snapshotErr.Retryable = true")
+	}
+
+	_, err = client.Pools.Scale("pool-1", map[string]any{"warm": 8, "max": 24})
+	if err == nil {
+		t.Fatalf("Pools.Scale should fail")
+	}
+	poolErr, ok := err.(*BridgeError)
+	if !ok {
+		t.Fatalf("Pools.Scale error type = %T", err)
+	}
+	if poolErr.Message != "pool controller unavailable" {
+		t.Fatalf("poolErr.Message = %q", poolErr.Message)
+	}
+	if poolErr.Code != "POOL_UNAVAILABLE" {
+		t.Fatalf("poolErr.Code = %q", poolErr.Code)
+	}
+	if !poolErr.Retryable {
+		t.Fatalf("poolErr.Retryable = false")
+	}
+}
+
+type FakeResponse struct {
+	StatusCode int
+	Body       map[string]any
+}
+
+func fakeResponseTransport(t *testing.T, responses []FakeResponse) roundTripFunc {
+	t.Helper()
+
+	return func(r *http.Request) (*http.Response, error) {
+		if len(responses) == 0 {
+			t.Fatalf("received unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		response := responses[0]
+		responses = responses[1:]
+		body, err := json.Marshal(response.Body)
+		if err != nil {
+			t.Fatalf("marshal response: %v", err)
+		}
+		return &http.Response{
+			StatusCode: response.StatusCode,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(bytes.NewReader(body)),
+			Request:    r,
+		}, nil
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (fn roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {

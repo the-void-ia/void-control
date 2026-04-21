@@ -1416,6 +1416,31 @@ fn sandbox_list_prints_available_sandboxes() {
 }
 
 #[test]
+fn sandbox_get_bridge_failure_returns_non_zero_and_prints_error() {
+    let (base_url, requests, server) = spawn_fake_bridge(vec![FakeResponse {
+        status: 404,
+        body: json!({
+            "message": "sandbox 'sbx-missing' not found"
+        }),
+    }]);
+
+    let output = voidctl_command(&base_url)
+        .args(["sandbox", "get", "sbx-missing"])
+        .output()
+        .expect("sandbox get output");
+    server.join().expect("join fake bridge");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).expect("stderr");
+    assert!(stderr.contains("fatal: sandbox 'sbx-missing' not found"));
+
+    let requests = requests.lock().expect("lock requests");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "GET");
+    assert_eq!(requests[0].path, "/v1/sandboxes/sbx-missing");
+}
+
+#[test]
 fn snapshot_create_from_stdin_posts_spec_and_prints_summary() {
     let (base_url, requests, server) = spawn_fake_bridge(vec![FakeResponse {
         status: 200,
@@ -1620,6 +1645,56 @@ fn pool_scale_from_stdin_posts_request_and_prints_summary() {
 }
 
 #[test]
+fn snapshot_delete_bridge_failure_returns_non_zero_and_prints_error() {
+    let (base_url, requests, server) = spawn_fake_bridge(vec![FakeResponse {
+        status: 404,
+        body: json!({
+            "message": "snapshot 'snap-missing' not found"
+        }),
+    }]);
+
+    let output = voidctl_command(&base_url)
+        .args(["snapshot", "delete", "snap-missing"])
+        .output()
+        .expect("snapshot delete output");
+    server.join().expect("join fake bridge");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).expect("stderr");
+    assert!(stderr.contains("fatal: snapshot 'snap-missing' not found"));
+
+    let requests = requests.lock().expect("lock requests");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "DELETE");
+    assert_eq!(requests[0].path, "/v1/snapshots/snap-missing");
+}
+
+#[test]
+fn pool_get_bridge_failure_returns_non_zero_and_prints_error() {
+    let (base_url, requests, server) = spawn_fake_bridge(vec![FakeResponse {
+        status: 404,
+        body: json!({
+            "message": "pool 'pool-missing' not found"
+        }),
+    }]);
+
+    let output = voidctl_command(&base_url)
+        .args(["pool", "get", "pool-missing"])
+        .output()
+        .expect("pool get output");
+    server.join().expect("join fake bridge");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).expect("stderr");
+    assert!(stderr.contains("fatal: pool 'pool-missing' not found"));
+
+    let requests = requests.lock().expect("lock requests");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "GET");
+    assert_eq!(requests[0].path, "/v1/pools/pool-missing");
+}
+
+#[test]
 fn interactive_sandbox_create_posts_spec_and_prints_summary() {
     let (base_url, requests, server) = spawn_fake_bridge(vec![FakeResponse {
         status: 200,
@@ -1667,6 +1742,41 @@ fn interactive_sandbox_create_posts_spec_and_prints_summary() {
     let requests = requests.lock().expect("lock requests");
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].path, "/v1/sandboxes");
+}
+
+#[test]
+fn interactive_sandbox_get_prints_error_for_bridge_failure() {
+    let (base_url, requests, server) = spawn_fake_bridge(vec![FakeResponse {
+        status: 404,
+        body: json!({
+            "message": "sandbox 'sbx-missing' not found"
+        }),
+    }]);
+
+    let mut child = voidctl_command(&base_url)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn voidctl");
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(b"/sandbox get sbx-missing\n/exit\n")
+        .expect("write stdin");
+
+    let output = child.wait_with_output().expect("wait output");
+    server.join().expect("join fake bridge");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout");
+    assert!(stdout.contains("error: sandbox 'sbx-missing' not found"));
+
+    let requests = requests.lock().expect("lock requests");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "GET");
+    assert_eq!(requests[0].path, "/v1/sandboxes/sbx-missing");
 }
 
 #[test]
@@ -1724,6 +1834,41 @@ fn interactive_snapshot_replicate_posts_request_and_prints_summary() {
 }
 
 #[test]
+fn interactive_snapshot_delete_prints_error_for_bridge_failure() {
+    let (base_url, requests, server) = spawn_fake_bridge(vec![FakeResponse {
+        status: 404,
+        body: json!({
+            "message": "snapshot 'snap-missing' not found"
+        }),
+    }]);
+
+    let mut child = voidctl_command(&base_url)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn voidctl");
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(b"/snapshot delete snap-missing\n/exit\n")
+        .expect("write stdin");
+
+    let output = child.wait_with_output().expect("wait output");
+    server.join().expect("join fake bridge");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout");
+    assert!(stdout.contains("error: snapshot 'snap-missing' not found"));
+
+    let requests = requests.lock().expect("lock requests");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "DELETE");
+    assert_eq!(requests[0].path, "/v1/snapshots/snap-missing");
+}
+
+#[test]
 fn interactive_pool_scale_posts_request_and_prints_summary() {
     let (base_url, requests, server) = spawn_fake_bridge(vec![FakeResponse {
         status: 200,
@@ -1773,4 +1918,39 @@ fn interactive_pool_scale_posts_request_and_prints_summary() {
     let requests = requests.lock().expect("lock requests");
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].path, "/v1/pools/pool-1/scale");
+}
+
+#[test]
+fn interactive_pool_get_prints_error_for_bridge_failure() {
+    let (base_url, requests, server) = spawn_fake_bridge(vec![FakeResponse {
+        status: 404,
+        body: json!({
+            "message": "pool 'pool-missing' not found"
+        }),
+    }]);
+
+    let mut child = voidctl_command(&base_url)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn voidctl");
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(b"/pool get pool-missing\n/exit\n")
+        .expect("write stdin");
+
+    let output = child.wait_with_output().expect("wait output");
+    server.join().expect("join fake bridge");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout");
+    assert!(stdout.contains("error: pool 'pool-missing' not found"));
+
+    let requests = requests.lock().expect("lock requests");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "GET");
+    assert_eq!(requests[0].path, "/v1/pools/pool-missing");
 }
