@@ -1,6 +1,6 @@
 #![cfg(feature = "serde")]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 fn submit_team_dry_run(spec: &str) -> void_control::bridge::TestBridgeResponse {
     void_control::bridge::handle_bridge_request_for_test("POST", "/v1/teams/dry-run", Some(spec))
@@ -21,10 +21,7 @@ fn temp_bridge_root(name: &str) -> PathBuf {
     root
 }
 
-fn submit_team_run_with_root(
-    spec: &str,
-    root: &PathBuf,
-) -> void_control::bridge::TestBridgeResponse {
+fn submit_team_run_with_root(spec: &str, root: &Path) -> void_control::bridge::TestBridgeResponse {
     void_control::bridge::handle_bridge_request_with_dirs_for_test(
         "POST",
         "/v1/teams/run",
@@ -37,7 +34,7 @@ fn submit_team_run_with_root(
 
 fn fetch_team_run_with_root(
     execution_id: &str,
-    root: &PathBuf,
+    root: &Path,
 ) -> void_control::bridge::TestBridgeResponse {
     let path = format!("/v1/team-runs/{execution_id}");
     void_control::bridge::handle_bridge_request_with_dirs_for_test(
