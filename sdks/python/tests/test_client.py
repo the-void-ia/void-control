@@ -334,12 +334,50 @@ class ClientMethodsTest(unittest.IsolatedAsyncioTestCase):
                 ],
             },
             {
+                "kind": "sandbox",
+                "sandbox": {
+                    "sandbox_id": "sbx-1",
+                    "state": "running",
+                    "image": "python:3.12-slim",
+                    "cpus": 2,
+                    "memory_mb": 2048,
+                },
+            },
+            {
                 "kind": "sandbox_exec",
                 "result": {
                     "exit_code": 0,
                     "stdout": "hello\n",
                     "stderr": "",
                 },
+            },
+            {
+                "kind": "sandbox_deleted",
+                "sandbox_id": "sbx-1",
+            },
+            {
+                "kind": "snapshot",
+                "snapshot": {
+                    "snapshot_id": "snap-1",
+                    "source_sandbox_id": "sbx-1",
+                    "distribution": {
+                        "mode": "cached",
+                        "targets": ["node-a", "node-b"],
+                    },
+                },
+            },
+            {
+                "kind": "snapshot_list",
+                "snapshots": [
+                    {
+                        "snapshot_id": "snap-1",
+                        "source_sandbox_id": "sbx-1",
+                        "distribution": {
+                            "mode": "cached",
+                            "targets": ["node-a", "node-b"],
+                        },
+                    }
+                ],
             },
             {
                 "kind": "snapshot",
@@ -360,6 +398,27 @@ class ClientMethodsTest(unittest.IsolatedAsyncioTestCase):
                     "distribution": {
                         "mode": "copy",
                         "targets": ["node-a", "node-c"],
+                    },
+                },
+            },
+            {
+                "kind": "snapshot_deleted",
+                "snapshot_id": "snap-1",
+            },
+            {
+                "kind": "pool",
+                "pool": {
+                    "pool_id": "pool-1",
+                    "sandbox_spec": {
+                        "runtime": {
+                            "image": "python:3.12-slim",
+                            "cpus": 2,
+                            "memory_mb": 2048,
+                        }
+                    },
+                    "capacity": {
+                        "warm": 5,
+                        "max": 20,
                     },
                 },
             },
@@ -423,6 +482,7 @@ class ClientMethodsTest(unittest.IsolatedAsyncioTestCase):
             }
         )
         sandboxes = await client.sandboxes.list()
+        fetched_sandbox = await client.sandboxes.get("sbx-1")
         exec_result = await client.sandboxes.exec(
             "sbx-1",
             {
@@ -430,6 +490,7 @@ class ClientMethodsTest(unittest.IsolatedAsyncioTestCase):
                 "command": ["python3", "-c", "print('hello')"],
             },
         )
+        deleted_sandbox = await client.sandboxes.delete("sbx-1")
         snapshot = await client.snapshots.create(
             {
                 "api_version": "v1",
@@ -441,6 +502,8 @@ class ClientMethodsTest(unittest.IsolatedAsyncioTestCase):
                 },
             }
         )
+        snapshots = await client.snapshots.list()
+        fetched_snapshot = await client.snapshots.get("snap-1")
         replicated = await client.snapshots.replicate(
             "snap-1",
             {
@@ -448,6 +511,7 @@ class ClientMethodsTest(unittest.IsolatedAsyncioTestCase):
                 "targets": ["node-a", "node-c"],
             },
         )
+        deleted_snapshot = await client.snapshots.delete("snap-1")
         pool = await client.pools.create(
             {
                 "api_version": "v1",
@@ -462,24 +526,37 @@ class ClientMethodsTest(unittest.IsolatedAsyncioTestCase):
                 "capacity": {"warm": 5, "max": 20},
             }
         )
+        fetched_pool = await client.pools.get("pool-1")
         scaled = await client.pools.scale("pool-1", {"warm": 8, "max": 24})
         await client.aclose()
 
         self.assertEqual(sandbox.sandbox_id, "sbx-1")
         self.assertEqual(sandboxes[0].state, "running")
+        self.assertEqual(fetched_sandbox.image, "python:3.12-slim")
         self.assertEqual(exec_result.exit_code, 0)
+        self.assertEqual(deleted_sandbox.kind, "sandbox_deleted")
         self.assertEqual(snapshot.snapshot_id, "snap-1")
+        self.assertEqual(snapshots[0].snapshot_id, "snap-1")
+        self.assertEqual(fetched_snapshot.source_sandbox_id, "sbx-1")
         self.assertEqual(replicated.distribution["mode"], "copy")
+        self.assertEqual(deleted_snapshot.kind, "snapshot_deleted")
         self.assertEqual(pool.pool_id, "pool-1")
+        self.assertEqual(fetched_pool.capacity["warm"], 5)
         self.assertEqual(scaled.capacity["warm"], 8)
 
         self.assertEqual(requests[0][:2], ("POST", "/v1/sandboxes"))
         self.assertEqual(requests[1][:2], ("GET", "/v1/sandboxes"))
-        self.assertEqual(requests[2][:2], ("POST", "/v1/sandboxes/sbx-1/exec"))
-        self.assertEqual(requests[3][:2], ("POST", "/v1/snapshots"))
-        self.assertEqual(requests[4][:2], ("POST", "/v1/snapshots/snap-1/replicate"))
-        self.assertEqual(requests[5][:2], ("POST", "/v1/pools"))
-        self.assertEqual(requests[6][:2], ("POST", "/v1/pools/pool-1/scale"))
+        self.assertEqual(requests[2][:2], ("GET", "/v1/sandboxes/sbx-1"))
+        self.assertEqual(requests[3][:2], ("POST", "/v1/sandboxes/sbx-1/exec"))
+        self.assertEqual(requests[4][:2], ("DELETE", "/v1/sandboxes/sbx-1"))
+        self.assertEqual(requests[5][:2], ("POST", "/v1/snapshots"))
+        self.assertEqual(requests[6][:2], ("GET", "/v1/snapshots"))
+        self.assertEqual(requests[7][:2], ("GET", "/v1/snapshots/snap-1"))
+        self.assertEqual(requests[8][:2], ("POST", "/v1/snapshots/snap-1/replicate"))
+        self.assertEqual(requests[9][:2], ("DELETE", "/v1/snapshots/snap-1"))
+        self.assertEqual(requests[10][:2], ("POST", "/v1/pools"))
+        self.assertEqual(requests[11][:2], ("GET", "/v1/pools/pool-1"))
+        self.assertEqual(requests[12][:2], ("POST", "/v1/pools/pool-1/scale"))
 
 
 if __name__ == "__main__":

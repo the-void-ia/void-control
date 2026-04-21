@@ -1,4 +1,8 @@
-import { toSandboxExecResult, toSandboxRecord } from "./models.js";
+import {
+  toSandboxDeleteResult,
+  toSandboxExecResult,
+  toSandboxRecord
+} from "./models.js";
 
 export class SandboxesClient {
   constructor(client) {
@@ -31,6 +35,7 @@ export class SandboxesClient {
   }
 
   async delete(sandboxId) {
-    return this._client.deleteJson(`/v1/sandboxes/${sandboxId}`);
+    const payload = await this._client.deleteJson(`/v1/sandboxes/${sandboxId}`);
+    return toSandboxDeleteResult(payload);
   }
 }

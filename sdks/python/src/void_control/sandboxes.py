@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .models import SandboxExecResult, SandboxRecord
+from .models import SandboxDeleteResult, SandboxExecResult, SandboxRecord
 
 
 class SandboxesClient:
@@ -34,5 +34,6 @@ class SandboxesClient:
         payload = await self._client.post_json(f"/v1/sandboxes/{sandbox_id}/stop", {})
         return SandboxRecord.from_json(payload)
 
-    async def delete(self, sandbox_id: str) -> dict[str, Any]:
-        return await self._client.delete_json(f"/v1/sandboxes/{sandbox_id}")
+    async def delete(self, sandbox_id: str) -> SandboxDeleteResult:
+        payload = await self._client.delete_json(f"/v1/sandboxes/{sandbox_id}")
+        return SandboxDeleteResult.from_json(payload)

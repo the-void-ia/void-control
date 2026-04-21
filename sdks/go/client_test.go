@@ -388,11 +388,49 @@ func TestComputeMethods(t *testing.T) {
 			},
 		},
 		{
+			"kind": "sandbox",
+			"sandbox": map[string]any{
+				"sandbox_id": "sbx-1",
+				"state":      "running",
+				"image":      "python:3.12-slim",
+				"cpus":       float64(2),
+				"memory_mb":  float64(2048),
+			},
+		},
+		{
 			"kind": "sandbox_exec",
 			"result": map[string]any{
 				"exit_code": float64(0),
 				"stdout":    "hello\n",
 				"stderr":    "",
+			},
+		},
+		{
+			"kind":       "sandbox_deleted",
+			"sandbox_id": "sbx-1",
+		},
+		{
+			"kind": "snapshot",
+			"snapshot": map[string]any{
+				"snapshot_id":       "snap-1",
+				"source_sandbox_id": "sbx-1",
+				"distribution": map[string]any{
+					"mode":    "cached",
+					"targets": []string{"node-a", "node-b"},
+				},
+			},
+		},
+		{
+			"kind": "snapshot_list",
+			"snapshots": []map[string]any{
+				{
+					"snapshot_id":       "snap-1",
+					"source_sandbox_id": "sbx-1",
+					"distribution": map[string]any{
+						"mode":    "cached",
+						"targets": []string{"node-a", "node-b"},
+					},
+				},
 			},
 		},
 		{
@@ -407,6 +445,10 @@ func TestComputeMethods(t *testing.T) {
 			},
 		},
 		{
+			"kind":        "snapshot_deleted",
+			"snapshot_id": "snap-1",
+		},
+		{
 			"kind": "snapshot",
 			"snapshot": map[string]any{
 				"snapshot_id":       "snap-1",
@@ -414,6 +456,23 @@ func TestComputeMethods(t *testing.T) {
 				"distribution": map[string]any{
 					"mode":    "copy",
 					"targets": []string{"node-a", "node-c"},
+				},
+			},
+		},
+		{
+			"kind": "pool",
+			"pool": map[string]any{
+				"pool_id": "pool-1",
+				"sandbox_spec": map[string]any{
+					"runtime": map[string]any{
+						"image":     "python:3.12-slim",
+						"cpus":      float64(2),
+						"memory_mb": float64(2048),
+					},
+				},
+				"capacity": map[string]any{
+					"warm": float64(5),
+					"max":  float64(20),
 				},
 			},
 		},
@@ -491,12 +550,20 @@ func TestComputeMethods(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Sandboxes.List: %v", err)
 	}
+	fetchedSandbox, err := client.Sandboxes.Get("sbx-1")
+	if err != nil {
+		t.Fatalf("Sandboxes.Get: %v", err)
+	}
 	execResult, err := client.Sandboxes.Exec("sbx-1", map[string]any{
 		"kind":    "command",
 		"command": []string{"python3", "-c", "print('hello')"},
 	})
 	if err != nil {
 		t.Fatalf("Sandboxes.Exec: %v", err)
+	}
+	deletedSandbox, err := client.Sandboxes.Delete("sbx-1")
+	if err != nil {
+		t.Fatalf("Sandboxes.Delete: %v", err)
 	}
 	snapshot, err := client.Snapshots.Create(map[string]any{
 		"api_version": "v1",
@@ -511,6 +578,18 @@ func TestComputeMethods(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("Snapshots.Create: %v", err)
+	}
+	snapshots, err := client.Snapshots.List()
+	if err != nil {
+		t.Fatalf("Snapshots.List: %v", err)
+	}
+	fetchedSnapshot, err := client.Snapshots.Get("snap-1")
+	if err != nil {
+		t.Fatalf("Snapshots.Get: %v", err)
+	}
+	deletedSnapshot, err := client.Snapshots.Delete("snap-1")
+	if err != nil {
+		t.Fatalf("Snapshots.Delete: %v", err)
 	}
 	replicated, err := client.Snapshots.Replicate("snap-1", map[string]any{
 		"mode":    "copy",
@@ -537,6 +616,10 @@ func TestComputeMethods(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Pools.Create: %v", err)
 	}
+	fetchedPool, err := client.Pools.Get("pool-1")
+	if err != nil {
+		t.Fatalf("Pools.Get: %v", err)
+	}
 	scaled, err := client.Pools.Scale("pool-1", map[string]any{
 		"warm": 8,
 		"max":  24,
@@ -551,11 +634,32 @@ func TestComputeMethods(t *testing.T) {
 	if sandboxes[0].State != "running" {
 		t.Fatalf("sandboxes[0].State = %q", sandboxes[0].State)
 	}
+	if fetchedSandbox.Image != "python:3.12-slim" {
+		t.Fatalf("fetchedSandbox.Image = %q", fetchedSandbox.Image)
+	}
 	if execResult.ExitCode != 0 {
 		t.Fatalf("execResult.ExitCode = %d", execResult.ExitCode)
 	}
+	if deletedSandbox.Kind != "sandbox_deleted" {
+		t.Fatalf("deletedSandbox.Kind = %q", deletedSandbox.Kind)
+	}
+	if deletedSandbox.SandboxID != "sbx-1" {
+		t.Fatalf("deletedSandbox.SandboxID = %q", deletedSandbox.SandboxID)
+	}
 	if snapshot.SnapshotID != "snap-1" {
 		t.Fatalf("snapshot.SnapshotID = %q", snapshot.SnapshotID)
+	}
+	if snapshots[0].SnapshotID != "snap-1" {
+		t.Fatalf("snapshots[0].SnapshotID = %q", snapshots[0].SnapshotID)
+	}
+	if fetchedSnapshot.SourceSandboxID != "sbx-1" {
+		t.Fatalf("fetchedSnapshot.SourceSandboxID = %q", fetchedSnapshot.SourceSandboxID)
+	}
+	if deletedSnapshot.Kind != "snapshot_deleted" {
+		t.Fatalf("deletedSnapshot.Kind = %q", deletedSnapshot.Kind)
+	}
+	if deletedSnapshot.SnapshotID != "snap-1" {
+		t.Fatalf("deletedSnapshot.SnapshotID = %q", deletedSnapshot.SnapshotID)
 	}
 	if replicated.Distribution["mode"] != "copy" {
 		t.Fatalf("replicated.Distribution = %#v", replicated.Distribution)
@@ -563,10 +667,13 @@ func TestComputeMethods(t *testing.T) {
 	if pool.PoolID != "pool-1" {
 		t.Fatalf("pool.PoolID = %q", pool.PoolID)
 	}
+	if fetchedPool.Capacity["warm"] != float64(5) {
+		t.Fatalf("fetchedPool.Capacity = %#v", fetchedPool.Capacity)
+	}
 	if scaled.Capacity["warm"] != float64(8) {
 		t.Fatalf("scaled.Capacity = %#v", scaled.Capacity)
 	}
-	if len(requests) != 7 {
+	if len(requests) != 13 {
 		t.Fatalf("len(requests) = %d", len(requests))
 	}
 }

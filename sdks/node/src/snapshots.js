@@ -1,4 +1,4 @@
-import { toSnapshotRecord } from "./models.js";
+import { toSnapshotDeleteResult, toSnapshotRecord } from "./models.js";
 
 export class SnapshotsClient {
   constructor(client) {
@@ -29,6 +29,7 @@ export class SnapshotsClient {
   }
 
   async delete(snapshotId) {
-    return this._client.deleteJson(`/v1/snapshots/${snapshotId}`);
+    const payload = await this._client.deleteJson(`/v1/snapshots/${snapshotId}`);
+    return toSnapshotDeleteResult(payload);
   }
 }

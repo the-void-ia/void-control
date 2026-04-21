@@ -245,6 +245,19 @@ class SandboxExecResult:
 
 
 @dataclass(slots=True)
+class SandboxDeleteResult:
+    kind: str
+    sandbox_id: str
+
+    @classmethod
+    def from_json(cls, payload: dict[str, Any]) -> "SandboxDeleteResult":
+        return cls(
+            kind=str(payload.get("kind", "")),
+            sandbox_id=str(payload.get("sandbox_id", "")),
+        )
+
+
+@dataclass(slots=True)
 class SnapshotRecord:
     snapshot_id: str
     source_sandbox_id: str
@@ -261,6 +274,19 @@ class SnapshotRecord:
 
 
 @dataclass(slots=True)
+class SnapshotDeleteResult:
+    kind: str
+    snapshot_id: str
+
+    @classmethod
+    def from_json(cls, payload: dict[str, Any]) -> "SnapshotDeleteResult":
+        return cls(
+            kind=str(payload.get("kind", "")),
+            snapshot_id=str(payload.get("snapshot_id", "")),
+        )
+
+
+@dataclass(slots=True)
 class PoolRecord:
     pool_id: str
     sandbox_spec: dict[str, Any]
@@ -273,4 +299,30 @@ class PoolRecord:
             pool_id=str(pool["pool_id"]),
             sandbox_spec=dict(pool.get("sandbox_spec", {})),
             capacity=dict(pool.get("capacity", {})),
+        )
+
+
+@dataclass(slots=True)
+class SandboxDeleteResult:
+    kind: str
+    sandbox_id: str
+
+    @classmethod
+    def from_json(cls, payload: dict[str, Any]) -> "SandboxDeleteResult":
+        return cls(
+            kind=str(payload.get("kind", "")),
+            sandbox_id=str(payload.get("sandbox_id", "")),
+        )
+
+
+@dataclass(slots=True)
+class SnapshotDeleteResult:
+    kind: str
+    snapshot_id: str
+
+    @classmethod
+    def from_json(cls, payload: dict[str, Any]) -> "SnapshotDeleteResult":
+        return cls(
+            kind=str(payload.get("kind", "")),
+            snapshot_id=str(payload.get("snapshot_id", "")),
         )

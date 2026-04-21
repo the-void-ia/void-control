@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .models import SnapshotRecord
+from .models import SnapshotDeleteResult, SnapshotRecord
 
 
 class SnapshotsClient:
@@ -33,5 +33,6 @@ class SnapshotsClient:
         )
         return SnapshotRecord.from_json(payload)
 
-    async def delete(self, snapshot_id: str) -> dict[str, Any]:
-        return await self._client.delete_json(f"/v1/snapshots/{snapshot_id}")
+    async def delete(self, snapshot_id: str) -> SnapshotDeleteResult:
+        payload = await self._client.delete_json(f"/v1/snapshots/{snapshot_id}")
+        return SnapshotDeleteResult.from_json(payload)

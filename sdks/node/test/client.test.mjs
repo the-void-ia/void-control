@@ -334,12 +334,26 @@ test("compute methods use the bridge API", async () => {
       ]
     },
     {
+      kind: "sandbox",
+      sandbox: {
+        sandbox_id: "sbx-1",
+        state: "running",
+        image: "python:3.12-slim",
+        cpus: 2,
+        memory_mb: 2048
+      }
+    },
+    {
       kind: "sandbox_exec",
       result: {
         exit_code: 0,
         stdout: "hello\n",
         stderr: ""
       }
+    },
+    {
+      kind: "sandbox_deleted",
+      sandbox_id: "sbx-1"
     },
     {
       kind: "snapshot",
@@ -353,6 +367,34 @@ test("compute methods use the bridge API", async () => {
       }
     },
     {
+      kind: "snapshot_list",
+      snapshots: [
+        {
+          snapshot_id: "snap-1",
+          source_sandbox_id: "sbx-1",
+          distribution: {
+            mode: "cached",
+            targets: ["node-a", "node-b"]
+          }
+        }
+      ]
+    },
+    {
+      kind: "snapshot",
+      snapshot: {
+        snapshot_id: "snap-1",
+        source_sandbox_id: "sbx-1",
+        distribution: {
+          mode: "cached",
+          targets: ["node-a", "node-b"]
+        }
+      }
+    },
+    {
+      kind: "snapshot_deleted",
+      snapshot_id: "snap-1"
+    },
+    {
       kind: "snapshot",
       snapshot: {
         snapshot_id: "snap-1",
@@ -360,6 +402,23 @@ test("compute methods use the bridge API", async () => {
         distribution: {
           mode: "copy",
           targets: ["node-a", "node-c"]
+        }
+      }
+    },
+    {
+      kind: "pool",
+      pool: {
+        pool_id: "pool-1",
+        sandbox_spec: {
+          runtime: {
+            image: "python:3.12-slim",
+            cpus: 2,
+            memory_mb: 2048
+          }
+        },
+        capacity: {
+          warm: 5,
+          max: 20
         }
       }
     },
@@ -428,10 +487,12 @@ test("compute methods use the bridge API", async () => {
     }
   });
   const sandboxes = await client.sandboxes.list();
+  const fetchedSandbox = await client.sandboxes.get("sbx-1");
   const execResult = await client.sandboxes.exec("sbx-1", {
     kind: "command",
     command: ["python3", "-c", "print('hello')"]
   });
+  const deletedSandbox = await client.sandboxes.delete("sbx-1");
   const snapshot = await client.snapshots.create({
     api_version: "v1",
     kind: "snapshot",
@@ -441,6 +502,9 @@ test("compute methods use the bridge API", async () => {
       targets: ["node-a", "node-b"]
     }
   });
+  const snapshots = await client.snapshots.list();
+  const fetchedSnapshot = await client.snapshots.get("snap-1");
+  const deletedSnapshot = await client.snapshots.delete("snap-1");
   const replicated = await client.snapshots.replicate("snap-1", {
     mode: "copy",
     targets: ["node-a", "node-c"]
@@ -460,6 +524,7 @@ test("compute methods use the bridge API", async () => {
       max: 20
     }
   });
+  const fetchedPool = await client.pools.get("pool-1");
   const scaled = await client.pools.scale("pool-1", {
     warm: 8,
     max: 24
@@ -467,17 +532,31 @@ test("compute methods use the bridge API", async () => {
 
   assert.equal(sandbox.sandboxId, "sbx-1");
   assert.equal(sandboxes[0].state, "running");
+  assert.equal(fetchedSandbox.image, "python:3.12-slim");
   assert.equal(execResult.exitCode, 0);
+  assert.equal(deletedSandbox.kind, "sandbox_deleted");
+  assert.equal(deletedSandbox.sandboxId, "sbx-1");
   assert.equal(snapshot.snapshotId, "snap-1");
+  assert.equal(snapshots[0].snapshotId, "snap-1");
+  assert.equal(fetchedSnapshot.sourceSandboxId, "sbx-1");
+  assert.equal(deletedSnapshot.kind, "snapshot_deleted");
+  assert.equal(deletedSnapshot.snapshotId, "snap-1");
   assert.equal(replicated.distribution.mode, "copy");
   assert.equal(pool.poolId, "pool-1");
+  assert.equal(fetchedPool.capacity.warm, 5);
   assert.equal(scaled.capacity.warm, 8);
 
   assert.equal(requests[0].path, "/v1/sandboxes");
   assert.equal(requests[1].path, "/v1/sandboxes");
-  assert.equal(requests[2].path, "/v1/sandboxes/sbx-1/exec");
-  assert.equal(requests[3].path, "/v1/snapshots");
-  assert.equal(requests[4].path, "/v1/snapshots/snap-1/replicate");
-  assert.equal(requests[5].path, "/v1/pools");
-  assert.equal(requests[6].path, "/v1/pools/pool-1/scale");
+  assert.equal(requests[2].path, "/v1/sandboxes/sbx-1");
+  assert.equal(requests[3].path, "/v1/sandboxes/sbx-1/exec");
+  assert.equal(requests[4].path, "/v1/sandboxes/sbx-1");
+  assert.equal(requests[5].path, "/v1/snapshots");
+  assert.equal(requests[6].path, "/v1/snapshots");
+  assert.equal(requests[7].path, "/v1/snapshots/snap-1");
+  assert.equal(requests[8].path, "/v1/snapshots/snap-1");
+  assert.equal(requests[9].path, "/v1/snapshots/snap-1/replicate");
+  assert.equal(requests[10].path, "/v1/pools");
+  assert.equal(requests[11].path, "/v1/pools/pool-1");
+  assert.equal(requests[12].path, "/v1/pools/pool-1/scale");
 });

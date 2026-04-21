@@ -118,3 +118,13 @@ type PoolRecord struct {
 	SandboxSpec map[string]any `json:"sandbox_spec"`
 	Capacity    map[string]any `json:"capacity"`
 }
+
+type SandboxDeleteResult struct {
+	Kind      string `json:"kind"`
+	SandboxID string `json:"sandbox_id"`
+}
+
+type SnapshotDeleteResult struct {
+	Kind       string `json:"kind"`
+	SnapshotID string `json:"snapshot_id"`
+}

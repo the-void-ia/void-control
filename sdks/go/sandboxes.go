@@ -58,10 +58,10 @@ func (client *SandboxesClient) Stop(sandboxID string) (*SandboxRecord, error) {
 	return &response.Sandbox, nil
 }
 
-func (client *SandboxesClient) Delete(sandboxID string) (map[string]any, error) {
-	var response map[string]any
+func (client *SandboxesClient) Delete(sandboxID string) (*SandboxDeleteResult, error) {
+	var response SandboxDeleteResult
 	if err := client.client.deleteJSON("/v1/sandboxes/"+sandboxID, &response); err != nil {
 		return nil, err
 	}
-	return response, nil
+	return &response, nil
 }

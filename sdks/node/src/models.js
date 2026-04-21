@@ -108,3 +108,17 @@ export function toPoolRecord(payload) {
     capacity: payload.pool.capacity ?? {}
   };
 }
+
+export function toSandboxDeleteResult(payload) {
+  return {
+    kind: String(payload.kind ?? ""),
+    sandboxId: String(payload.sandbox_id ?? "")
+  };
+}
+
+export function toSnapshotDeleteResult(payload) {
+  return {
+    kind: String(payload.kind ?? ""),
+    snapshotId: String(payload.snapshot_id ?? "")
+  };
+}

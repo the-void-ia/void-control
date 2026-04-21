@@ -46,10 +46,10 @@ func (client *SnapshotsClient) Replicate(snapshotID string, request map[string]a
 	return &response.Snapshot, nil
 }
 
-func (client *SnapshotsClient) Delete(snapshotID string) (map[string]any, error) {
-	var response map[string]any
+func (client *SnapshotsClient) Delete(snapshotID string) (*SnapshotDeleteResult, error) {
+	var response SnapshotDeleteResult
 	if err := client.client.deleteJSON("/v1/snapshots/"+snapshotID, &response); err != nil {
 		return nil, err
 	}
-	return response, nil
+	return &response, nil
 }
