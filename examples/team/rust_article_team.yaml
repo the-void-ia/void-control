@@ -19,10 +19,8 @@ tasks:
     agent: researcher
 
   - name: write
-    description: Write the article draft using the research findings
+    description: Write the article draft after the research pass completes
     agent: writer
-    depends_on:
-      - research
 
 process:
   type: sequential

@@ -212,6 +212,9 @@ Important:
 - `batch` is the canonical high-level remote background execution surface
 - `yolo` is an accepted alias for `batch`
 - `team` is the phase-1 high-level multi-agent authoring surface
+- current phase-1 `team` limitations:
+  - `depends_on` is not supported yet
+  - `sequential` preserves ordering only; task outputs are not threaded between agents
 - use `voidctl execution ...` for terminal operator workflows; use the bridge
   HTTP API or UI when you need direct API-driven inspection or browser workflows
 - quote URLs that contain `?` when using `curl` from `zsh`

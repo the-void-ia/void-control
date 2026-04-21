@@ -6,7 +6,7 @@ use crate::orchestration::{
     VariationProposal, WorkflowTemplateRef,
 };
 
-use super::{TeamSpec, TeamValidationError};
+use super::{AgentSpec, TaskSpec, TeamSpec, TeamValidationError};
 
 const DEFAULT_TEAM_TEMPLATE: &str = "examples/runtime-templates/warm_agent_basic.yaml";
 
@@ -20,22 +20,14 @@ pub fn compile_team_spec(spec: &TeamSpec) -> Result<ExecutionSpec, TeamValidatio
 
     let mut explicit = Vec::new();
     for task in &spec.tasks {
-        let agent_name = match task.agent.as_deref() {
-            Some(agent_name) => agent_name,
-            None => &spec.agents[0].name,
-        };
-        let Some(agent) = spec.agents.iter().find(|agent| agent.name == agent_name) else {
-            return Err(TeamValidationError::new(format!(
-                "tasks['{}'].agent references unknown agent '{}'",
-                task.name, agent_name
-            )));
-        };
-
-        let mut overrides = BTreeMap::new();
-        overrides.insert("agent.prompt".to_string(), task.description.clone());
-        overrides.insert("agent.role".to_string(), agent.role.clone());
-        overrides.insert("agent.goal".to_string(), agent.goal.clone());
-        explicit.push(VariationProposal { overrides });
+        let agents = task_agents(spec, task)?;
+        for agent in agents {
+            let mut overrides = BTreeMap::new();
+            overrides.insert("agent.prompt".to_string(), task.description.clone());
+            overrides.insert("agent.role".to_string(), agent.role.clone());
+            overrides.insert("agent.goal".to_string(), agent.goal.clone());
+            explicit.push(VariationProposal { overrides });
+        }
     }
 
     let mode = match spec.process.kind.as_str() {
@@ -43,16 +35,22 @@ pub fn compile_team_spec(spec: &TeamSpec) -> Result<ExecutionSpec, TeamValidatio
         "sequential" | "parallel" => "swarm",
         _ => "swarm",
     };
-    let candidate_count = spec.tasks.len() as u32;
+    let candidate_count = explicit.len() as u32;
+    let candidates_per_iteration = candidates_per_iteration(spec);
+    let max_iterations = if spec.process.kind == "sequential" {
+        Some(spec.tasks.len() as u32)
+    } else {
+        Some(1)
+    };
     let execution = ExecutionSpec {
         mode: mode.to_string(),
         goal: team_goal(spec),
         workflow: WorkflowTemplateRef {
-            template: workflow_template(spec).to_string(),
+            template: workflow_template(spec)?.to_string(),
         },
         policy: OrchestrationPolicy {
             budget: BudgetPolicy {
-                max_iterations: Some(1),
+                max_iterations,
                 max_child_runs: Some(candidate_count),
                 max_wall_clock_secs: Some(1800),
                 max_cost_usd_millis: None,
@@ -76,7 +74,7 @@ pub fn compile_team_spec(spec: &TeamSpec) -> Result<ExecutionSpec, TeamValidatio
             ranking: "highest_score".to_string(),
             tie_breaking: "success".to_string(),
         },
-        variation: VariationConfig::explicit(candidate_count, explicit),
+        variation: VariationConfig::explicit(candidates_per_iteration, explicit),
         swarm: true,
         supervision: supervision_config(spec),
     };
@@ -92,24 +90,34 @@ pub fn compile_team_spec(spec: &TeamSpec) -> Result<ExecutionSpec, TeamValidatio
     Ok(execution)
 }
 
-fn workflow_template(spec: &TeamSpec) -> &str {
+fn workflow_template(spec: &TeamSpec) -> Result<&str, TeamValidationError> {
+    let mut chosen = None;
     for agent in &spec.agents {
         let Some(template) = &agent.template else {
             continue;
         };
-        if !template.trim().is_empty() {
-            return template;
+        if template.trim().is_empty() {
+            continue;
+        }
+        let Some(current) = chosen else {
+            chosen = Some(template.as_str());
+            continue;
+        };
+        if current != template {
+            return Err(TeamValidationError::new(
+                "team agents must share the same template in phase1",
+            ));
         }
     }
-    DEFAULT_TEAM_TEMPLATE
+    Ok(chosen.unwrap_or(DEFAULT_TEAM_TEMPLATE))
 }
 
 fn concurrency_limit(spec: &TeamSpec) -> u32 {
     match spec.process.kind.as_str() {
         "sequential" => 1,
-        "parallel" => spec.tasks.len() as u32,
-        "lead_worker" => spec.tasks.len() as u32,
-        _ => spec.tasks.len() as u32,
+        "parallel" => spec.agents.len().max(1) as u32,
+        "lead_worker" => spec.tasks.len().max(1) as u32,
+        _ => spec.tasks.len().max(1) as u32,
     }
 }
 
@@ -117,7 +125,8 @@ fn supervision_config(spec: &TeamSpec) -> Option<SupervisionConfig> {
     if spec.process.kind != "lead_worker" {
         return None;
     }
-    let supervisor_role = match spec.agents.first() {
+    let lead = spec.process.lead.as_deref()?;
+    let supervisor_role = match spec.agents.iter().find(|agent| agent.name == lead) {
         Some(agent) => agent.role.clone(),
         None => "Supervisor".to_string(),
     };
@@ -139,4 +148,40 @@ fn team_goal(spec: &TeamSpec) -> String {
         return format!("run {} team tasks", spec.tasks.len());
     };
     name.clone()
+}
+
+fn candidates_per_iteration(spec: &TeamSpec) -> u32 {
+    if spec.process.kind == "sequential" {
+        return 1;
+    }
+
+    let mut count = 0u32;
+    for task in &spec.tasks {
+        if task.agent.is_some() {
+            count += 1;
+            continue;
+        }
+        count += spec.agents.len() as u32;
+    }
+    count.max(1)
+}
+
+fn task_agents<'a>(
+    spec: &'a TeamSpec,
+    task: &TaskSpec,
+) -> Result<Vec<&'a AgentSpec>, TeamValidationError> {
+    let Some(agent_name) = task.agent.as_deref() else {
+        let mut agents = Vec::new();
+        for agent in &spec.agents {
+            agents.push(agent);
+        }
+        return Ok(agents);
+    };
+    let Some(agent) = spec.agents.iter().find(|agent| agent.name == agent_name) else {
+        return Err(TeamValidationError::new(format!(
+            "tasks['{}'].agent references unknown agent '{}'",
+            task.name, agent_name
+        )));
+    };
+    Ok(vec![agent])
 }

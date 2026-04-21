@@ -343,6 +343,10 @@ Interactive console:
 `agents`, `tasks`, and a `process`, and `void-control` compiles that into the
 existing orchestration engine.
 
+Current phase-1 limitation:
+- `depends_on` is not supported yet
+- `sequential` preserves task ordering, but does not thread task outputs between agents
+
 HTTP:
 
 ```bash

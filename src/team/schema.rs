@@ -42,6 +42,8 @@ pub struct TaskSpec {
 pub struct ProcessSpec {
     #[cfg_attr(feature = "serde", serde(rename = "type"))]
     pub kind: String,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub lead: Option<String>,
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -137,6 +139,19 @@ impl TeamSpec {
                 )))
             }
         }
+        if self.process.kind == "lead_worker" && self.process.lead.is_none() {
+            return Err(TeamValidationError::new(
+                "process.lead is required for lead_worker teams",
+            ));
+        }
+        if let Some(lead) = &self.process.lead {
+            if !agent_names.contains(lead) {
+                return Err(TeamValidationError::new(format!(
+                    "process.lead references unknown agent '{}'",
+                    lead
+                )));
+            }
+        }
 
         let single_agent_name = if self.agents.len() == 1 {
             Some(self.agents[0].name.as_str())
@@ -153,22 +168,25 @@ impl TeamSpec {
                     task.name
                 )));
             }
-            let agent_name = match task.agent.as_deref() {
-                Some(agent_name) => agent_name,
-                None => {
-                    let Some(agent_name) = single_agent_name else {
-                        return Err(TeamValidationError::new(format!(
-                            "tasks['{}'].agent is required when multiple agents are defined",
-                            task.name
-                        )));
-                    };
-                    agent_name
-                }
-            };
-            if !agent_names.contains(agent_name) {
+            if !task.depends_on.is_empty() {
                 return Err(TeamValidationError::new(format!(
-                    "tasks['{}'].agent references unknown agent '{}'",
-                    task.name, agent_name
+                    "phase1 team spec does not support depends_on; remove it from tasks['{}']",
+                    task.name
+                )));
+            }
+            if let Some(agent_name) = task.agent.as_deref() {
+                if !agent_names.contains(agent_name) {
+                    return Err(TeamValidationError::new(format!(
+                        "tasks['{}'].agent references unknown agent '{}'",
+                        task.name, agent_name
+                    )));
+                }
+                continue;
+            }
+            if single_agent_name.is_none() && self.process.kind != "parallel" {
+                return Err(TeamValidationError::new(format!(
+                    "tasks['{}'].agent is required unless process.type is parallel",
+                    task.name
                 )));
             }
         }
