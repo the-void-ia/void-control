@@ -123,6 +123,27 @@ lifecycle:
 }
 
 #[test]
+fn checked_in_compute_examples_parse() {
+    let sandbox_spec = std::fs::read_to_string("examples/compute/sandbox-python.yaml")
+        .expect("read sandbox example");
+    let snapshot_spec = std::fs::read_to_string("examples/compute/snapshot-from-sandbox.yaml")
+        .expect("read snapshot example");
+    let pool_spec =
+        std::fs::read_to_string("examples/compute/pool-python.yaml").expect("read pool example");
+
+    let sandbox = sandbox::parse_sandbox_yaml(&sandbox_spec).expect("parse sandbox example");
+    let snapshot = sandbox::parse_snapshot_yaml(&snapshot_spec).expect("parse snapshot example");
+    let pool = sandbox::parse_pool_yaml(&pool_spec).expect("parse pool example");
+
+    assert_eq!(sandbox.kind, "sandbox");
+    assert_eq!(sandbox.runtime.image, "python:3.12-slim");
+    assert_eq!(snapshot.kind, "snapshot");
+    assert_eq!(snapshot.source.sandbox_id, "sbx-example");
+    assert_eq!(pool.kind, "sandbox_pool");
+    assert_eq!(pool.capacity.warm, 5);
+}
+
+#[test]
 fn snapshot_schema_rejects_invalid_distribution_mode() {
     let json = r#"
 {

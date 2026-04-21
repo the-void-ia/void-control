@@ -388,22 +388,8 @@ HTTP:
 
 ```bash
 curl -sS -X POST http://127.0.0.1:43210/v1/sandboxes \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "api_version": "v1",
-    "kind": "sandbox",
-    "metadata": {
-      "name": "python-benchmark-box"
-    },
-    "runtime": {
-      "image": "python:3.12-slim",
-      "cpus": 2,
-      "memory_mb": 2048
-    },
-    "snapshot": {
-      "restore_from": "snapshot-transform-v1"
-    }
-  }'
+  -H 'Content-Type: text/yaml' \
+  --data-binary @examples/compute/sandbox-python.yaml
 
 curl -sS http://127.0.0.1:43210/v1/sandboxes
 
@@ -421,6 +407,75 @@ curl -sS -X POST http://127.0.0.1:43210/v1/sandboxes/<sandbox-id>/stop \
 curl -sS -X DELETE http://127.0.0.1:43210/v1/sandboxes/<sandbox-id>
 ```
 
+SDKs:
+
+```python
+from void_control import VoidControlClient
+
+async with VoidControlClient(base_url="http://127.0.0.1:43210") as client:
+    sandbox = await client.sandboxes.create(
+        {
+            "api_version": "v1",
+            "kind": "sandbox",
+            "runtime": {
+                "image": "python:3.12-slim",
+                "cpus": 2,
+                "memory_mb": 2048,
+            },
+        }
+    )
+```
+
+```js
+import { VoidControlClient } from "./sdks/node/src/index.js";
+
+const client = new VoidControlClient({ baseUrl: "http://127.0.0.1:43210" });
+const sandbox = await client.sandboxes.create({
+  api_version: "v1",
+  kind: "sandbox",
+  runtime: {
+    image: "python:3.12-slim",
+    cpus: 2,
+    memory_mb: 2048
+  }
+});
+```
+
+```go
+client := voidcontrol.NewClient("http://127.0.0.1:43210")
+sandbox, err := client.Sandboxes.Create(map[string]any{
+    "api_version": "v1",
+    "kind": "sandbox",
+    "runtime": map[string]any{
+        "image": "python:3.12-slim",
+        "cpus": 2,
+        "memory_mb": 2048,
+    },
+})
+```
+
+### Snapshot
+
+`snapshot` is the bridge-managed resource for checkpoint creation metadata and
+distribution policy. In phase 1, replication updates the persisted control-plane
+record only; it does not copy artifacts across live `void-box` nodes yet.
+
+HTTP:
+
+```bash
+curl -sS -X POST http://127.0.0.1:43210/v1/snapshots \
+  -H 'Content-Type: text/yaml' \
+  --data-binary @examples/compute/snapshot-from-sandbox.yaml
+
+curl -sS http://127.0.0.1:43210/v1/snapshots
+
+curl -sS -X POST http://127.0.0.1:43210/v1/snapshots/<snapshot-id>/replicate \
+  -H 'Content-Type: text/yaml' \
+  --data-binary @examples/compute/snapshot-replicate.yaml
+
+curl -sS -X DELETE http://127.0.0.1:43210/v1/snapshots/<snapshot-id>
+```
+
 ### Pool
 
 `pool` is a `void-control` control-plane abstraction over reusable sandbox
@@ -436,45 +491,14 @@ HTTP:
 
 ```bash
 curl -sS -X POST http://127.0.0.1:43210/v1/pools \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "api_version": "v1",
-    "kind": "sandbox_pool",
-    "metadata": {
-      "name": "benchmark-python-pool"
-    },
-    "sandbox_spec": {
-      "runtime": {
-        "image": "python:3.12-slim",
-        "cpus": 2,
-        "memory_mb": 2048
-      },
-      "snapshot": {
-        "restore_from": "snapshot-transform-v1"
-      },
-      "lifecycle": {
-        "prewarm": true,
-        "idle_timeout_secs": 900
-      },
-      "identity": {
-        "reusable": true,
-        "pool": "benchmark-python"
-      }
-    },
-    "capacity": {
-      "warm": 5,
-      "max": 20
-    }
-  }'
+  -H 'Content-Type: text/yaml' \
+  --data-binary @examples/compute/pool-python.yaml
 
 curl -sS http://127.0.0.1:43210/v1/pools/<pool-id>
 
 curl -sS -X POST http://127.0.0.1:43210/v1/pools/<pool-id>/scale \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "warm": 8,
-    "max": 24
-  }'
+  -H 'Content-Type: text/yaml' \
+  --data-binary @examples/compute/pool-scale.yaml
 ```
 
 ### 7) Run the supervision example

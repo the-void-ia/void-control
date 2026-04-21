@@ -1,0 +1,16 @@
+api_version: v1
+kind: sandbox
+metadata:
+  name: python-benchmark-box
+runtime:
+  image: python:3.12-slim
+  cpus: 2
+  memory_mb: 2048
+snapshot:
+  restore_from: snapshot-transform-v1
+lifecycle:
+  detach: true
+  idle_timeout_secs: 900
+identity:
+  reusable: true
+  pool: benchmark-python
