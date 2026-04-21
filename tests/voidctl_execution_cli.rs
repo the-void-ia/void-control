@@ -805,6 +805,44 @@ fn interactive_batch_dry_run_posts_spec_and_prints_compiled_summary() {
 }
 
 #[test]
+fn interactive_batch_dry_run_prints_error_for_bridge_failure() {
+    let (base_url, _requests, server) = spawn_fake_bridge(vec![FakeResponse {
+        status: 400,
+        body: json!({
+            "message": "batch spec must include at least one job"
+        }),
+    }]);
+
+    let inputs_path = temp_inputs_path("batch-invalid.json");
+    fs::write(
+        &inputs_path,
+        r#"{"api_version":"v1","kind":"batch","worker":{"template":"examples/runtime-templates/warm_agent_basic.yaml"},"jobs":[]}"#,
+    )
+    .expect("write inputs");
+
+    let mut child = voidctl_command(&base_url)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn voidctl");
+    let command = format!("/batch dry-run {}\n/exit\n", inputs_path.display());
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(command.as_bytes())
+        .expect("write stdin");
+
+    let output = child.wait_with_output().expect("wait output");
+    server.join().expect("join fake bridge");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout");
+    assert!(stdout.contains("error: batch spec must include at least one job"));
+}
+
+#[test]
 fn interactive_yolo_run_alias_posts_to_yolo_route() {
     let (base_url, requests, server) = spawn_fake_bridge(vec![FakeResponse {
         status: 200,
