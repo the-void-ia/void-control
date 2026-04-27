@@ -1,5 +1,7 @@
 use std::io::{Read, Write};
 use std::net::TcpStream;
+use std::os::unix::net::UnixStream;
+use std::path::PathBuf;
 
 use crate::contract::{
     from_void_box_run_and_events_json, from_void_box_run_json, map_void_box_status, ContractError,
@@ -7,6 +9,10 @@ use crate::contract::{
     StartRequest, StartResult, StopRequest, StopResult, SubscribeEventsRequest,
 };
 use crate::orchestration::CandidateOutput;
+use crate::runtime::daemon_address::{
+    classify_daemon_url, default_unix_url, resolve_tcp_token, token_search_labels,
+    DaemonAddressError, DaemonScheme,
+};
 #[cfg(feature = "serde")]
 use crate::runtime::VoidBoxRunRef;
 
@@ -17,11 +23,32 @@ pub struct VoidBoxRuntimeClient {
 }
 
 impl VoidBoxRuntimeClient {
+    /// Construct a client.
+    ///
+    /// The transport is selected once from `base_url`:
+    /// - `unix:///abs/path` → AF_UNIX transport, no auth header.
+    /// - `http://host:port` or bare `host:port` → TCP transport. A bearer
+    ///   token must be resolvable from `VOIDBOX_DAEMON_TOKEN_FILE`,
+    ///   `VOIDBOX_DAEMON_TOKEN`, or `$XDG_CONFIG_HOME/voidbox/daemon-token`;
+    ///   construction panics if none is configured (we fail at construction
+    ///   so a misconfigured deployment doesn't dial and discover via 401).
+    ///
+    /// Empty `base_url` is treated as "use the default discovered AF_UNIX
+    /// socket path", mirroring the daemon's own auto-discovery so a same-uid
+    /// invocation needs no configuration.
     pub fn new(base_url: String, poll_interval_ms: u64) -> Self {
+        let url = if base_url.trim().is_empty() {
+            default_unix_url()
+        } else {
+            base_url
+        };
+        let transport = build_transport(&url).unwrap_or_else(|err| {
+            panic!("void-box runtime client construction failed: {err}");
+        });
         Self {
-            base_url,
+            base_url: url,
             poll_interval_ms,
-            transport: Box::new(TcpHttpTransport),
+            transport,
         }
     }
 
@@ -410,11 +437,11 @@ impl VoidBoxRuntimeClient {
     }
 
     fn http_get(&self, path: &str) -> Result<HttpResponse, ContractError> {
-        self.transport.request(&self.base_url, "GET", path, "")
+        self.transport.request("GET", path, "")
     }
 
     fn http_post(&self, path: &str, body: &str) -> Result<HttpResponse, ContractError> {
-        self.transport.request(&self.base_url, "POST", path, body)
+        self.transport.request("POST", path, body)
     }
 
     fn find_manifest_artifact_path(
@@ -440,27 +467,39 @@ impl VoidBoxRuntimeClient {
     }
 }
 
+/// Transport-level HTTP request abstraction.
+///
+/// `base_url` (TCP) and the socket path (AF_UNIX) are bound at construction
+/// rather than passed per-call. This keeps the per-call surface narrow and
+/// avoids the AF_UNIX impl having to ignore an argument it can't consume.
 pub(crate) trait HttpTransport {
-    fn request(
-        &self,
-        base_url: &str,
-        method: &str,
-        path: &str,
-        body: &str,
-    ) -> Result<HttpResponse, ContractError>;
+    fn request(&self, method: &str, path: &str, body: &str) -> Result<HttpResponse, ContractError>;
 }
 
-pub(crate) struct TcpHttpTransport;
+/// TCP transport with optional bearer-token injection.
+///
+/// When `bearer_token` is `Some`, every request gets an `Authorization:
+/// Bearer <token>` header. The AF_UNIX path explicitly omits this header
+/// because the daemon's `enforce_auth` short-circuits on `AuthMode::UnixSocket`,
+/// and sending a credential over a transport that doesn't need it widens the
+/// blast radius of an accidental leak (e.g. proxy logs).
+pub(crate) struct TcpHttpTransport {
+    base_url: String,
+    bearer_token: Option<String>,
+}
+
+impl TcpHttpTransport {
+    pub(crate) fn new(base_url: String, bearer_token: Option<String>) -> Self {
+        Self {
+            base_url,
+            bearer_token,
+        }
+    }
+}
 
 impl HttpTransport for TcpHttpTransport {
-    fn request(
-        &self,
-        base_url: &str,
-        method: &str,
-        path: &str,
-        body: &str,
-    ) -> Result<HttpResponse, ContractError> {
-        let (host, port) = parse_host_port(base_url)?;
+    fn request(&self, method: &str, path: &str, body: &str) -> Result<HttpResponse, ContractError> {
+        let (host, port) = parse_host_port(&self.base_url)?;
         let addr = format!("{host}:{port}");
         let mut stream = TcpStream::connect(&addr).map_err(|e| {
             ContractError::new(
@@ -470,8 +509,12 @@ impl HttpTransport for TcpHttpTransport {
             )
         })?;
 
+        let auth_line = match self.bearer_token.as_deref() {
+            Some(token) => format!("Authorization: Bearer {token}\r\n"),
+            None => String::new(),
+        };
         let request = format!(
-            "{method} {path} HTTP/1.1\r\nHost: {host}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            "{method} {path} HTTP/1.1\r\nHost: {host}\r\nContent-Type: application/json\r\n{auth_line}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
             body.len(),
             body
         );
@@ -493,6 +536,80 @@ impl HttpTransport for TcpHttpTransport {
         })?;
 
         parse_http_response(&response)
+    }
+}
+
+/// AF_UNIX transport. Connects via [`std::os::unix::net::UnixStream`] and
+/// speaks the same hand-rolled HTTP/1.1 dialect as [`TcpHttpTransport`]. The
+/// `Host` header is set to `localhost` because there is no meaningful host
+/// authority for an AF_UNIX socket; daemon-side parsing tolerates any value.
+///
+/// Deliberately sends no `Authorization` header: the daemon authenticates
+/// AF_UNIX peers by uid via the kernel's `0o600` perms, and emitting a
+/// credential here would leak it to anywhere the request body is logged.
+pub(crate) struct UnixHttpTransport {
+    socket_path: PathBuf,
+}
+
+impl UnixHttpTransport {
+    pub(crate) fn new(socket_path: PathBuf) -> Self {
+        Self { socket_path }
+    }
+}
+
+impl HttpTransport for UnixHttpTransport {
+    fn request(&self, method: &str, path: &str, body: &str) -> Result<HttpResponse, ContractError> {
+        let mut stream = UnixStream::connect(&self.socket_path).map_err(|e| {
+            ContractError::new(
+                ContractErrorCode::InternalError,
+                format!("connect to unix:{} failed: {e}", self.socket_path.display()),
+                true,
+            )
+        })?;
+        let request = format!(
+            "{method} {path} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream.write_all(request.as_bytes()).map_err(|e| {
+            ContractError::new(
+                ContractErrorCode::InternalError,
+                format!("request write failed: {e}"),
+                true,
+            )
+        })?;
+        let mut response = String::new();
+        stream.read_to_string(&mut response).map_err(|e| {
+            ContractError::new(
+                ContractErrorCode::InternalError,
+                format!("response read failed: {e}"),
+                true,
+            )
+        })?;
+        parse_http_response(&response)
+    }
+}
+
+/// URL-scheme dispatch for [`VoidBoxRuntimeClient::new`] and
+/// [`HttpSidecarAdapter::new`]. Returns the boxed transport selected by the
+/// scheme, after resolving and validating any TCP bearer token.
+pub(crate) fn build_transport(
+    base_url: &str,
+) -> Result<Box<dyn HttpTransport + Send + Sync>, String> {
+    let scheme = classify_daemon_url(base_url)?;
+    match scheme {
+        DaemonScheme::Unix(path) => Ok(Box::new(UnixHttpTransport::new(path))),
+        DaemonScheme::Tcp(url) => {
+            let resolved = resolve_tcp_token().map_err(|e| e.to_string())?;
+            let token = resolved.0.ok_or_else(|| {
+                DaemonAddressError::MissingTcpToken {
+                    url: url.clone(),
+                    searched: token_search_labels(),
+                }
+                .to_string()
+            })?;
+            Ok(Box::new(TcpHttpTransport::new(url, Some(token))))
+        }
     }
 }
 
@@ -825,7 +942,6 @@ mod tests {
     impl HttpTransport for MockTransport {
         fn request(
             &self,
-            _base_url: &str,
             method: &str,
             path: &str,
             _body: &str,
@@ -859,7 +975,6 @@ mod tests {
     impl HttpTransport for CaptureTransport {
         fn request(
             &self,
-            _base_url: &str,
             method: &str,
             path: &str,
             body: &str,
@@ -1393,5 +1508,199 @@ mod tests {
         }];
         let out = filter_events_from_id(events.clone(), Some("evt_missing"));
         assert_eq!(out, events);
+    }
+
+    // Env mutation is process-global; serialize tests that set/unset env vars.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn with_env<F: FnOnce()>(vars: &[(&str, Option<&str>)], f: F) {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let saved: Vec<(String, Option<String>)> = vars
+            .iter()
+            .map(|(k, _)| (k.to_string(), std::env::var(k).ok()))
+            .collect();
+        for (k, v) in vars {
+            match v {
+                Some(value) => std::env::set_var(k, value),
+                None => std::env::remove_var(k),
+            }
+        }
+        // AssertUnwindSafe: the test closures sometimes hold mutable borrows
+        // of outer state; we restore env on the way out regardless of the
+        // closure's panic-safety, which is the property we actually need.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+        for (k, v) in saved {
+            match v {
+                Some(value) => std::env::set_var(k, value),
+                None => std::env::remove_var(k),
+            }
+        }
+        if let Err(payload) = result {
+            std::panic::resume_unwind(payload);
+        }
+    }
+
+    #[test]
+    fn dispatch_unix_url_selects_unix_transport() {
+        // Build directly so we don't actually dial a socket; just verify the
+        // builder accepts the URL and returns a transport.
+        let transport = super::build_transport("unix:///tmp/voidbox-disp-test.sock")
+            .expect("unix dispatch should succeed without env");
+        // The boxed trait object's concrete type isn't observable from here;
+        // smoke-check by attempting a request and asserting we get a connect
+        // error rather than a parse error (proves it's the unix path that ran).
+        let err = transport
+            .request("GET", "/v1/health", "")
+            .expect_err("connect should fail against missing socket");
+        assert!(err.message.contains("unix:") || err.message.contains("connect"));
+    }
+
+    #[test]
+    fn dispatch_tcp_url_fails_closed_when_no_token_configured() {
+        // Point all token sources at a fresh empty dir so resolution returns
+        // None; expect build_transport to fail with a clear message.
+        let dir = std::env::temp_dir().join(format!(
+            "void-control-tcp-no-token-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut captured: Result<(), String> = Err(String::new());
+        with_env(
+            &[
+                ("VOIDBOX_DAEMON_TOKEN_FILE", None),
+                ("VOIDBOX_DAEMON_TOKEN", None),
+                ("XDG_CONFIG_HOME", Some(dir.to_str().unwrap())),
+                ("HOME", Some(dir.to_str().unwrap())),
+            ],
+            || {
+                captured = super::build_transport("http://127.0.0.1:43100").map(|_| ());
+            },
+        );
+        let err = captured.expect_err("TCP build_transport should fail without a token");
+        assert!(err.contains("requires a bearer token"), "err={err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Read until the request is fully observed (`\r\n\r\n` terminator plus
+    /// any Content-Length body), write a minimal response, and close. Closing
+    /// is what unblocks the client's `read_to_string`; we cannot wait for the
+    /// client to close first because the client is blocked on read.
+    fn handle_one_request<R: std::io::Read + std::io::Write>(stream: &mut R) -> Vec<u8> {
+        let mut captured = Vec::new();
+        let mut buf = [0u8; 4096];
+        loop {
+            // Look for end-of-headers.
+            if let Some(idx) = find_subsequence(&captured, b"\r\n\r\n") {
+                let body_start = idx + 4;
+                let content_length = parse_content_length(&captured[..idx]).unwrap_or(0);
+                if captured.len() - body_start >= content_length {
+                    break;
+                }
+            }
+            let n = stream.read(&mut buf).expect("read");
+            if n == 0 {
+                break;
+            }
+            captured.extend_from_slice(&buf[..n]);
+        }
+        let _ = stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}");
+        captured
+    }
+
+    fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+        haystack.windows(needle.len()).position(|w| w == needle)
+    }
+
+    fn parse_content_length(headers: &[u8]) -> Option<usize> {
+        let s = std::str::from_utf8(headers).ok()?;
+        for line in s.split("\r\n") {
+            if let Some((k, v)) = line.split_once(':') {
+                if k.trim().eq_ignore_ascii_case("content-length") {
+                    return v.trim().parse().ok();
+                }
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn unix_transport_emits_no_authorization_header() {
+        // Capture the bytes UnixHttpTransport writes onto the wire by pointing
+        // it at a one-shot local listener; this guards against the
+        // AF_UNIX-leaks-credentials regression even though daemon-side
+        // enforce_auth would short-circuit it.
+        //
+        // AF_UNIX paths are bounded by `SUN_LEN` (~104 bytes on macOS) so we
+        // bind under `/tmp` directly with a short suffix rather than via
+        // `env::temp_dir()`, which on macOS resolves to a long
+        // `/var/folders/...` path.
+        use std::os::unix::net::UnixListener;
+
+        let socket = std::path::PathBuf::from(format!(
+            "/tmp/vc-na-{}-{}.sock",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+                & 0xfff_ffff
+        ));
+        let _ = std::fs::remove_file(&socket);
+        let listener = UnixListener::bind(&socket).expect("bind");
+
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+        let captured_clone = captured.clone();
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let bytes = handle_one_request(&mut stream);
+            *captured_clone.lock().unwrap() = bytes;
+        });
+
+        let transport = super::UnixHttpTransport::new(socket.clone());
+        let _ = transport.request("GET", "/v1/health", "");
+        handle.join().expect("listener thread");
+
+        let bytes = captured.lock().unwrap().clone();
+        let request = String::from_utf8_lossy(&bytes);
+        assert!(
+            !request.to_ascii_lowercase().contains("authorization:"),
+            "AF_UNIX request must not carry an Authorization header; got: {request}"
+        );
+        let _ = std::fs::remove_file(&socket);
+    }
+
+    #[test]
+    fn tcp_transport_emits_authorization_header_when_token_present() {
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().unwrap().port();
+
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+        let captured_clone = captured.clone();
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let bytes = handle_one_request(&mut stream);
+            *captured_clone.lock().unwrap() = bytes;
+        });
+
+        let transport = super::TcpHttpTransport::new(
+            format!("http://127.0.0.1:{port}"),
+            Some("hunter2".to_string()),
+        );
+        let _ = transport.request("GET", "/v1/health", "");
+        handle.join().expect("listener thread");
+
+        let bytes = captured.lock().unwrap().clone();
+        let request = String::from_utf8_lossy(&bytes);
+        assert!(
+            request.contains("Authorization: Bearer hunter2"),
+            "TCP request with token should carry bearer header; got: {request}"
+        );
     }
 }

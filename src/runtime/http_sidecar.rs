@@ -10,9 +10,11 @@ use crate::orchestration::{CandidateSpec, CommunicationIntent, InboxSnapshot};
 use serde_json::Value;
 
 #[cfg(feature = "serde")]
+use super::daemon_address::default_unix_url;
+#[cfg(feature = "serde")]
 use super::delivery::{DeliveryCapability, MessageDeliveryAdapter, VoidBoxRunRef};
 #[cfg(feature = "serde")]
-use super::void_box::{HttpResponse, HttpTransport, TcpHttpTransport};
+use super::void_box::{build_transport, HttpResponse, HttpTransport};
 
 #[cfg(feature = "serde")]
 pub struct HttpSidecarAdapter {
@@ -21,21 +23,46 @@ pub struct HttpSidecarAdapter {
 
 #[cfg(feature = "serde")]
 impl HttpSidecarAdapter {
+    /// Construct a sidecar adapter that talks to the daemon at the
+    /// auto-discovered AF_UNIX socket. Uses the same scheme dispatch and
+    /// token resolution as [`crate::runtime::VoidBoxRuntimeClient::new`].
     pub fn new() -> Self {
-        Self {
-            transport: Box::new(TcpHttpTransport),
-        }
+        Self::with_daemon_url(default_unix_url())
+    }
+
+    /// Construct a sidecar adapter pinned to an explicit daemon URL.
+    ///
+    /// Same dispatch contract as `VoidBoxRuntimeClient::new`:
+    /// - `unix:///abs/path` → AF_UNIX, no auth header.
+    /// - `http://host:port` (or bare `host:port`) → TCP with bearer token
+    ///   resolved from `VOIDBOX_DAEMON_TOKEN_FILE`, `VOIDBOX_DAEMON_TOKEN`,
+    ///   or `$XDG_CONFIG_HOME/voidbox/daemon-token`. Construction panics if
+    ///   TCP is configured and no token resolves.
+    pub fn with_daemon_url(daemon_url: String) -> Self {
+        let url = if daemon_url.trim().is_empty() {
+            default_unix_url()
+        } else {
+            daemon_url
+        };
+        let transport = build_transport(&url).unwrap_or_else(|err| {
+            panic!("HttpSidecarAdapter construction failed: {err}");
+        });
+        Self { transport }
     }
 
     fn request(
         &self,
-        run: &VoidBoxRunRef,
+        _run: &VoidBoxRunRef,
         method: &str,
         path: &str,
         body: &str,
     ) -> io::Result<HttpResponse> {
+        // The transport is bound at construction; `run.daemon_base_url` is
+        // retained on the run-ref for forward-compat with multi-daemon
+        // deployments but not consulted here. Same-process daemon URL is
+        // assumed stable for the lifetime of the adapter.
         self.transport
-            .request(&run.daemon_base_url, method, path, body)
+            .request(method, path, body)
             .map_err(contract_error_to_io)
     }
 }

@@ -1,4 +1,6 @@
 #[cfg(feature = "serde")]
+pub mod daemon_address;
+#[cfg(feature = "serde")]
 mod delivery;
 #[cfg(feature = "serde")]
 mod http_sidecar;
