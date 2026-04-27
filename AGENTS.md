@@ -111,8 +111,16 @@ TMPDIR=$PWD/target/tmp scripts/build_claude_rootfs.sh
 export VOID_BOX_KERNEL=/boot/vmlinuz-$(uname -r)
 export VOID_BOX_INITRAMFS=$PWD/target/void-box-rootfs.cpio.gz
 export ANTHROPIC_API_KEY=sk-ant-...
-cargo run --bin voidbox -- serve --listen 127.0.0.1:43100
+cargo run --bin voidbox -- serve
 ```
+
+The daemon defaults to AF_UNIX at mode `0o600` (path-discovery chain:
+`$XDG_RUNTIME_DIR/voidbox.sock` → `$TMPDIR/voidbox-$UID.sock` →
+`/tmp/voidbox-$UID.sock`). Same-uid `void-control` finds it with no
+configuration. To listen on TCP instead, pass
+`--listen tcp://127.0.0.1:43100`; TCP requires a bearer token resolved
+from `VOIDBOX_DAEMON_TOKEN_FILE`, `VOIDBOX_DAEMON_TOKEN`, or
+`$XDG_CONFIG_HOME/voidbox/daemon-token`.
 
 In a second terminal:
 
@@ -149,10 +157,17 @@ Swarm/service template requirements:
 - `agent.mode: service` requires `agent.output_file`
 - `agent.mode: service` must not set `agent.timeout_secs`
 
-Health check:
+Health check (AF_UNIX default; pass `--unix-socket` to curl):
 
 ```bash
-curl -sS http://127.0.0.1:43100/v1/health
+curl -sS --unix-socket "$XDG_RUNTIME_DIR/voidbox.sock" http://localhost/v1/health
+```
+
+When the daemon listens on TCP:
+
+```bash
+curl -sS http://127.0.0.1:43100/v1/health \
+  -H "Authorization: Bearer $(cat "$XDG_CONFIG_HOME/voidbox/daemon-token")"
 ```
 
 Execution examples:
@@ -238,9 +253,15 @@ Important:
 
 ## Runtime compatibility commands
 
-Live daemon contract gate:
+Live daemon contract gate. The contract test dials the daemon directly,
+so `VOID_BOX_BASE_URL` must be set; both shapes are accepted.
 
 ```bash
+# AF_UNIX (default daemon listener)
+VOID_BOX_BASE_URL=unix://$XDG_RUNTIME_DIR/voidbox.sock \
+cargo test --features serde --test void_box_contract -- --ignored --nocapture
+
+# TCP
 VOID_BOX_BASE_URL=http://127.0.0.1:43100 \
 cargo test --features serde --test void_box_contract -- --ignored --nocapture
 ```
@@ -249,8 +270,19 @@ cargo test --features serde --test void_box_contract -- --ignored --nocapture
 
 Control-plane / bridge:
 
-- `VOID_BOX_BASE_URL` — void-box daemon endpoint (default:
-  `http://127.0.0.1:43100`).
+- `VOID_BOX_BASE_URL` — void-box daemon endpoint. Default: auto-discover
+  the AF_UNIX socket the daemon advertises (`$XDG_RUNTIME_DIR/voidbox.sock`
+  → `$TMPDIR/voidbox-$UID.sock` → `/tmp/voidbox-$UID.sock`). Override
+  with `unix:///abs/path` for an explicit AF_UNIX path or
+  `http://host:port` to talk to a TCP-listening daemon. TCP requires a
+  bearer token via `VOIDBOX_DAEMON_TOKEN_FILE`, `VOIDBOX_DAEMON_TOKEN`,
+  or `$XDG_CONFIG_HOME/voidbox/daemon-token`; construction fails closed
+  if none resolves.
+- `VOIDBOX_DAEMON_TOKEN_FILE` / `VOIDBOX_DAEMON_TOKEN` — bearer-token
+  sources for the TCP transport (mirrors void-box's resolution chain).
+  Token files must be owner-only (`mode & 0o077 == 0`).
+- `VOID_CONTROL_BRIDGE_LISTEN` — bridge listen address (default:
+  `127.0.0.1:43210`). The Vite dev server proxies `/api` here.
 - `VOID_CONTROL_LLM_PROVIDER` — optional global override that patches
   `llm.provider` on every runtime template at launch. Set to
   `claude-personal` to use OAuth from the macOS Keychain or
