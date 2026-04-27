@@ -1801,8 +1801,8 @@ Policy presets: fast | balanced | safe"
         let _ = io::stdout().flush();
     }
 
-    let base_url =
-        env::var("VOID_BOX_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:43100".to_string());
+    let base_url = env::var("VOID_BOX_BASE_URL")
+        .unwrap_or_else(|_| void_control::runtime::daemon_address::default_unix_url());
     let bridge_base_url = env::var("VOID_CONTROL_BRIDGE_BASE_URL")
         .unwrap_or_else(|_| "http://127.0.0.1:43210".to_string());
 

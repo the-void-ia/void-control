@@ -386,8 +386,12 @@ impl BridgeConfig {
     fn from_env() -> Self {
         let listen = std::env::var("VOID_CONTROL_BRIDGE_LISTEN")
             .unwrap_or_else(|_| "127.0.0.1:43210".to_string());
+        // Default daemon transport is AF_UNIX same-uid; auto-discover the
+        // socket path from the same chain the daemon advertises on. Operators
+        // who want TCP set VOID_BOX_BASE_URL explicitly (and provision a
+        // bearer token via the void-box token resolution chain).
         let base_url = std::env::var("VOID_BOX_BASE_URL")
-            .unwrap_or_else(|_| "http://127.0.0.1:43100".to_string());
+            .unwrap_or_else(|_| crate::runtime::daemon_address::default_unix_url());
         let spec_dir = std::env::var("VOID_CONTROL_SPEC_DIR")
             .unwrap_or_else(|_| "/tmp/void-control/specs".to_string());
         let execution_dir = std::env::var("VOID_CONTROL_EXECUTION_DIR")
