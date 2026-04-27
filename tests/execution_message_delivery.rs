@@ -27,7 +27,7 @@ use void_control::runtime::{
 
 fn run_ref() -> VoidBoxRunRef {
     VoidBoxRunRef {
-        daemon_base_url: "http://127.0.0.1:43100".to_string(),
+        daemon_base_url: "unix:///tmp/voidbox-test.sock".to_string(),
         run_id: "run-123".to_string(),
     }
 }
@@ -457,7 +457,7 @@ impl ExecutionRuntime for RecordingDeliveryRuntime {
 
     fn delivery_run_ref(&self, handle: &str) -> Option<VoidBoxRunRef> {
         Some(VoidBoxRunRef {
-            daemon_base_url: "http://127.0.0.1:43100".to_string(),
+            daemon_base_url: "unix:///tmp/voidbox-test.sock".to_string(),
             run_id: handle.trim_start_matches("vb:").to_string(),
         })
     }
@@ -498,7 +498,7 @@ impl ExecutionRuntime for SeededDeliveryRuntime {
 
     fn delivery_run_ref(&self, handle: &str) -> Option<VoidBoxRunRef> {
         Some(VoidBoxRunRef {
-            daemon_base_url: "http://127.0.0.1:43100".to_string(),
+            daemon_base_url: "unix:///tmp/voidbox-test.sock".to_string(),
             run_id: handle.trim_start_matches("vb:").to_string(),
         })
     }

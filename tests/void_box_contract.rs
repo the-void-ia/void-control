@@ -1163,7 +1163,7 @@ fn sidecar_delivery_adapter_smoke_against_live_daemon() {
     let (status_start, body_start) = http_post_json(&base, "/v1/runs", &payload);
     assert_eq!(status_start, 200, "body={body_start}");
 
-    let adapter = HttpSidecarAdapter::new();
+    let adapter = HttpSidecarAdapter::with_daemon_url(base.clone());
     let run_ref = VoidBoxRunRef {
         daemon_base_url: base.clone(),
         run_id: run_id.clone(),

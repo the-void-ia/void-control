@@ -11,7 +11,22 @@ use void_control::orchestration::{
     BudgetPolicy, ConcurrencyPolicy, ConvergencePolicy, EvaluationConfig, ExecutionSpec,
     GlobalConfig, OrchestrationPolicy, VariationConfig, VariationProposal, WorkflowTemplateRef,
 };
+use void_control::runtime::daemon_address::default_unix_url;
 use void_control::runtime::VoidBoxRuntimeClient;
+
+/// Resolve the daemon URL the live tests should target.
+///
+/// `VOID_BOX_BASE_URL` wins when set so an operator can point the suite at a
+/// TCP daemon. Default falls through to the auto-discovered AF_UNIX socket
+/// path the daemon advertises on the same uid, in `unix://` form.
+fn resolve_daemon_base_url() -> String {
+    if let Ok(value) = std::env::var("VOID_BOX_BASE_URL") {
+        if !value.trim().is_empty() {
+            return value;
+        }
+    }
+    default_unix_url()
+}
 
 #[test]
 #[ignore = "requires live void-box daemon"]
@@ -37,8 +52,7 @@ fn bridge_submission_and_worker_loop_complete_execution_against_live_daemon() {
         .expect("execution_id")
         .to_string();
 
-    let base_url =
-        std::env::var("VOID_BOX_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:43100".to_string());
+    let base_url = resolve_daemon_base_url();
 
     let mut attempts = 0;
     loop {
@@ -108,8 +122,7 @@ fn bridge_multiple_executions_complete_against_live_daemon() {
     let execution_dir = root.join("executions");
     let spec = structured_output_spec();
     let body = execution_request_json(&spec);
-    let base_url =
-        std::env::var("VOID_BOX_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:43100".to_string());
+    let base_url = resolve_daemon_base_url();
 
     let first = void_control::bridge::handle_bridge_request_with_dirs_for_test(
         "POST",
@@ -189,8 +202,7 @@ fn bridge_pause_resume_and_cancel_work_against_live_daemon() {
     let execution_dir = root.join("executions");
     let spec = long_running_spec();
     let body = execution_request_json(&spec);
-    let base_url =
-        std::env::var("VOID_BOX_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:43100".to_string());
+    let base_url = resolve_daemon_base_url();
 
     let created = void_control::bridge::handle_bridge_request_with_dirs_for_test(
         "POST",
@@ -318,8 +330,7 @@ fn bridge_transform_swarm_one_iteration_acceptance_against_live_daemon() {
     let execution_dir = root.join("executions");
     let spec = one_iteration_transform_spec();
     let body = execution_request_json(&spec);
-    let base_url =
-        std::env::var("VOID_BOX_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:43100".to_string());
+    let base_url = resolve_daemon_base_url();
 
     let created = void_control::bridge::handle_bridge_request_with_dirs_for_test(
         "POST",
