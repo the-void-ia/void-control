@@ -512,13 +512,14 @@ fn top_level_help_text() -> &'static str {
   voidctl team run --stdin"
 }
 
-/// Hyper-util pooled HTTP client for talking to the local bridge.
+/// Build a hyper-util HTTP client for talking to the local bridge.
 ///
 /// Distinct from the `VoidBoxRuntimeClient` HTTP transport: that one
 /// dispatches to the void-box daemon (TCP or AF_UNIX), this one only ever
-/// talks to the local bridge (TCP, no auth). Sharing the bridge client
-/// across calls inside one `run()` invocation lets hyper's connection pool
-/// keep the keep-alive socket warm.
+/// talks to the local bridge (TCP, no auth). Each `bridge_request` call
+/// constructs a fresh client; per-CLI-invocation request volume is low
+/// enough that pool sharing isn't worth threading state through the
+/// interactive shell.
 #[cfg(feature = "serde")]
 fn build_bridge_client() -> hyper_util::client::legacy::Client<
     hyper_util::client::legacy::connect::HttpConnector,
