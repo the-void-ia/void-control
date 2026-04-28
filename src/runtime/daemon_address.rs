@@ -1,7 +1,7 @@
 //! Daemon address discovery and bearer-token resolution for the void-box
 //! HTTP transport.
 //!
-//! void-box now defaults its daemon listener to AF_UNIX at mode `0o600`, with
+//! The void-box daemon defaults its listener to AF_UNIX at mode `0o600`, with
 //! TCP available as an opt-in `--listen tcp://host:port` mode that requires a
 //! bearer token. void-control mirrors that contract: when no daemon URL is
 //! configured, it auto-discovers the same socket the daemon advertises on the
