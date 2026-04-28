@@ -32,8 +32,11 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+
+#[cfg(unix)]
+use std::ffi::CString;
+#[cfg(unix)]
+use std::os::unix::ffi::OsStrExt;
 
 /// Environment variable consulted before falling back to a generated token.
 pub const DAEMON_TOKEN_ENV: &str = "VOIDBOX_DAEMON_TOKEN";
@@ -78,16 +81,11 @@ impl std::error::Error for DaemonAddressError {}
 /// (in the void-box repo). See the module-level docs for the lockstep
 /// contract.
 ///
-/// We do not depend on `libc` directly to test write-access (the daemon side
-/// uses `access(2)` for kernel-correct semantics including ACLs and mount
-/// flags). Instead we approximate via `Path::is_dir()` plus a probe-create
-/// of a uniquely-named file with `O_CREAT | O_EXCL`. The two checks may
-/// disagree in exotic edge cases (an ACL-restricted dir that fails the kernel
-/// check but where `O_CREAT|O_EXCL` happens to also fail with `EACCES` is
-/// handled correctly; an ACL-restricted dir where the probe somehow
-/// succeeds while a real socket bind fails would fall through). On a normal
-/// developer host the two are equivalent and we keep the dependency surface
-/// small.
+/// Writability is checked via `access(2)` with `W_OK`, identical to
+/// `voidbox::daemon_listen::is_writable_dir`. `access(2)` is the only
+/// portable way to ask the kernel whether the calling uid can write to a
+/// directory: ACLs, mount options like `noexec`/`ro`, and per-fs perms all
+/// flow through it.
 pub fn default_unix_socket_path() -> PathBuf {
     if let Some(path) = dir_socket("XDG_RUNTIME_DIR", "voidbox.sock") {
         return path;
@@ -112,9 +110,9 @@ fn dir_socket(env_var: &str, file_name: &str) -> Option<PathBuf> {
     Some(dir.join(file_name))
 }
 
-/// Best-effort writability probe: create a uniquely named file with
-/// `create_new(true)` (O_CREAT|O_EXCL) and immediately remove it. Returns
-/// `false` for non-directories, non-existent paths, and any I/O error.
+/// Returns `true` iff `path` exists, is a directory, and is writable by
+/// the calling uid per `access(2)` with `W_OK`. Mirrors
+/// `voidbox::daemon_listen::is_writable_dir`.
 fn is_writable_dir(path: &Path) -> bool {
     let Ok(meta) = fs::metadata(path) else {
         return false;
@@ -122,42 +120,23 @@ fn is_writable_dir(path: &Path) -> bool {
     if !meta.is_dir() {
         return false;
     }
-    let probe = path.join(probe_file_name());
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    let writable = match options.open(&probe) {
-        Ok(file) => {
-            // sync_all() not needed — we are about to unlink it. Drop closes the fd.
-            drop(file);
-            true
-        }
-        Err(_) => false,
-    };
-    let _ = fs::remove_file(&probe);
-    writable
-}
-
-static PROBE_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-fn probe_file_name() -> String {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let nonce = PROBE_COUNTER.fetch_add(1, Ordering::Relaxed);
-    format!(".void-control-probe-{}-{nanos}-{nonce}", std::process::id())
+    #[cfg(unix)]
+    unsafe {
+        let Ok(c) = CString::new(path.as_os_str().as_bytes()) else {
+            return false;
+        };
+        libc::access(c.as_ptr(), libc::W_OK) == 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
 }
 
 #[cfg(unix)]
 fn current_uid() -> u32 {
     // SAFETY: `geteuid` is always safe; it returns the calling process uid.
-    unsafe { libc_geteuid() }
-}
-
-#[cfg(unix)]
-extern "C" {
-    #[link_name = "geteuid"]
-    fn libc_geteuid() -> u32;
+    unsafe { libc::geteuid() }
 }
 
 #[cfg(not(unix))]
