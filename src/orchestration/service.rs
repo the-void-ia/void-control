@@ -38,12 +38,12 @@ use serde::Serialize;
 /// helpers (`persisted_run_handle`, `inline_poll_*`, `delivery_run_ref`)
 /// stay sync — they don't do I/O.
 ///
-/// `#[async_trait(?Send)]` because void-control runs on a `current_thread`
-/// tokio runtime: tasks live on a single OS thread, and adding `Send`
-/// bounds would force test mocks holding `Rc<RefCell<…>>` recorders to
-/// switch to `Arc<Mutex<…>>` for no behavioural reason.
-#[async_trait(?Send)]
-pub trait ExecutionRuntime {
+/// Default `#[async_trait]` (Send-bounded futures) is the standard idiom
+/// and lets us flip to `rt-multi-thread` later by changing the `flavor`
+/// macro arg in `voidctl::main`. Sticking with `?Send` would force a
+/// trait-bound refactor across orchestration if the flavor ever changes.
+#[async_trait]
+pub trait ExecutionRuntime: Send {
     async fn start_run(&mut self, request: StartRequest) -> Result<StartResult, ContractError>;
     async fn inspect_run(&self, handle: &str) -> Result<RuntimeInspection, ContractError>;
     async fn take_structured_output(&mut self, run_id: &str) -> StructuredOutputResult;
@@ -260,18 +260,16 @@ pub struct DryRunResult {
 
 impl<R> ExecutionService<R>
 where
-    R: ExecutionRuntime,
+    R: ExecutionRuntime + Sync,
 {
     /// Acquire the persistent claim for `execution_id`, run `operation`, and
     /// release it in all branches. The closure is async because it ultimately
     /// fans out to the runtime; the surrounding claim/refresh/release plumbing
     /// stays synchronous filesystem work running on the same task.
     ///
-    /// The future returned by `operation` is a `LocalBoxFuture`: void-control
-    /// runs on a `current_thread` tokio runtime, so the bridge handlers, the
-    /// worker tick, and any service call all live on a single thread. A `Send`
-    /// bound here would force `ExecutionService` and the `ProviderLaunchAdapter`
-    /// trait object to be `Send`, neither of which they need to be.
+    /// The future returned by `operation` is a `BoxFuture<'a, …>` — Send-bounded
+    /// — so it composes with the rest of the orchestration stack and stays
+    /// portable across `current_thread` and `rt-multi-thread` tokio flavors.
     ///
     /// The refresh watcher is a `std::thread`, not a tokio task: it does
     /// blocking filesystem `metadata`/`write` calls every
@@ -285,10 +283,8 @@ where
         operation: F,
     ) -> io::Result<T>
     where
-        F: for<'a> FnOnce(
-            &'a mut Self,
-            String,
-        ) -> futures::future::LocalBoxFuture<'a, io::Result<T>>,
+        F: for<'a> FnOnce(&'a mut Self, String) -> futures::future::BoxFuture<'a, io::Result<T>>,
+        T: Send,
     {
         let worker_id = Self::worker_id();
         if !self.store.claim_execution(execution_id, &worker_id)? {
@@ -1914,79 +1910,66 @@ mod tests {
     use std::path::PathBuf;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn claimed_execution_refresh_prevents_other_worker_from_stealing_stale_claim() {
-        // The worker task is `?Send` (it constructs an `ExecutionService<R>`
-        // whose `Box<dyn ProviderLaunchAdapter>` has no `Send` bound), so
-        // `tokio::spawn` is wrong; we need `spawn_local` plus a `LocalSet`
-        // to drive both the worker and the racing assertion side on the
-        // same thread.
         use tokio::sync::oneshot;
 
-        let local = tokio::task::LocalSet::new();
-        local
-            .run_until(async move {
-                let execution_id = "exec-claim-refresh";
-                let root = temp_store_dir("claim-refresh");
-                let claim_path = root.join(execution_id).join("claim.txt");
-                let store = FsExecutionStore::new(root);
-                store
-                    .create_execution(&Execution::new(execution_id, "swarm", "goal"))
-                    .expect("create execution");
+        let execution_id = "exec-claim-refresh";
+        let root = temp_store_dir("claim-refresh");
+        let claim_path = root.join(execution_id).join("claim.txt");
+        let store = FsExecutionStore::new(root);
+        store
+            .create_execution(&Execution::new(execution_id, "swarm", "goal"))
+            .expect("create execution");
 
-                std::env::set_var("VOID_CONTROL_CLAIM_TTL_MS", "40");
-                std::env::set_var("VOID_CONTROL_CLAIM_REFRESH_MS", "5");
+        std::env::set_var("VOID_CONTROL_CLAIM_TTL_MS", "40");
+        std::env::set_var("VOID_CONTROL_CLAIM_REFRESH_MS", "5");
 
-                let worker_store = store.clone();
-                let (started_tx, started_rx) = oneshot::channel::<()>();
-                let (release_tx, release_rx) = oneshot::channel::<()>();
-                let worker = tokio::task::spawn_local(async move {
-                    let mut service = ExecutionService::new(
-                        GlobalConfig {
-                            max_concurrent_child_runs: 1,
-                        },
-                        MockRuntime::new(),
-                        worker_store,
-                    );
-                    service
-                        .with_claimed_execution(execution_id, move |_service, _worker_id| {
-                            Box::pin(async move {
-                                started_tx.send(()).expect("signal start");
-                                release_rx.await.expect("wait for release signal");
-                                Ok(())
-                            })
-                        })
-                        .await
-                        .expect("claimed operation should succeed");
-                });
-
-                started_rx.await.expect("wait for claim");
-                // The refresh watcher is a real OS thread, so the claim file
-                // updates without any tokio cooperation. We only need the
-                // current_thread executor to yield long enough for the watcher
-                // to write at least once, which `wait_for_claim_refresh`
-                // tolerates via its 200ms ceiling.
-                let claim_path_clone = claim_path.clone();
-                tokio::task::spawn_blocking(move || {
-                    let initial_claim =
-                        fs::read_to_string(&claim_path_clone).expect("read initial claim");
-                    wait_for_claim_refresh(&claim_path_clone, &initial_claim);
+        let worker_store = store.clone();
+        let (started_tx, started_rx) = oneshot::channel::<()>();
+        let (release_tx, release_rx) = oneshot::channel::<()>();
+        let worker = tokio::spawn(async move {
+            let mut service = ExecutionService::new(
+                GlobalConfig {
+                    max_concurrent_child_runs: 1,
+                },
+                MockRuntime::new(),
+                worker_store,
+            );
+            service
+                .with_claimed_execution(execution_id, move |_service, _worker_id| {
+                    Box::pin(async move {
+                        started_tx.send(()).expect("signal start");
+                        release_rx.await.expect("wait for release signal");
+                        Ok(())
+                    })
                 })
                 .await
-                .expect("refresh observation");
+                .expect("claimed operation should succeed");
+        });
 
-                let stolen = store
-                    .claim_execution(execution_id, "other-worker")
-                    .expect("claim should be denied while refreshed");
-                release_tx.send(()).expect("release worker");
+        started_rx.await.expect("wait for claim");
+        // The refresh watcher is a real OS thread, so the claim file
+        // updates without any tokio cooperation. spawn_blocking lets us
+        // observe its progress without parking the runtime.
+        let claim_path_clone = claim_path.clone();
+        tokio::task::spawn_blocking(move || {
+            let initial_claim = fs::read_to_string(&claim_path_clone).expect("read initial claim");
+            wait_for_claim_refresh(&claim_path_clone, &initial_claim);
+        })
+        .await
+        .expect("refresh observation");
 
-                assert!(!stolen, "other worker should not steal a refreshed claim");
+        let stolen = store
+            .claim_execution(execution_id, "other-worker")
+            .expect("claim should be denied while refreshed");
+        release_tx.send(()).expect("release worker");
 
-                worker.await.expect("worker task should finish");
-                std::env::remove_var("VOID_CONTROL_CLAIM_TTL_MS");
-                std::env::remove_var("VOID_CONTROL_CLAIM_REFRESH_MS");
-            })
-            .await;
+        assert!(!stolen, "other worker should not steal a refreshed claim");
+
+        worker.await.expect("worker task should finish");
+        std::env::remove_var("VOID_CONTROL_CLAIM_TTL_MS");
+        std::env::remove_var("VOID_CONTROL_CLAIM_REFRESH_MS");
     }
 
     fn temp_store_dir(label: &str) -> PathBuf {

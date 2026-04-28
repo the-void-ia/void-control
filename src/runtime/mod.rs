@@ -32,8 +32,14 @@ use std::path::Path;
 #[cfg(feature = "serde")]
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Adapter that rewrites a `StartRequest` before it goes onto the wire.
+///
+/// Used by `ExecutionService` to weave an `InboxSnapshot` and any
+/// candidate-specific overrides into the workflow spec before launch.
+/// `Send + Sync` so the boxed trait object inside `ExecutionService<R>`
+/// can be moved across tasks freely.
 #[cfg(feature = "serde")]
-pub trait ProviderLaunchAdapter {
+pub trait ProviderLaunchAdapter: Send + Sync {
     fn prepare_launch_request(
         &self,
         request: StartRequest,
@@ -194,7 +200,7 @@ fn ensure_object(value: &mut Value) -> &mut Map<String, Value> {
     value.as_object_mut().expect("object value")
 }
 
-#[async_trait::async_trait(?Send)]
+#[async_trait::async_trait]
 impl ExecutionRuntime for MockRuntime {
     async fn start_run(&mut self, request: StartRequest) -> Result<StartResult, ContractError> {
         // MockRuntime is in-process; the async wrapper is a no-op suspension
@@ -220,7 +226,7 @@ impl ExecutionRuntime for MockRuntime {
 }
 
 #[cfg(feature = "serde")]
-#[async_trait::async_trait(?Send)]
+#[async_trait::async_trait]
 impl ExecutionRuntime for VoidBoxRuntimeClient {
     async fn start_run(&mut self, request: StartRequest) -> Result<StartResult, ContractError> {
         self.start(request).await

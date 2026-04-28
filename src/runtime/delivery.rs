@@ -27,9 +27,16 @@ pub struct VoidBoxRunRef {
     pub run_id: String,
 }
 
+/// Adapter that delivers inbox snapshots and drains intents from a
+/// running candidate. Implementations talk to the void-box daemon
+/// over the same hyper-util transport as `VoidBoxRuntimeClient`.
+///
+/// `Send + Sync` so callers can pass adapters across tasks freely; the
+/// production `HttpSidecarAdapter` carries a `Box<dyn HttpTransport + Send + Sync>`,
+/// and test mocks use `Arc<Mutex<…>>` for shared recorders.
 #[cfg(feature = "serde")]
-#[async_trait(?Send)]
-pub trait MessageDeliveryAdapter {
+#[async_trait]
+pub trait MessageDeliveryAdapter: Send + Sync {
     fn capabilities(&self) -> Vec<DeliveryCapability>;
 
     async fn inject_at_launch(

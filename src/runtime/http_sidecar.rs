@@ -79,7 +79,7 @@ impl Default for HttpSidecarAdapter {
 }
 
 #[cfg(feature = "serde")]
-#[async_trait(?Send)]
+#[async_trait]
 impl MessageDeliveryAdapter for HttpSidecarAdapter {
     fn capabilities(&self) -> Vec<DeliveryCapability> {
         vec![
