@@ -34,7 +34,7 @@ rustyline = { version = "14", optional = true }
 # small and unconditional; the heavy server/client stack stays gated
 # behind `serde`.
 async-trait = "0.1"
-tokio = { version = "1", features = ["rt", "macros", "net", "signal", "time", "sync", "io-util"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time", "sync", "io-util"] }
 futures = "0.3"
 
 # Async HTTP transport (gated). `hyper_util::client::legacy::Client`
@@ -42,8 +42,8 @@ futures = "0.3"
 # connector into the same client shape so TCP and unix-socket dispatch
 # share one code path. Mirrors the void-box CLI's
 # `src/bin/voidbox/backend.rs` post-#59. `axum` is the bridge HTTP
-# server, on top of the same hyper. A single `current_thread` tokio
-# runtime is constructed at the binary boundary.
+# server, on top of the same hyper. A multi-threaded tokio runtime is
+# constructed at the binary boundary.
 axum = { version = "0.8", optional = true }
 hyper = { version = "1", features = ["client", "http1"], optional = true }
 hyper-util = { version = "0.1", features = ["client", "client-legacy", "http1", "tokio"], optional = true }

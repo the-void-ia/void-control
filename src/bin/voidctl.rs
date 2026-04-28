@@ -4,15 +4,15 @@ fn main() {
     std::process::exit(1);
 }
 
-/// Single-threaded current-thread runtime. void-control's current workload is
-/// bridge HTTP serving + a small set of outbound daemon RPCs per request — no
-/// concurrent long-lived connections, no compute-bound parallelism.
-/// `rt-multi-thread` becomes worth its overhead when we add SSE/WebSocket
-/// streaming endpoints (concurrent long-lived connections) or when the bridge
-/// becomes a throughput bottleneck. Until then, current-thread is simpler to
-/// reason about and uses less memory.
+/// Multi-threaded tokio runtime. The conventional default for HTTP services
+/// in Rust, and the one all our async traits (`ExecutionRuntime`,
+/// `MessageDeliveryAdapter`, `HttpTransport`, `ProviderLaunchAdapter`)
+/// already support natively via their `Send + Sync` bounds.
+///
+/// `current_thread` remains available via `#[tokio::main(flavor = "current_thread")]`
+/// for any future workload that prefers it.
 #[cfg(feature = "serde")]
-#[tokio::main(flavor = "current_thread")]
+#[tokio::main]
 async fn main() {
     if let Err(e) = run().await {
         eprintln!("fatal: {e}");

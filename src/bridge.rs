@@ -280,16 +280,14 @@ pub async fn handle_bridge_request_with_dirs_for_test(
 /// Listen for the bridge HTTP service.
 ///
 /// Spawns the worker tick as a `tokio::spawn` task and runs the axum server
-/// alongside it; both share whatever tokio runtime `voidctl::main` set up
-/// (currently `current_thread`). The signal hook matches axum's idiomatic
-/// `with_graceful_shutdown` example: in-flight requests drain before the
-/// listener closes.
+/// alongside it; both share the tokio runtime set up by `voidctl::main`.
+/// The signal hook matches axum's idiomatic `with_graceful_shutdown`
+/// example: in-flight requests drain before the listener closes.
 ///
-/// `tokio::spawn` requires `Send` futures — which is fine because every
-/// trait we use here (`ExecutionRuntime`, `MessageDeliveryAdapter`,
-/// `ProviderLaunchAdapter`, `HttpTransport`) is bounded `Send + Sync`.
-/// That keeps this function flavor-agnostic: flipping `voidctl::main` to
-/// `rt-multi-thread` later requires no changes here.
+/// Every trait used here (`ExecutionRuntime`, `MessageDeliveryAdapter`,
+/// `ProviderLaunchAdapter`, `HttpTransport`) is bounded `Send + Sync`, so
+/// the worker future and axum handler futures are `Send` and run under the
+/// multi-threaded runtime without ceremony.
 #[cfg(feature = "serde")]
 pub async fn run_bridge() -> Result<(), String> {
     use std::sync::Arc;

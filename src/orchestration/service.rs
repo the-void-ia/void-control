@@ -267,9 +267,8 @@ where
     /// fans out to the runtime; the surrounding claim/refresh/release plumbing
     /// stays synchronous filesystem work running on the same task.
     ///
-    /// The future returned by `operation` is a `BoxFuture<'a, …>` — Send-bounded
-    /// — so it composes with the rest of the orchestration stack and stays
-    /// portable across `current_thread` and `rt-multi-thread` tokio flavors.
+    /// The future returned by `operation` is a Send-bounded `BoxFuture<'a, …>`,
+    /// matching the rest of the orchestration stack.
     ///
     /// The refresh watcher is a `std::thread`, not a tokio task: it does
     /// blocking filesystem `metadata`/`write` calls every
@@ -1910,7 +1909,11 @@ mod tests {
     use std::path::PathBuf;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-    #[tokio::test]
+    // Promoted to `multi_thread`: this test specifically exercises cross-thread
+    // behaviour — the OS-thread refresh watcher inside `with_claimed_execution`
+    // races with the tokio task that holds the claim. Running it on the
+    // multi-threaded flavor matches the production runtime.
+    #[tokio::test(flavor = "multi_thread")]
     async fn claimed_execution_refresh_prevents_other_worker_from_stealing_stale_claim() {
         use tokio::sync::oneshot;
 
