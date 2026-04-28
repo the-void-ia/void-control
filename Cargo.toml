@@ -6,11 +6,51 @@ license = "Apache-2.0"
 
 [features]
 default = []
-serde = ["dep:serde", "dep:serde_json", "dep:serde_yaml", "dep:rustyline", "dep:tiny_http"]
+serde = [
+    "dep:serde",
+    "dep:serde_json",
+    "dep:serde_yaml",
+    "dep:rustyline",
+    "dep:axum",
+    "dep:tokio",
+    "dep:hyper",
+    "dep:hyper-util",
+    "dep:hyperlocal",
+    "dep:http-body-util",
+    "dep:bytes",
+    "dep:async-trait",
+    "dep:futures",
+    "dep:tower",
+]
 
 [dependencies]
 serde = { version = "1", features = ["derive"], optional = true }
 serde_json = { version = "1", optional = true }
 serde_yaml = { version = "0.9", optional = true }
 rustyline = { version = "14", optional = true }
-tiny_http = { version = "0.12", optional = true }
+
+# Async HTTP transport. `hyper_util::client::legacy::Client` provides a
+# pooled async client; `hyperlocal` plugs an `AF_UNIX` connector into the
+# same client shape so TCP and unix-socket dispatch share one code path.
+# Mirrors the void-box CLI's `src/bin/voidbox/backend.rs` post-#59. `axum`
+# is the bridge HTTP server, on top of the same hyper. A single
+# `current_thread` tokio runtime is constructed at the binary boundary.
+axum = { version = "0.8", optional = true }
+tokio = { version = "1", features = ["rt", "macros", "net", "signal", "time", "sync"], optional = true }
+hyper = { version = "1", features = ["client", "http1"], optional = true }
+hyper-util = { version = "0.1", features = ["client", "client-legacy", "http1", "tokio"], optional = true }
+hyperlocal = { version = "0.9", optional = true }
+http-body-util = { version = "0.1", optional = true }
+bytes = { version = "1", optional = true }
+async-trait = { version = "0.1", optional = true }
+futures = { version = "0.3", optional = true }
+tower = { version = "0.5", optional = true }
+
+[target.'cfg(unix)'.dependencies]
+# Direct dep so we can call `geteuid` and `access(W_OK)` for the same-uid
+# AF_UNIX socket-discovery chain. void-box uses libc the same way in
+# `src/daemon_listen.rs::is_writable_dir`.
+libc = "0.2"
+
+[dev-dependencies]
+httpmock = "0.7"
