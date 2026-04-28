@@ -150,8 +150,8 @@ fn exhausted_budget_prevents_queue_entry() {
     assert_eq!(decision, SchedulerDecision::RejectedBudgetExceeded);
 }
 
-#[test]
-fn runs_single_iteration_and_completes_with_best_result() {
+#[tokio::test]
+async fn runs_single_iteration_and_completes_with_best_result() {
     let mut runtime = MockRuntime::new();
     runtime.seed_success(
         "exec-run-candidate-1",
@@ -178,6 +178,7 @@ fn runs_single_iteration_and_completes_with_best_result() {
     );
     let execution = service
         .run_to_completion(test_spec(1))
+        .await
         .expect("run execution");
 
     assert_eq!(execution.status, ExecutionStatus::Completed);
@@ -187,8 +188,8 @@ fn runs_single_iteration_and_completes_with_best_result() {
     );
 }
 
-#[test]
-fn runs_multiple_iterations_until_threshold() {
+#[tokio::test]
+async fn runs_multiple_iterations_until_threshold() {
     let mut runtime = MockRuntime::new();
     runtime.seed_success(
         "exec-run-candidate-1",
@@ -229,14 +230,15 @@ fn runs_multiple_iterations_until_threshold() {
     );
     let execution = service
         .run_to_completion(test_spec_with_threshold(0.9, 2))
+        .await
         .expect("run execution");
 
     assert_eq!(execution.status, ExecutionStatus::Completed);
     assert_eq!(execution.completed_iterations, 2);
 }
 
-#[test]
-fn short_circuits_iteration_after_failure_limit() {
+#[tokio::test]
+async fn short_circuits_iteration_after_failure_limit() {
     let mut runtime = MockRuntime::new();
     runtime.seed_failure("exec-run-candidate-1");
     runtime.seed_success(
@@ -257,14 +259,15 @@ fn short_circuits_iteration_after_failure_limit() {
     );
     let execution = service
         .run_to_completion(test_spec_with_failure_limit(1))
+        .await
         .expect("run execution");
 
     assert_eq!(execution.status, ExecutionStatus::Failed);
     assert_eq!(execution.failure_counts.total_candidate_failures, 1);
 }
 
-#[test]
-fn marks_execution_failed_when_all_candidates_fail_and_policy_says_fail() {
+#[tokio::test]
+async fn marks_execution_failed_when_all_candidates_fail_and_policy_says_fail() {
     let mut runtime = MockRuntime::new();
     runtime.seed_failure("exec-run-candidate-1");
     runtime.seed_failure("exec-run-candidate-2");
@@ -279,6 +282,7 @@ fn marks_execution_failed_when_all_candidates_fail_and_policy_says_fail() {
     );
     let execution = service
         .run_to_completion(test_spec_with_failure_limit(2))
+        .await
         .expect("run execution");
 
     assert_eq!(execution.status, ExecutionStatus::Failed);

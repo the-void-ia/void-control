@@ -1,12 +1,10 @@
 #![cfg(feature = "serde")]
 
-use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::PathBuf;
-use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -27,7 +25,7 @@ use void_control::runtime::{
 
 fn run_ref() -> VoidBoxRunRef {
     VoidBoxRunRef {
-        daemon_base_url: "http://127.0.0.1:43100".to_string(),
+        daemon_base_url: "unix:///tmp/voidbox-test.sock".to_string(),
         run_id: "run-123".to_string(),
     }
 }
@@ -86,11 +84,12 @@ fn http_sidecar_adapter_declares_launch_injection_and_live_poll() {
     );
 }
 
-#[test]
-fn message_delivery_adapter_push_live_defaults_to_unsupported() {
+#[tokio::test]
+async fn message_delivery_adapter_push_live_defaults_to_unsupported() {
     let adapter = HttpSidecarAdapter::new();
     let err = adapter
         .push_live(&run_ref(), &inbox_entry())
+        .await
         .expect_err("push_live should be unsupported by default");
 
     assert_eq!(err.kind(), ErrorKind::Unsupported);
@@ -111,9 +110,9 @@ fn http_sidecar_adapter_generates_generic_messaging_skill_content() {
     assert!(skill.contains("leader: coordinator only"));
 }
 
-#[test]
-fn service_with_delivery_adapter_injects_snapshot_and_persists_drained_intents() {
-    let starts = Rc::new(RefCell::new(Vec::new()));
+#[tokio::test]
+async fn service_with_delivery_adapter_injects_snapshot_and_persists_drained_intents() {
+    let starts: Arc<Mutex<Vec<StartRequest>>> = Arc::new(Mutex::new(Vec::new()));
     let injected = Arc::new(Mutex::new(Vec::new()));
     let drained = Arc::new(Mutex::new(Vec::new()));
     drained.lock().expect("lock drained").push(vec![
@@ -175,9 +174,10 @@ fn service_with_delivery_adapter_injects_snapshot_and_persists_drained_intents()
 
     service
         .dispatch_execution_once("exec-delivery")
+        .await
         .expect("dispatch once");
 
-    let requests = starts.borrow();
+    let requests = starts.lock().expect("starts poisoned");
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].launch_context, None);
 
@@ -194,8 +194,8 @@ fn service_with_delivery_adapter_injects_snapshot_and_persists_drained_intents()
     assert_eq!(intents[1].intent_id, "sidecar-dup");
 }
 
-#[test]
-fn service_with_delivery_adapter_requires_runtime_run_refs() {
+#[tokio::test]
+async fn service_with_delivery_adapter_requires_runtime_run_refs() {
     let root = temp_store_root("message-delivery-missing-run-ref");
     let store = FsExecutionStore::new(root);
     let spec = launch_spec();
@@ -235,14 +235,15 @@ fn service_with_delivery_adapter_requires_runtime_run_refs() {
 
     let err = service
         .dispatch_execution_once("exec-delivery")
+        .await
         .expect_err("runtime without delivery refs should fail");
 
     assert_eq!(err.kind(), ErrorKind::Unsupported);
 }
 
-#[test]
-fn sidecar_leader_and_broadcast_intents_route_differently_across_iterations() {
-    let starts = Rc::new(RefCell::new(Vec::new()));
+#[tokio::test]
+async fn sidecar_leader_and_broadcast_intents_route_differently_across_iterations() {
+    let starts: Arc<Mutex<Vec<StartRequest>>> = Arc::new(Mutex::new(Vec::new()));
     let injected = Arc::new(Mutex::new(Vec::new()));
     let drained = Arc::new(Mutex::new(BTreeMap::from([(
         "exec-run-candidate-1".to_string(),
@@ -296,6 +297,7 @@ fn sidecar_leader_and_broadcast_intents_route_differently_across_iterations() {
 
     let execution = service
         .run_to_completion(two_iteration_swarm_spec())
+        .await
         .expect("run execution");
 
     let store = FsExecutionStore::new(root);
@@ -347,9 +349,9 @@ fn sidecar_leader_and_broadcast_intents_route_differently_across_iterations() {
     );
 }
 
-#[test]
-fn candidate_completes_when_sidecar_intent_drain_fails_after_terminal_output() {
-    let starts = Rc::new(RefCell::new(Vec::new()));
+#[tokio::test]
+async fn candidate_completes_when_sidecar_intent_drain_fails_after_terminal_output() {
+    let starts: Arc<Mutex<Vec<StartRequest>>> = Arc::new(Mutex::new(Vec::new()));
     let runtime = RecordingDeliveryRuntime::new(
         starts,
         CandidateOutput::new("candidate-1", true, BTreeMap::new()).with_intents(vec![intent(
@@ -374,6 +376,7 @@ fn candidate_completes_when_sidecar_intent_drain_fails_after_terminal_output() {
 
     let execution = service
         .run_to_completion(spec)
+        .await
         .expect("execution should still complete");
 
     let candidate = store
@@ -403,33 +406,37 @@ fn candidate_completes_when_sidecar_intent_drain_fails_after_terminal_output() {
 }
 
 struct RecordingDeliveryRuntime {
-    starts: Rc<RefCell<Vec<StartRequest>>>,
+    starts: Arc<Mutex<Vec<StartRequest>>>,
     output: CandidateOutput,
 }
 
 impl RecordingDeliveryRuntime {
-    fn new(starts: Rc<RefCell<Vec<StartRequest>>>, output: CandidateOutput) -> Self {
+    fn new(starts: Arc<Mutex<Vec<StartRequest>>>, output: CandidateOutput) -> Self {
         Self { starts, output }
     }
 }
 
 struct SeededDeliveryRuntime {
-    starts: Rc<RefCell<Vec<StartRequest>>>,
+    starts: Arc<Mutex<Vec<StartRequest>>>,
     outputs: BTreeMap<String, CandidateOutput>,
 }
 
 impl SeededDeliveryRuntime {
     fn new(
-        starts: Rc<RefCell<Vec<StartRequest>>>,
+        starts: Arc<Mutex<Vec<StartRequest>>>,
         outputs: BTreeMap<String, CandidateOutput>,
     ) -> Self {
         Self { starts, outputs }
     }
 }
 
+#[async_trait::async_trait]
 impl ExecutionRuntime for RecordingDeliveryRuntime {
-    fn start_run(&mut self, request: StartRequest) -> Result<StartResult, ContractError> {
-        self.starts.borrow_mut().push(request.clone());
+    async fn start_run(&mut self, request: StartRequest) -> Result<StartResult, ContractError> {
+        self.starts
+            .lock()
+            .expect("starts poisoned")
+            .push(request.clone());
         Ok(StartResult {
             handle: format!("vb:{}", request.run_id),
             attempt_id: 1,
@@ -437,7 +444,7 @@ impl ExecutionRuntime for RecordingDeliveryRuntime {
         })
     }
 
-    fn inspect_run(&self, handle: &str) -> Result<RuntimeInspection, ContractError> {
+    async fn inspect_run(&self, handle: &str) -> Result<RuntimeInspection, ContractError> {
         Ok(RuntimeInspection {
             run_id: handle.trim_start_matches("vb:").to_string(),
             attempt_id: 1,
@@ -451,21 +458,25 @@ impl ExecutionRuntime for RecordingDeliveryRuntime {
         })
     }
 
-    fn take_structured_output(&mut self, _run_id: &str) -> StructuredOutputResult {
+    async fn take_structured_output(&mut self, _run_id: &str) -> StructuredOutputResult {
         StructuredOutputResult::Found(self.output.clone())
     }
 
     fn delivery_run_ref(&self, handle: &str) -> Option<VoidBoxRunRef> {
         Some(VoidBoxRunRef {
-            daemon_base_url: "http://127.0.0.1:43100".to_string(),
+            daemon_base_url: "unix:///tmp/voidbox-test.sock".to_string(),
             run_id: handle.trim_start_matches("vb:").to_string(),
         })
     }
 }
 
+#[async_trait::async_trait]
 impl ExecutionRuntime for SeededDeliveryRuntime {
-    fn start_run(&mut self, request: StartRequest) -> Result<StartResult, ContractError> {
-        self.starts.borrow_mut().push(request.clone());
+    async fn start_run(&mut self, request: StartRequest) -> Result<StartResult, ContractError> {
+        self.starts
+            .lock()
+            .expect("starts poisoned")
+            .push(request.clone());
         Ok(StartResult {
             handle: format!("vb:{}", request.run_id),
             attempt_id: 1,
@@ -473,7 +484,7 @@ impl ExecutionRuntime for SeededDeliveryRuntime {
         })
     }
 
-    fn inspect_run(&self, handle: &str) -> Result<RuntimeInspection, ContractError> {
+    async fn inspect_run(&self, handle: &str) -> Result<RuntimeInspection, ContractError> {
         Ok(RuntimeInspection {
             run_id: handle.trim_start_matches("vb:").to_string(),
             attempt_id: 1,
@@ -487,7 +498,7 @@ impl ExecutionRuntime for SeededDeliveryRuntime {
         })
     }
 
-    fn take_structured_output(&mut self, run_id: &str) -> StructuredOutputResult {
+    async fn take_structured_output(&mut self, run_id: &str) -> StructuredOutputResult {
         StructuredOutputResult::Found(
             self.outputs
                 .get(run_id)
@@ -498,7 +509,7 @@ impl ExecutionRuntime for SeededDeliveryRuntime {
 
     fn delivery_run_ref(&self, handle: &str) -> Option<VoidBoxRunRef> {
         Some(VoidBoxRunRef {
-            daemon_base_url: "http://127.0.0.1:43100".to_string(),
+            daemon_base_url: "unix:///tmp/voidbox-test.sock".to_string(),
             run_id: handle.trim_start_matches("vb:").to_string(),
         })
     }
@@ -506,8 +517,9 @@ impl ExecutionRuntime for SeededDeliveryRuntime {
 
 struct NoRunRefRuntime;
 
+#[async_trait::async_trait]
 impl ExecutionRuntime for NoRunRefRuntime {
-    fn start_run(&mut self, request: StartRequest) -> Result<StartResult, ContractError> {
+    async fn start_run(&mut self, request: StartRequest) -> Result<StartResult, ContractError> {
         Ok(StartResult {
             handle: format!("vb:{}", request.run_id),
             attempt_id: 1,
@@ -515,7 +527,7 @@ impl ExecutionRuntime for NoRunRefRuntime {
         })
     }
 
-    fn inspect_run(&self, handle: &str) -> Result<RuntimeInspection, ContractError> {
+    async fn inspect_run(&self, handle: &str) -> Result<RuntimeInspection, ContractError> {
         Ok(RuntimeInspection {
             run_id: handle.trim_start_matches("vb:").to_string(),
             attempt_id: 1,
@@ -529,7 +541,7 @@ impl ExecutionRuntime for NoRunRefRuntime {
         })
     }
 
-    fn take_structured_output(&mut self, _run_id: &str) -> StructuredOutputResult {
+    async fn take_structured_output(&mut self, _run_id: &str) -> StructuredOutputResult {
         StructuredOutputResult::Missing
     }
 }
@@ -548,12 +560,13 @@ impl RecordingDeliveryAdapter {
     }
 }
 
+#[async_trait::async_trait]
 impl MessageDeliveryAdapter for RecordingDeliveryAdapter {
     fn capabilities(&self) -> Vec<DeliveryCapability> {
         vec![DeliveryCapability::LaunchInjection]
     }
 
-    fn inject_at_launch(
+    async fn inject_at_launch(
         &self,
         run: &VoidBoxRunRef,
         _candidate: &void_control::orchestration::CandidateSpec,
@@ -566,7 +579,10 @@ impl MessageDeliveryAdapter for RecordingDeliveryAdapter {
         Ok(())
     }
 
-    fn drain_intents(&self, _run: &VoidBoxRunRef) -> std::io::Result<Vec<CommunicationIntent>> {
+    async fn drain_intents(
+        &self,
+        _run: &VoidBoxRunRef,
+    ) -> std::io::Result<Vec<CommunicationIntent>> {
         Ok(self
             .drained
             .lock()
@@ -594,12 +610,13 @@ impl MappingDeliveryAdapter {
     }
 }
 
+#[async_trait::async_trait]
 impl MessageDeliveryAdapter for MappingDeliveryAdapter {
     fn capabilities(&self) -> Vec<DeliveryCapability> {
         vec![DeliveryCapability::LaunchInjection]
     }
 
-    fn inject_at_launch(
+    async fn inject_at_launch(
         &self,
         run: &VoidBoxRunRef,
         _candidate: &void_control::orchestration::CandidateSpec,
@@ -612,7 +629,10 @@ impl MessageDeliveryAdapter for MappingDeliveryAdapter {
         Ok(())
     }
 
-    fn drain_intents(&self, run: &VoidBoxRunRef) -> std::io::Result<Vec<CommunicationIntent>> {
+    async fn drain_intents(
+        &self,
+        run: &VoidBoxRunRef,
+    ) -> std::io::Result<Vec<CommunicationIntent>> {
         Ok(self
             .drained
             .lock()
@@ -628,12 +648,13 @@ impl MessageDeliveryAdapter for MappingDeliveryAdapter {
 
 struct FailingDrainDeliveryAdapter;
 
+#[async_trait::async_trait]
 impl MessageDeliveryAdapter for FailingDrainDeliveryAdapter {
     fn capabilities(&self) -> Vec<DeliveryCapability> {
         vec![DeliveryCapability::LaunchInjection]
     }
 
-    fn inject_at_launch(
+    async fn inject_at_launch(
         &self,
         _run: &VoidBoxRunRef,
         _candidate: &void_control::orchestration::CandidateSpec,
@@ -642,7 +663,10 @@ impl MessageDeliveryAdapter for FailingDrainDeliveryAdapter {
         Ok(())
     }
 
-    fn drain_intents(&self, _run: &VoidBoxRunRef) -> std::io::Result<Vec<CommunicationIntent>> {
+    async fn drain_intents(
+        &self,
+        _run: &VoidBoxRunRef,
+    ) -> std::io::Result<Vec<CommunicationIntent>> {
         Err(std::io::Error::new(
             ErrorKind::NotFound,
             "sidecar intents unavailable after terminal output",

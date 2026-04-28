@@ -127,8 +127,8 @@ fn rejects_unknown_variation_source() {
 }
 
 #[cfg(feature = "serde")]
-#[test]
-fn bridge_accepts_signal_reactive_and_legacy_leader_directed_variations() {
+#[tokio::test]
+async fn bridge_accepts_signal_reactive_and_legacy_leader_directed_variations() {
     use serde_json::json;
 
     for source in ["signal_reactive", "leader_directed"] {
@@ -174,6 +174,7 @@ fn bridge_accepts_signal_reactive_and_legacy_leader_directed_variations() {
             "/v1/executions/dry-run",
             Some(&body),
         )
+        .await
         .expect("response");
 
         assert_eq!(response.status, 200);

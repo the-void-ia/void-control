@@ -119,10 +119,15 @@ What to look for:
 
 ### 1) Start `void-box` daemon
 
+The daemon defaults to AF_UNIX at mode `0o600` and auto-discovers a
+socket path under `$XDG_RUNTIME_DIR/voidbox.sock` →
+`$TMPDIR/voidbox-$UID.sock` → `/tmp/voidbox-$UID.sock`. Same-uid
+invocations of `void-control` find it without configuration.
+
 Linux:
 
 ```bash
-cargo run --bin voidbox -- serve --listen 127.0.0.1:43100
+cargo run --bin voidbox -- serve
 ```
 
 macOS (Apple Silicon, Virtualization.framework):
@@ -131,8 +136,21 @@ macOS (Apple Silicon, Virtualization.framework):
 # after building the guest kernel + rootfs per void-box's macOS guide
 VOID_BOX_KERNEL=target/vmlinuz \
 VOID_BOX_INITRAMFS=target/void-box-claude.cpio.gz \
-  cargo run --bin voidbox -- serve --listen 127.0.0.1:43100
+  cargo run --bin voidbox -- serve
 ```
+
+To listen on TCP instead (cross-uid deployments, dev hosts where AF_UNIX
+permissions are inconvenient):
+
+```bash
+cargo run --bin voidbox -- serve --listen tcp://127.0.0.1:43100
+```
+
+TCP requires a bearer token. The daemon resolves it from
+`VOIDBOX_DAEMON_TOKEN_FILE`, then `VOIDBOX_DAEMON_TOKEN`, then a
+generated `0o600` file at `$XDG_CONFIG_HOME/voidbox/daemon-token` (or
+`~/.config/voidbox/daemon-token`). `void-control` reads the same chain
+when `VOID_BOX_BASE_URL` is set to a TCP URL.
 
 macOS requires `VOID_BOX_KERNEL` and `VOID_BOX_INITRAMFS` pointing at the
 pre-built guest artifacts. The initramfs filename on macOS is
@@ -153,7 +171,16 @@ one validation path.
 
 ### 3) Run live daemon contract gate
 
+The contract gate dials the daemon directly and needs `VOID_BOX_BASE_URL`
+set explicitly. AF_UNIX form mirrors the production default; the TCP
+form is for hosts that listen on TCP.
+
 ```bash
+# AF_UNIX (default daemon listener)
+VOID_BOX_BASE_URL=unix://$XDG_RUNTIME_DIR/voidbox.sock \
+cargo test --features serde --test void_box_contract -- --ignored --nocapture
+
+# TCP
 VOID_BOX_BASE_URL=http://127.0.0.1:43100 \
 cargo test --features serde --test void_box_contract -- --ignored --nocapture
 ```
@@ -166,11 +193,18 @@ npm install
 npm run dev
 ```
 
-The dev server proxies `/api` to the daemon at `http://127.0.0.1:43100` (see
-`vite.config.ts`), so the browser stays same-origin. `void-box` does not set
-CORS headers, so do **not** set `VITE_VOID_BOX_BASE_URL` during local dev —
-leave it unset to use the proxy. Only override it when the daemon is reachable
-from a host that returns CORS (e.g., a reverse proxy in front of void-box).
+The dev server proxies `/api` to the **void-control bridge** at
+`http://127.0.0.1:43210` (see `vite.config.ts`). The bridge dispatches to
+the daemon over AF_UNIX (default) or TCP under the hood; browsers don't
+speak AF_UNIX, so the browser hop must terminate at the bridge. Leave
+`VITE_VOID_BOX_BASE_URL` unset during local dev — only override it when
+the daemon is reachable from the browser via a CORS-aware reverse proxy.
+
+Start the bridge in a second terminal:
+
+```bash
+cargo run --features serde --bin voidctl -- serve
+```
 
 ### 5) Launch from YAML editor/upload (bridge)
 

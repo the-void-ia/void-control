@@ -2,13 +2,15 @@
 
 use std::path::{Path, PathBuf};
 
-fn submit_team_dry_run(spec: &str) -> void_control::bridge::TestBridgeResponse {
+async fn submit_team_dry_run(spec: &str) -> void_control::bridge::TestBridgeResponse {
     void_control::bridge::handle_bridge_request_for_test("POST", "/v1/teams/dry-run", Some(spec))
+        .await
         .expect("team dry-run response")
 }
 
-fn submit_team_run(spec: &str) -> void_control::bridge::TestBridgeResponse {
+async fn submit_team_run(spec: &str) -> void_control::bridge::TestBridgeResponse {
     void_control::bridge::handle_bridge_request_for_test("POST", "/v1/teams/run", Some(spec))
+        .await
         .expect("team run response")
 }
 
@@ -21,7 +23,10 @@ fn temp_bridge_root(name: &str) -> PathBuf {
     root
 }
 
-fn submit_team_run_with_root(spec: &str, root: &Path) -> void_control::bridge::TestBridgeResponse {
+async fn submit_team_run_with_root(
+    spec: &str,
+    root: &Path,
+) -> void_control::bridge::TestBridgeResponse {
     void_control::bridge::handle_bridge_request_with_dirs_for_test(
         "POST",
         "/v1/teams/run",
@@ -29,10 +34,11 @@ fn submit_team_run_with_root(spec: &str, root: &Path) -> void_control::bridge::T
         &root.join("specs"),
         &root.join("executions"),
     )
+    .await
     .expect("team run response")
 }
 
-fn fetch_team_run_with_root(
+async fn fetch_team_run_with_root(
     execution_id: &str,
     root: &Path,
 ) -> void_control::bridge::TestBridgeResponse {
@@ -44,11 +50,12 @@ fn fetch_team_run_with_root(
         &root.join("specs"),
         &root.join("executions"),
     )
+    .await
     .expect("team get response")
 }
 
-#[test]
-fn team_dry_run_rejects_missing_agents() {
+#[tokio::test]
+async fn team_dry_run_rejects_missing_agents() {
     let spec = r#"
 api_version: v1
 kind: team
@@ -59,7 +66,7 @@ process:
   type: sequential
 "#;
 
-    let response = submit_team_dry_run(spec);
+    let response = submit_team_dry_run(spec).await;
 
     assert_eq!(response.status, 400);
     assert!(
@@ -73,8 +80,8 @@ process:
     );
 }
 
-#[test]
-fn team_dry_run_compiles_parallel_process_to_swarm() {
+#[tokio::test]
+async fn team_dry_run_compiles_parallel_process_to_swarm() {
     let spec = r#"
 api_version: v1
 kind: team
@@ -90,15 +97,15 @@ process:
   type: parallel
 "#;
 
-    let response = submit_team_dry_run(spec);
+    let response = submit_team_dry_run(spec).await;
 
     assert_eq!(response.status, 200);
     assert_eq!(response.json["kind"], "team");
     assert_eq!(response.json["compiled_primitive"], "swarm");
 }
 
-#[test]
-fn team_dry_run_compiles_sequential_process_one_task_per_iteration() {
+#[tokio::test]
+async fn team_dry_run_compiles_sequential_process_one_task_per_iteration() {
     let spec = r#"
 api_version: v1
 kind: team
@@ -119,7 +126,7 @@ process:
   type: sequential
 "#;
 
-    let response = submit_team_dry_run(spec);
+    let response = submit_team_dry_run(spec).await;
 
     assert_eq!(response.status, 200);
     assert_eq!(response.json["compiled"]["candidates_per_iteration"], 1);
@@ -132,8 +139,8 @@ process:
     );
 }
 
-#[test]
-fn team_dry_run_rejects_conflicting_agent_templates() {
+#[tokio::test]
+async fn team_dry_run_rejects_conflicting_agent_templates() {
     let spec = r#"
 api_version: v1
 kind: team
@@ -157,7 +164,7 @@ process:
   type: parallel
 "#;
 
-    let response = submit_team_dry_run(spec);
+    let response = submit_team_dry_run(spec).await;
 
     assert_eq!(response.status, 400);
     assert!(
@@ -171,8 +178,8 @@ process:
     );
 }
 
-#[test]
-fn team_dry_run_requires_explicit_lead_for_lead_worker() {
+#[tokio::test]
+async fn team_dry_run_requires_explicit_lead_for_lead_worker() {
     let spec = r#"
 api_version: v1
 kind: team
@@ -190,7 +197,7 @@ process:
   type: lead_worker
 "#;
 
-    let response = submit_team_dry_run(spec);
+    let response = submit_team_dry_run(spec).await;
 
     assert_eq!(response.status, 400);
     assert!(
@@ -204,8 +211,8 @@ process:
     );
 }
 
-#[test]
-fn team_dry_run_parallel_without_task_agent_fans_out_across_agents() {
+#[tokio::test]
+async fn team_dry_run_parallel_without_task_agent_fans_out_across_agents() {
     let spec = r#"
 api_version: v1
 kind: team
@@ -223,14 +230,14 @@ process:
   type: parallel
 "#;
 
-    let response = submit_team_dry_run(spec);
+    let response = submit_team_dry_run(spec).await;
 
     assert_eq!(response.status, 200);
     assert_eq!(response.json["compiled"]["candidates_per_iteration"], 2);
 }
 
-#[test]
-fn team_dry_run_rejects_depends_on_in_phase_one() {
+#[tokio::test]
+async fn team_dry_run_rejects_depends_on_in_phase_one() {
     let spec = r#"
 api_version: v1
 kind: team
@@ -251,7 +258,7 @@ process:
   type: sequential
 "#;
 
-    let response = submit_team_dry_run(spec);
+    let response = submit_team_dry_run(spec).await;
 
     assert_eq!(response.status, 400);
     assert!(
@@ -265,8 +272,8 @@ process:
     );
 }
 
-#[test]
-fn team_run_returns_execution_summary() {
+#[tokio::test]
+async fn team_run_returns_execution_summary() {
     let spec = r#"
 api_version: v1
 kind: team
@@ -284,15 +291,15 @@ process:
   type: parallel
 "#;
 
-    let response = submit_team_run(spec);
+    let response = submit_team_run(spec).await;
 
     assert_eq!(response.status, 200);
     assert_eq!(response.json["kind"], "team");
     assert!(response.json.get("execution_id").is_some());
 }
 
-#[test]
-fn team_run_get_wraps_execution_detail() {
+#[tokio::test]
+async fn team_run_get_wraps_execution_detail() {
     let spec = r#"
 api_version: v1
 kind: team
@@ -311,14 +318,14 @@ process:
 "#;
 
     let root = temp_bridge_root("roundtrip");
-    let started = submit_team_run_with_root(spec, &root);
+    let started = submit_team_run_with_root(spec, &root).await;
     let execution_id = started
         .json
         .get("execution_id")
         .and_then(|value| value.as_str())
         .expect("execution_id");
 
-    let response = fetch_team_run_with_root(execution_id, &root);
+    let response = fetch_team_run_with_root(execution_id, &root).await;
 
     assert_eq!(response.status, 200);
     assert_eq!(response.json["kind"], "team");

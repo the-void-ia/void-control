@@ -1,5 +1,14 @@
-use std::io::{Read, Write};
-use std::net::TcpStream;
+use std::path::PathBuf;
+use std::time::Duration;
+
+use async_trait::async_trait;
+use bytes::Bytes;
+use http_body_util::{BodyExt, Full};
+use hyper::{Method, Request as HyperRequest};
+use hyper_util::client::legacy::connect::HttpConnector;
+use hyper_util::client::legacy::Client as HyperClient;
+use hyper_util::rt::TokioExecutor;
+use hyperlocal::{UnixConnector, Uri as HyperLocalUri};
 
 use crate::contract::{
     from_void_box_run_and_events_json, from_void_box_run_json, map_void_box_status, ContractError,
@@ -7,22 +16,80 @@ use crate::contract::{
     StartRequest, StartResult, StopRequest, StopResult, SubscribeEventsRequest,
 };
 use crate::orchestration::CandidateOutput;
+use crate::runtime::daemon_address::{
+    classify_daemon_url, default_unix_url, resolve_tcp_token, token_search_labels,
+    DaemonAddressError, DaemonScheme,
+};
 #[cfg(feature = "serde")]
 use crate::runtime::VoidBoxRunRef;
 
+/// Per-request HTTP timeout for the daemon transport. Applied uniformly to
+/// both TCP and AF_UNIX dispatch so callers see the same bound regardless of
+/// the configured socket scheme. Mirrors void-box's CLI backend.
+const HTTP_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Pooled hyper-util client over a TCP connector. Wraps a connection pool
+/// over `Connection: keep-alive`, matching what the daemon serves on the
+/// same transport.
+type TcpHyperClient = HyperClient<HttpConnector, Full<Bytes>>;
+
+/// Pooled hyper-util client over `hyperlocal::UnixConnector`. Same client
+/// shape as `TcpHyperClient` — only the connector differs, so dispatch can
+/// share one code path once the URI is built.
+type UnixHyperClient = HyperClient<UnixConnector, Full<Bytes>>;
+
+/// Shared HTTP client for the void-box daemon.
+///
+/// Cheap to `clone` — the underlying transport is held in an `Arc`, and
+/// the wrapped hyper-util `Client` already pools connections internally,
+/// so all clones share one connection pool. This is the shape the bridge
+/// uses to fan a single startup-built client out to the worker tick and
+/// per-request handlers without re-running the construction-time token
+/// resolution.
+#[derive(Clone)]
 pub struct VoidBoxRuntimeClient {
     base_url: String,
     poll_interval_ms: u64,
-    transport: Box<dyn HttpTransport + Send + Sync>,
+    transport: std::sync::Arc<dyn HttpTransport + Send + Sync>,
 }
 
 impl VoidBoxRuntimeClient {
+    /// Construct a client. Panics if construction fails (e.g. TCP daemon URL
+    /// with no resolvable bearer token). See [`Self::try_new`] for a fallible
+    /// variant suitable for library consumers and tests.
+    ///
+    /// The transport is selected once from `base_url`:
+    /// - `unix:///abs/path` → AF_UNIX transport, no auth header.
+    /// - `http://host:port` or bare `host:port` → TCP transport. A bearer
+    ///   token must be resolvable from `VOIDBOX_DAEMON_TOKEN_FILE`,
+    ///   `VOIDBOX_DAEMON_TOKEN`, or `$XDG_CONFIG_HOME/voidbox/daemon-token`;
+    ///   construction fails if none is configured (we fail at construction
+    ///   so a misconfigured deployment doesn't dial and discover via 401).
+    ///
+    /// Empty `base_url` is treated as "use the default discovered AF_UNIX
+    /// socket path", mirroring the daemon's own auto-discovery so a same-uid
+    /// invocation needs no configuration.
     pub fn new(base_url: String, poll_interval_ms: u64) -> Self {
-        Self {
-            base_url,
+        Self::try_new(base_url, poll_interval_ms).unwrap_or_else(|err| {
+            panic!("void-box runtime client construction failed: {err}");
+        })
+    }
+
+    /// Fallible constructor. Returns `Err` if the daemon URL is malformed or
+    /// if a TCP target lacks a resolvable bearer token. Same dispatch and
+    /// auto-discovery contract as [`Self::new`].
+    pub fn try_new(base_url: String, poll_interval_ms: u64) -> Result<Self, String> {
+        let url = if base_url.trim().is_empty() {
+            default_unix_url()
+        } else {
+            base_url
+        };
+        let transport = build_transport(&url)?;
+        Ok(Self {
+            base_url: url,
             poll_interval_ms,
-            transport: Box::new(TcpHttpTransport),
-        }
+            transport: transport.into(),
+        })
     }
 
     #[cfg(test)]
@@ -34,12 +101,30 @@ impl VoidBoxRuntimeClient {
         Self {
             base_url,
             poll_interval_ms,
-            transport,
+            transport: transport.into(),
         }
     }
 
     pub fn poll_interval_ms(&self) -> u64 {
         self.poll_interval_ms
+    }
+
+    /// Generic HTTP passthrough to the daemon. Method, path-and-query, and
+    /// body are forwarded as-is; the daemon's response is returned unchanged.
+    /// The bridge uses this for routes (e.g. `/v1/runs`) that the typed
+    /// orchestration surface doesn't model and that the dashboard polls
+    /// directly.
+    ///
+    /// `Err` only fires for transport-level failures (network, malformed
+    /// response). Daemon-returned non-2xx statuses come back as `Ok` with
+    /// the corresponding `HttpResponse.status`.
+    pub async fn forward(
+        &self,
+        method: &str,
+        path_and_query: &str,
+        body: &str,
+    ) -> Result<HttpResponse, ContractError> {
+        self.transport.request(method, path_and_query, body).await
     }
 
     #[cfg(feature = "serde")]
@@ -50,7 +135,7 @@ impl VoidBoxRuntimeClient {
         })
     }
 
-    pub fn start(&self, request: StartRequest) -> Result<StartResult, ContractError> {
+    pub async fn start(&self, request: StartRequest) -> Result<StartResult, ContractError> {
         request
             .policy
             .validate()
@@ -65,7 +150,7 @@ impl VoidBoxRuntimeClient {
         })
         .to_string();
 
-        let response = self.http_post("/v1/runs", &payload)?;
+        let response = self.http_post("/v1/runs", &payload).await?;
         if response.status == 404 {
             return Err(ContractError::new(
                 ContractErrorCode::NotFound,
@@ -107,10 +192,10 @@ impl VoidBoxRuntimeClient {
         })
     }
 
-    pub fn stop(&self, request: StopRequest) -> Result<StopResult, ContractError> {
+    pub async fn stop(&self, request: StopRequest) -> Result<StopResult, ContractError> {
         let run_id = run_id_from_handle(&request.handle)?;
         let cancel_path = format!("/v1/runs/{run_id}/cancel");
-        let cancel_resp = self.http_post(&cancel_path, "{}")?;
+        let cancel_resp = self.http_post(&cancel_path, "{}").await?;
 
         if cancel_resp.status == 404 {
             return Err(ContractError::new(
@@ -127,7 +212,7 @@ impl VoidBoxRuntimeClient {
             ));
         }
 
-        let converted = self.fetch_converted_run(run_id)?;
+        let converted = self.fetch_converted_run(run_id).await?;
         let Some(terminal) = converted
             .events
             .iter()
@@ -153,10 +238,10 @@ impl VoidBoxRuntimeClient {
         })
     }
 
-    pub fn inspect(&self, handle: &str) -> Result<RuntimeInspection, ContractError> {
+    pub async fn inspect(&self, handle: &str) -> Result<RuntimeInspection, ContractError> {
         let run_id = run_id_from_handle(handle)?;
         let run_path = format!("/v1/runs/{run_id}");
-        let run_resp = self.http_get(&run_path)?;
+        let run_resp = self.http_get(&run_path).await?;
 
         if run_resp.status == 404 {
             return Err(ContractError::new(
@@ -177,13 +262,16 @@ impl VoidBoxRuntimeClient {
         Ok(converted.inspection)
     }
 
-    pub fn list_runs(&self, state: Option<&str>) -> Result<Vec<RuntimeInspection>, ContractError> {
+    pub async fn list_runs(
+        &self,
+        state: Option<&str>,
+    ) -> Result<Vec<RuntimeInspection>, ContractError> {
         let path = if let Some(filter) = state.filter(|s| !s.trim().is_empty()) {
             format!("/v1/runs?state={}", filter.trim())
         } else {
             "/v1/runs".to_string()
         };
-        let response = self.http_get(&path)?;
+        let response = self.http_get(&path).await?;
 
         if response.status >= 400 {
             return Err(ContractError::new(
@@ -271,24 +359,24 @@ impl VoidBoxRuntimeClient {
         Ok(inspections)
     }
 
-    pub fn subscribe_events(
+    pub async fn subscribe_events(
         &self,
         request: SubscribeEventsRequest,
     ) -> Result<Vec<EventEnvelope>, ContractError> {
         let run_id = run_id_from_handle(&request.handle)?;
-        let converted = self.fetch_converted_run(run_id)?;
+        let converted = self.fetch_converted_run(run_id).await?;
         Ok(filter_events_from_id(
             converted.events,
             request.from_event_id.as_deref(),
         ))
     }
 
-    pub fn fetch_structured_output(
+    pub async fn fetch_structured_output(
         &self,
         run_id: &str,
     ) -> Result<Option<CandidateOutput>, ContractError> {
         let run_path = format!("/v1/runs/{run_id}");
-        let run_resp = self.http_get(&run_path)?;
+        let run_resp = self.http_get(&run_path).await?;
         if run_resp.status == 404 {
             return Ok(None);
         }
@@ -302,7 +390,7 @@ impl VoidBoxRuntimeClient {
 
         if let Some(retrieval_path) = manifest_retrieval_path(&run_resp.body, None, "result.json")?
         {
-            let response = self.http_get(&retrieval_path)?;
+            let response = self.http_get(&retrieval_path).await?;
             return match parse_artifact_response(
                 &response,
                 ContractErrorCode::StructuredOutputMissing,
@@ -337,7 +425,7 @@ impl VoidBoxRuntimeClient {
         }
         for stage in stages {
             let path = format!("/v1/runs/{run_id}/stages/{stage}/output-file");
-            let response = self.http_get(&path)?;
+            let response = self.http_get(&path).await?;
             if response.status == 404 {
                 if let Some(err) = parse_api_error(&response.body) {
                     match err.code {
@@ -367,24 +455,25 @@ impl VoidBoxRuntimeClient {
         Ok(None)
     }
 
-    pub fn fetch_named_artifact(
+    pub async fn fetch_named_artifact(
         &self,
         run_id: &str,
         stage: &str,
         name: &str,
     ) -> Result<Option<String>, ContractError> {
         let path = self
-            .find_manifest_artifact_path(run_id, Some(stage), name)?
+            .find_manifest_artifact_path(run_id, Some(stage), name)
+            .await?
             .unwrap_or_else(|| format!("/v1/runs/{run_id}/stages/{stage}/artifacts/{name}"));
-        let response = self.http_get(&path)?;
+        let response = self.http_get(&path).await?;
         parse_artifact_response(&response, ContractErrorCode::ArtifactNotFound)
     }
 
-    fn fetch_converted_run(&self, run_id: &str) -> Result<ConvertedRunView, ContractError> {
+    async fn fetch_converted_run(&self, run_id: &str) -> Result<ConvertedRunView, ContractError> {
         let run_path = format!("/v1/runs/{run_id}");
         let events_path = format!("/v1/runs/{run_id}/events");
-        let run_resp = self.http_get(&run_path)?;
-        let events_resp = self.http_get(&events_path)?;
+        let run_resp = self.http_get(&run_path).await?;
+        let events_resp = self.http_get(&events_path).await?;
 
         if run_resp.status == 404 || events_resp.status == 404 {
             return Err(ContractError::new(
@@ -409,22 +498,22 @@ impl VoidBoxRuntimeClient {
         from_void_box_run_and_events_json(&run_resp.body, &events_resp.body)
     }
 
-    fn http_get(&self, path: &str) -> Result<HttpResponse, ContractError> {
-        self.transport.request(&self.base_url, "GET", path, "")
+    async fn http_get(&self, path: &str) -> Result<HttpResponse, ContractError> {
+        self.transport.request("GET", path, "").await
     }
 
-    fn http_post(&self, path: &str, body: &str) -> Result<HttpResponse, ContractError> {
-        self.transport.request(&self.base_url, "POST", path, body)
+    async fn http_post(&self, path: &str, body: &str) -> Result<HttpResponse, ContractError> {
+        self.transport.request("POST", path, body).await
     }
 
-    fn find_manifest_artifact_path(
+    async fn find_manifest_artifact_path(
         &self,
         run_id: &str,
         stage: Option<&str>,
         name: &str,
     ) -> Result<Option<String>, ContractError> {
         let run_path = format!("/v1/runs/{run_id}");
-        let run_resp = self.http_get(&run_path)?;
+        let run_resp = self.http_get(&run_path).await?;
         if run_resp.status == 404 {
             return Ok(None);
         }
@@ -440,121 +529,197 @@ impl VoidBoxRuntimeClient {
     }
 }
 
-pub(crate) trait HttpTransport {
-    fn request(
+/// Transport-level HTTP request abstraction.
+///
+/// `base_url` (TCP) and the socket path (AF_UNIX) are bound at construction
+/// rather than passed per-call. This keeps the per-call surface narrow and
+/// avoids the AF_UNIX impl having to ignore an argument it can't consume.
+#[async_trait]
+pub(crate) trait HttpTransport: Send + Sync {
+    async fn request(
         &self,
-        base_url: &str,
         method: &str,
         path: &str,
         body: &str,
     ) -> Result<HttpResponse, ContractError>;
 }
 
-pub(crate) struct TcpHttpTransport;
+/// TCP transport with optional bearer-token injection.
+///
+/// When `bearer_token` is `Some`, every request gets an `Authorization:
+/// Bearer <token>` header. The AF_UNIX path explicitly omits this header
+/// because the daemon's `enforce_auth` short-circuits on `AuthMode::UnixSocket`,
+/// and sending a credential over a transport that doesn't need it widens the
+/// blast radius of an accidental leak (e.g. proxy logs).
+pub(crate) struct TcpHttpTransport {
+    base_url: String,
+    bearer_token: Option<String>,
+    client: TcpHyperClient,
+}
 
+impl TcpHttpTransport {
+    pub(crate) fn new(base_url: String, bearer_token: Option<String>) -> Self {
+        let client = HyperClient::builder(TokioExecutor::new()).build(HttpConnector::new());
+        Self {
+            base_url: base_url.trim_end_matches('/').to_string(),
+            bearer_token,
+            client,
+        }
+    }
+}
+
+#[async_trait]
 impl HttpTransport for TcpHttpTransport {
-    fn request(
+    async fn request(
         &self,
-        base_url: &str,
         method: &str,
         path: &str,
         body: &str,
     ) -> Result<HttpResponse, ContractError> {
-        let (host, port) = parse_host_port(base_url)?;
-        let addr = format!("{host}:{port}");
-        let mut stream = TcpStream::connect(&addr).map_err(|e| {
+        let url = format!("{}{}", self.base_url, path);
+        let uri: hyper::Uri = url.parse().map_err(|e| {
+            ContractError::new(
+                ContractErrorCode::InvalidSpec,
+                format!("invalid daemon URL {url:?}: {e}"),
+                false,
+            )
+        })?;
+        let body_bytes = Bytes::copy_from_slice(body.as_bytes());
+        let request = build_request(method, uri, body_bytes, self.bearer_token.as_deref())?;
+        let display_url = url;
+        send_with_timeout(self.client.request(request), &display_url).await
+    }
+}
+
+/// AF_UNIX transport. Wraps the same hyper-util pooled client as
+/// [`TcpHttpTransport`]; only the connector differs.
+///
+/// Deliberately sends no `Authorization` header: the daemon authenticates
+/// AF_UNIX peers by uid via the kernel's `0o600` perms, and emitting a
+/// credential here would leak it to anywhere the request body is logged.
+pub(crate) struct UnixHttpTransport {
+    socket_path: PathBuf,
+    client: UnixHyperClient,
+}
+
+impl UnixHttpTransport {
+    pub(crate) fn new(socket_path: PathBuf) -> Self {
+        let client = HyperClient::builder(TokioExecutor::new()).build(UnixConnector);
+        Self {
+            socket_path,
+            client,
+        }
+    }
+}
+
+#[async_trait]
+impl HttpTransport for UnixHttpTransport {
+    async fn request(
+        &self,
+        method: &str,
+        path: &str,
+        body: &str,
+    ) -> Result<HttpResponse, ContractError> {
+        let uri: hyper::Uri = HyperLocalUri::new(&self.socket_path, path).into();
+        let display_url = format!("unix://{}", self.socket_path.display());
+        let body_bytes = Bytes::copy_from_slice(body.as_bytes());
+        // No bearer token over AF_UNIX; see struct doc.
+        let request = build_request(method, uri, body_bytes, None)?;
+        send_with_timeout(self.client.request(request), &display_url).await
+    }
+}
+
+fn build_request(
+    method: &str,
+    uri: hyper::Uri,
+    body: Bytes,
+    bearer_token: Option<&str>,
+) -> Result<HyperRequest<Full<Bytes>>, ContractError> {
+    let parsed_method = Method::from_bytes(method.as_bytes()).map_err(|e| {
+        ContractError::new(
+            ContractErrorCode::InvalidSpec,
+            format!("unsupported HTTP method {method:?}: {e}"),
+            false,
+        )
+    })?;
+    let mut builder = HyperRequest::builder()
+        .method(parsed_method)
+        .uri(uri)
+        .header("content-type", "application/json");
+    if let Some(token) = bearer_token {
+        builder = builder.header("authorization", format!("Bearer {token}"));
+    }
+    builder.body(Full::new(body)).map_err(|e| {
+        ContractError::new(
+            ContractErrorCode::InternalError,
+            format!("build request: {e}"),
+            true,
+        )
+    })
+}
+
+async fn send_with_timeout<F, B>(fut: F, display_url: &str) -> Result<HttpResponse, ContractError>
+where
+    F: std::future::Future<Output = Result<hyper::Response<B>, hyper_util::client::legacy::Error>>,
+    B: hyper::body::Body<Data = Bytes> + Unpin,
+    B::Error: std::fmt::Display,
+{
+    let send = async {
+        let resp = fut.await.map_err(|e| {
             ContractError::new(
                 ContractErrorCode::InternalError,
-                format!("connect to {addr} failed: {e}"),
+                format!("connect to {display_url} failed: {e}"),
                 true,
             )
         })?;
-
-        let request = format!(
-            "{method} {path} HTTP/1.1\r\nHost: {host}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            body.len(),
-            body
-        );
-        stream.write_all(request.as_bytes()).map_err(|e| {
-            ContractError::new(
-                ContractErrorCode::InternalError,
-                format!("request write failed: {e}"),
-                true,
-            )
-        })?;
-
-        let mut response = String::new();
-        stream.read_to_string(&mut response).map_err(|e| {
+        let status = resp.status().as_u16();
+        let collected = resp.into_body().collect().await.map_err(|e| {
             ContractError::new(
                 ContractErrorCode::InternalError,
                 format!("response read failed: {e}"),
                 true,
             )
         })?;
+        let body = String::from_utf8_lossy(&collected.to_bytes()).into_owned();
+        Ok(HttpResponse { status, body })
+    };
+    match tokio::time::timeout(HTTP_TIMEOUT, send).await {
+        Ok(result) => result,
+        Err(_) => Err(ContractError::new(
+            ContractErrorCode::RetrievalTimeout,
+            format!("daemon request to {display_url} timed out"),
+            true,
+        )),
+    }
+}
 
-        parse_http_response(&response)
+/// URL-scheme dispatch for [`VoidBoxRuntimeClient::new`] and
+/// [`HttpSidecarAdapter::new`]. Returns the boxed transport selected by the
+/// scheme, after resolving and validating any TCP bearer token.
+pub(crate) fn build_transport(
+    base_url: &str,
+) -> Result<Box<dyn HttpTransport + Send + Sync>, String> {
+    let scheme = classify_daemon_url(base_url)?;
+    match scheme {
+        DaemonScheme::Unix(path) => Ok(Box::new(UnixHttpTransport::new(path))),
+        DaemonScheme::Tcp(url) => {
+            let resolved = resolve_tcp_token().map_err(|e| e.to_string())?;
+            let token = resolved.0.ok_or_else(|| {
+                DaemonAddressError::MissingTcpToken {
+                    url: url.clone(),
+                    searched: token_search_labels(),
+                }
+                .to_string()
+            })?;
+            Ok(Box::new(TcpHttpTransport::new(url, Some(token))))
+        }
     }
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct HttpResponse {
-    pub(crate) status: u16,
-    pub(crate) body: String,
-}
-
-pub(crate) fn parse_http_response(raw: &str) -> Result<HttpResponse, ContractError> {
-    let (head, body) = raw.split_once("\r\n\r\n").ok_or_else(|| {
-        ContractError::new(
-            ContractErrorCode::InvalidSpec,
-            "invalid HTTP response format",
-            false,
-        )
-    })?;
-
-    let mut lines = head.lines();
-    let status_line = lines.next().unwrap_or_default();
-    let mut parts = status_line.split_whitespace();
-    let _http = parts.next();
-    let status = parts
-        .next()
-        .and_then(|s| s.parse::<u16>().ok())
-        .ok_or_else(|| {
-            ContractError::new(
-                ContractErrorCode::InvalidSpec,
-                "invalid HTTP status line",
-                false,
-            )
-        })?;
-
-    Ok(HttpResponse {
-        status,
-        body: body.to_string(),
-    })
-}
-
-pub(crate) fn parse_host_port(base_url: &str) -> Result<(String, u16), ContractError> {
-    let stripped = base_url.strip_prefix("http://").ok_or_else(|| {
-        ContractError::new(
-            ContractErrorCode::InvalidSpec,
-            "base_url must start with http://",
-            false,
-        )
-    })?;
-    let host_port = stripped.split('/').next().unwrap_or(stripped);
-    let (host, port) = match host_port.split_once(':') {
-        Some((host, port)) => {
-            let parsed = port.parse::<u16>().map_err(|_| {
-                ContractError::new(
-                    ContractErrorCode::InvalidSpec,
-                    format!("invalid port in base_url '{base_url}'"),
-                    false,
-                )
-            })?;
-            (host.to_string(), parsed)
-        }
-        None => (host_port.to_string(), 80),
-    };
-    Ok((host, port))
+pub struct HttpResponse {
+    pub status: u16,
+    pub body: String,
 }
 
 fn handle_from_run_id(run_id: &str) -> String {
@@ -795,6 +960,7 @@ mod tests {
         ContractErrorCode, EventEnvelope, EventType, ExecutionPolicy, RunState, StartRequest,
         StopRequest, SubscribeEventsRequest,
     };
+    use async_trait::async_trait;
     use std::collections::{BTreeMap, HashMap};
     use std::sync::{Arc, Mutex};
 
@@ -822,10 +988,10 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl HttpTransport for MockTransport {
-        fn request(
+        async fn request(
             &self,
-            _base_url: &str,
             method: &str,
             path: &str,
             _body: &str,
@@ -856,10 +1022,10 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl HttpTransport for CaptureTransport {
-        fn request(
+        async fn request(
             &self,
-            _base_url: &str,
             method: &str,
             path: &str,
             body: &str,
@@ -890,8 +1056,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn fetches_structured_output_from_stage_output_file() {
+    #[tokio::test]
+    async fn fetches_structured_output_from_stage_output_file() {
         let client = client(vec![
             (
                 "GET",
@@ -909,6 +1075,7 @@ mod tests {
 
         let output = client
             .fetch_structured_output("run-123")
+            .await
             .expect("fetch")
             .expect("output");
 
@@ -918,19 +1085,20 @@ mod tests {
         assert_eq!(output.metrics.get("cost_usd"), Some(&0.018));
     }
 
-    #[test]
-    fn returns_none_when_structured_output_file_missing() {
+    #[tokio::test]
+    async fn returns_none_when_structured_output_file_missing() {
         let client = client(vec![]);
 
         let output = client
             .fetch_structured_output("run-missing")
+            .await
             .expect("fetch");
 
         assert!(output.is_none());
     }
 
-    #[test]
-    fn fetch_structured_output_prefers_manifested_result_json() {
+    #[tokio::test]
+    async fn fetch_structured_output_prefers_manifested_result_json() {
         let client = client(vec![
             (
                 "GET",
@@ -958,14 +1126,15 @@ mod tests {
 
         let output = client
             .fetch_structured_output("run-123")
+            .await
             .expect("fetch")
             .expect("output");
 
         assert_eq!(output.metrics.get("latency_p99_ms"), Some(&77.0));
     }
 
-    #[test]
-    fn fetch_structured_output_uses_run_report_when_output_ready() {
+    #[tokio::test]
+    async fn fetch_structured_output_uses_run_report_when_output_ready() {
         let client = client(vec![(
             "GET",
             "/v1/runs/run-service",
@@ -989,6 +1158,7 @@ mod tests {
 
         let output = client
             .fetch_structured_output("run-service")
+            .await
             .expect("fetch")
             .expect("output");
 
@@ -998,8 +1168,8 @@ mod tests {
         assert_eq!(output.metrics.get("cpu_pct"), Some(&48.0));
     }
 
-    #[test]
-    fn fetch_structured_output_falls_back_when_report_output_is_guest_path() {
+    #[tokio::test]
+    async fn fetch_structured_output_falls_back_when_report_output_is_guest_path() {
         let client = client(vec![
             (
                 "GET",
@@ -1040,6 +1210,7 @@ mod tests {
 
         let output = client
             .fetch_structured_output("run-service-path")
+            .await
             .expect("fetch")
             .expect("output");
 
@@ -1049,8 +1220,9 @@ mod tests {
         assert_eq!(output.metrics.get("cpu_pct"), Some(&44.0));
     }
 
-    #[test]
-    fn fetch_structured_output_uses_report_stage_output_file_when_report_output_is_guest_path() {
+    #[tokio::test]
+    async fn fetch_structured_output_uses_report_stage_output_file_when_report_output_is_guest_path(
+    ) {
         let client = client(vec![
             (
                 "GET",
@@ -1098,6 +1270,7 @@ mod tests {
 
         let output = client
             .fetch_structured_output("run-service-stage")
+            .await
             .expect("fetch")
             .expect("output");
 
@@ -1107,8 +1280,8 @@ mod tests {
         assert_eq!(output.metrics.get("cpu_pct"), Some(&41.0));
     }
 
-    #[test]
-    fn fetch_structured_output_maps_missing_output_error() {
+    #[tokio::test]
+    async fn fetch_structured_output_maps_missing_output_error() {
         let client = client(vec![
             (
                 "GET",
@@ -1126,14 +1299,15 @@ mod tests {
 
         let err = client
             .fetch_structured_output("run-missing-output")
+            .await
             .expect_err("expected missing-output error");
 
         assert_eq!(err.code, ContractErrorCode::StructuredOutputMissing);
         assert!(!err.retryable);
     }
 
-    #[test]
-    fn fetch_structured_output_falls_back_to_output_stage_after_main_404() {
+    #[tokio::test]
+    async fn fetch_structured_output_falls_back_to_output_stage_after_main_404() {
         let client = client(vec![
             (
                 "GET",
@@ -1157,14 +1331,15 @@ mod tests {
 
         let output = client
             .fetch_structured_output("run-output-stage")
+            .await
             .expect("fetch")
             .expect("output");
 
         assert_eq!(output.metrics.get("latency_p99_ms"), Some(&66.0));
     }
 
-    #[test]
-    fn fetch_structured_output_maps_malformed_output_error() {
+    #[tokio::test]
+    async fn fetch_structured_output_maps_malformed_output_error() {
         let client = client(vec![
             (
                 "GET",
@@ -1182,13 +1357,14 @@ mod tests {
 
         let err = client
             .fetch_structured_output("run-malformed")
+            .await
             .expect_err("expected malformed-output error");
 
         assert_eq!(err.code, ContractErrorCode::StructuredOutputMalformed);
     }
 
-    #[test]
-    fn fetch_named_artifact_uses_manifest_retrieval_path() {
+    #[tokio::test]
+    async fn fetch_named_artifact_uses_manifest_retrieval_path() {
         let client = client(vec![
             (
                 "GET",
@@ -1216,14 +1392,15 @@ mod tests {
 
         let artifact = client
             .fetch_named_artifact("run-123", "main", "report.md")
+            .await
             .expect("fetch")
             .expect("artifact");
 
         assert!(artifact.contains("artifact body"));
     }
 
-    #[test]
-    fn start_returns_handle_and_running_state() {
+    #[tokio::test]
+    async fn start_returns_handle_and_running_state() {
         let c = client(vec![("POST", "/v1/runs", 200, r#"{"run_id":"run-123"}"#)]);
         let started = c
             .start(StartRequest {
@@ -1232,6 +1409,7 @@ mod tests {
                 launch_context: None,
                 policy: policy(),
             })
+            .await
             .expect("start");
         assert_eq!(started.handle, "vb:run-123");
         assert_eq!(started.attempt_id, 1);
@@ -1239,8 +1417,8 @@ mod tests {
         assert_eq!(c.poll_interval_ms(), 250);
     }
 
-    #[test]
-    fn start_serializes_launch_context_into_input_payload() {
+    #[tokio::test]
+    async fn start_serializes_launch_context_into_input_payload() {
         let transport = CaptureTransport::new(HttpResponse {
             status: 200,
             body: r#"{"run_id":"run-123"}"#.to_string(),
@@ -1277,6 +1455,7 @@ mod tests {
                 launch_context: Some(snapshot.to_string()),
                 policy: policy(),
             })
+            .await
             .expect("start");
 
         assert_eq!(started.handle, "vb:run-123");
@@ -1297,21 +1476,21 @@ mod tests {
         );
     }
 
-    #[test]
-    fn inspect_maps_daemon_run_state() {
+    #[tokio::test]
+    async fn inspect_maps_daemon_run_state() {
         let c = client(vec![(
             "GET",
             "/v1/runs/run-123",
             200,
             include_str!("../../fixtures/voidbox_run_success.json"),
         )]);
-        let inspection = c.inspect("vb:run-123").expect("inspect");
+        let inspection = c.inspect("vb:run-123").await.expect("inspect");
         assert_eq!(inspection.run_id, "run-2000");
         assert_eq!(inspection.state, RunState::Succeeded);
     }
 
-    #[test]
-    fn subscribe_events_applies_resume_filter() {
+    #[tokio::test]
+    async fn subscribe_events_applies_resume_filter() {
         let c = client(vec![
             (
                 "GET",
@@ -1331,13 +1510,14 @@ mod tests {
                 handle: "vb:run-123".to_string(),
                 from_event_id: Some("evt_run-2000_1".to_string()),
             })
+            .await
             .expect("subscribe");
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event_type, EventType::RunCompleted);
     }
 
-    #[test]
-    fn stop_returns_terminal_event() {
+    #[tokio::test]
+    async fn stop_returns_terminal_event() {
         let c = client(vec![
             (
                 "POST",
@@ -1363,20 +1543,24 @@ mod tests {
                 handle: "vb:run-123".to_string(),
                 reason: "user".to_string(),
             })
+            .await
             .expect("stop");
         assert_eq!(stop.state, RunState::Succeeded);
         assert_eq!(stop.terminal_event_id, "evt_run-2000_2");
     }
 
-    #[test]
-    fn inspect_404_maps_to_not_found() {
+    #[tokio::test]
+    async fn inspect_404_maps_to_not_found() {
         let c = client(vec![(
             "GET",
             "/v1/runs/run-404",
             404,
             r#"{"error":"not found"}"#,
         )]);
-        let err = c.inspect("vb:run-404").expect_err("expected not found");
+        let err = c
+            .inspect("vb:run-404")
+            .await
+            .expect_err("expected not found");
         assert_eq!(err.code, ContractErrorCode::NotFound);
     }
 
@@ -1393,5 +1577,277 @@ mod tests {
         }];
         let out = filter_events_from_id(events.clone(), Some("evt_missing"));
         assert_eq!(out, events);
+    }
+
+    // Env mutation is process-global; serialize tests that set/unset env vars.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn with_env<F: FnOnce()>(vars: &[(&str, Option<&str>)], f: F) {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let saved: Vec<(String, Option<String>)> = vars
+            .iter()
+            .map(|(k, _)| (k.to_string(), std::env::var(k).ok()))
+            .collect();
+        for (k, v) in vars {
+            match v {
+                Some(value) => std::env::set_var(k, value),
+                None => std::env::remove_var(k),
+            }
+        }
+        // AssertUnwindSafe: the test closures sometimes hold mutable borrows
+        // of outer state; we restore env on the way out regardless of the
+        // closure's panic-safety, which is the property we actually need.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+        for (k, v) in saved {
+            match v {
+                Some(value) => std::env::set_var(k, value),
+                None => std::env::remove_var(k),
+            }
+        }
+        if let Err(payload) = result {
+            std::panic::resume_unwind(payload);
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatch_unix_url_selects_unix_transport() {
+        // Build directly so we don't actually dial a socket; just verify the
+        // builder accepts the URL and returns a transport.
+        let transport = super::build_transport("unix:///tmp/voidbox-disp-test.sock")
+            .expect("unix dispatch should succeed without env");
+        // The boxed trait object's concrete type isn't observable from here;
+        // smoke-check by attempting a request and asserting we get a connect
+        // error (proves it's the unix path that ran). Match the structural
+        // shape of the error our `send_with_timeout` helper produces — the
+        // code, retryable flag, and message prefix are all set by us
+        // explicitly, so the assertion doesn't depend on hyper-util's wording.
+        let err = transport
+            .request("GET", "/v1/health", "")
+            .await
+            .expect_err("connect should fail against missing socket");
+        assert_eq!(err.code, ContractErrorCode::InternalError);
+        assert!(err.retryable);
+        assert!(
+            err.message.starts_with("connect to unix://"),
+            "expected connect-failure prefix, got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn dispatch_tcp_url_fails_closed_when_no_token_configured() {
+        // Point all token sources at a fresh empty dir so resolution returns
+        // None; expect build_transport to fail with a clear message.
+        let dir = std::env::temp_dir().join(format!(
+            "void-control-tcp-no-token-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut captured: Result<(), String> = Err(String::new());
+        with_env(
+            &[
+                ("VOIDBOX_DAEMON_TOKEN_FILE", None),
+                ("VOIDBOX_DAEMON_TOKEN", None),
+                ("XDG_CONFIG_HOME", Some(dir.to_str().unwrap())),
+                ("HOME", Some(dir.to_str().unwrap())),
+            ],
+            || {
+                captured = super::build_transport("http://127.0.0.1:43100").map(|_| ());
+            },
+        );
+        let err = captured.expect_err("TCP build_transport should fail without a token");
+        assert!(err.contains("requires a bearer token"), "err={err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // Promoted to `multi_thread`: spawns a listener task that runs in
+    // parallel with the client request; multi_thread parity matches how
+    // production hyper-util will dispatch.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn unix_transport_emits_no_authorization_header() {
+        // Bind a one-shot unix listener, route a request through the
+        // hyper-util AF_UNIX transport, and assert the bytes hyper put on the
+        // wire don't contain `Authorization:`. httpmock 0.7 has no AF_UNIX
+        // server, and the production hyper-util writes the same HTTP/1.1
+        // dialect onto the socket regardless of executor, so a raw read +
+        // string-search captures everything we care about.
+        //
+        // AF_UNIX paths are bounded by `SUN_LEN` (~104 bytes on macOS) so we
+        // bind under `/tmp` directly with a short suffix rather than via
+        // `env::temp_dir()`, which on macOS resolves to a long
+        // `/var/folders/...` path.
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::UnixListener;
+
+        let socket = std::path::PathBuf::from(format!(
+            "/tmp/vc-na-{}-{}.sock",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+                & 0xfff_ffff
+        ));
+        let _ = std::fs::remove_file(&socket);
+        let listener = UnixListener::bind(&socket).expect("bind");
+
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+        let captured_clone = captured.clone();
+        let server_task = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            let mut bytes = Vec::new();
+            // Read until end-of-headers; that's enough to inspect the
+            // request shape. hyper-util sends the full request in one
+            // contiguous write for our `Full<Bytes>` body.
+            let mut buf = [0u8; 4096];
+            loop {
+                let n = stream.read(&mut buf).await.expect("read");
+                if n == 0 {
+                    break;
+                }
+                bytes.extend_from_slice(&buf[..n]);
+                if bytes.windows(4).any(|w| w == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            *captured_clone.lock().unwrap() = bytes;
+            let _ = stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+                .await;
+            let _ = stream.shutdown().await;
+        });
+
+        let transport = super::UnixHttpTransport::new(socket.clone());
+        let resp = transport
+            .request("GET", "/v1/health", "")
+            .await
+            .expect("unix request");
+        assert_eq!(resp.status, 200);
+        server_task.await.expect("server task");
+
+        let request = String::from_utf8_lossy(&captured.lock().unwrap()).into_owned();
+        assert!(
+            !request.to_ascii_lowercase().contains("authorization:"),
+            "AF_UNIX request must not carry an Authorization header; got:\n{request}"
+        );
+        let _ = std::fs::remove_file(&socket);
+    }
+
+    #[tokio::test]
+    async fn tcp_transport_emits_authorization_header_when_token_present() {
+        use httpmock::prelude::*;
+
+        let server = MockServer::start_async().await;
+        let mock = server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path("/v1/health")
+                    .header("authorization", "Bearer hunter2");
+                then.status(200).body("{}");
+            })
+            .await;
+
+        let transport =
+            super::TcpHttpTransport::new(server.base_url(), Some("hunter2".to_string()));
+        let resp = transport
+            .request("GET", "/v1/health", "")
+            .await
+            .expect("tcp request");
+        assert_eq!(resp.status, 200);
+        mock.assert_async().await;
+    }
+
+    #[test]
+    fn forward_relays_method_path_query_and_body() {
+        // The bridge's `/v1/runs` passthrough relies on `forward` preserving
+        // method, full path-and-query, and body. Spin a mock daemon, dispatch
+        // `GET /v1/runs?state=active`, and assert the mock saw exactly that.
+        use httpmock::prelude::*;
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        with_env(
+            &[
+                ("VOIDBOX_DAEMON_TOKEN_FILE", None),
+                ("VOIDBOX_DAEMON_TOKEN", Some("test-token")),
+            ],
+            || {
+                rt.block_on(async {
+                    let server = MockServer::start_async().await;
+                    let mock = server
+                        .mock_async(|when, then| {
+                            when.method(GET)
+                                .path("/v1/runs")
+                                .query_param("state", "active");
+                            then.status(200).body(r#"{"runs":[{"id":"r-1"}]}"#);
+                        })
+                        .await;
+
+                    let c = VoidBoxRuntimeClient::new(server.base_url(), 250);
+                    let resp = c
+                        .forward("GET", "/v1/runs?state=active", "")
+                        .await
+                        .expect("forward");
+                    assert_eq!(resp.status, 200);
+                    assert!(resp.body.contains("r-1"));
+                    mock.assert_async().await;
+                });
+            },
+        );
+    }
+
+    #[test]
+    fn tcp_transport_routes_through_httpmock_end_to_end() {
+        // End-to-end check that the hyper-util TCP transport dispatches
+        // correctly against a regular HTTP server, going through the full
+        // `VoidBoxRuntimeClient::new` construction path (which resolves a
+        // bearer token from the env / token-file chain).
+        //
+        // Sync `#[test]` + `with_env` + `Runtime::block_on` rather than
+        // `#[tokio::test]`: the env-mutation lock that `with_env` holds is a
+        // `std::sync::Mutex`, and holding it across an `.await` would be a
+        // multi-thread runtime hazard. The block_on lives in test code only.
+        use httpmock::prelude::*;
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        with_env(
+            &[
+                ("VOIDBOX_DAEMON_TOKEN_FILE", None),
+                ("VOIDBOX_DAEMON_TOKEN", Some("test-token")),
+            ],
+            || {
+                rt.block_on(async {
+                    let server = MockServer::start_async().await;
+                    let mock = server
+                        .mock_async(|when, then| {
+                            when.method(POST)
+                                .path("/v1/runs")
+                                .header("content-type", "application/json")
+                                .json_body(serde_json::json!({
+                                    "file": "fixtures/sample.vbrun",
+                                    "input": null,
+                                }));
+                            then.status(200).body(r#"{"run_id":"run-async-1"}"#);
+                        })
+                        .await;
+
+                    let c = VoidBoxRuntimeClient::new(server.base_url(), 250);
+                    let started = c
+                        .start(StartRequest {
+                            run_id: "controller-run-1".to_string(),
+                            workflow_spec: "fixtures/sample.vbrun".to_string(),
+                            launch_context: None,
+                            policy: policy(),
+                        })
+                        .await
+                        .expect("start");
+                    assert_eq!(started.handle, "vb:run-async-1");
+                    mock.assert_async().await;
+                });
+            },
+        );
     }
 }

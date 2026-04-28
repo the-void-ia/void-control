@@ -4,13 +4,39 @@ fn main() {
     std::process::exit(1);
 }
 
+/// Multi-threaded tokio runtime. The conventional default for HTTP services
+/// in Rust, and the one all async traits in this crate (`ExecutionRuntime`,
+/// `MessageDeliveryAdapter`, `HttpTransport`, `ProviderLaunchAdapter`)
+/// support via their `Send + Sync` bounds.
+///
+/// `current_thread` is also supported via
+/// `#[tokio::main(flavor = "current_thread")]` for workloads that prefer it.
 #[cfg(feature = "serde")]
-fn main() {
-    if let Err(e) = run() {
+#[tokio::main]
+async fn main() {
+    if let Err(e) = run().await {
         eprintln!("fatal: {e}");
         std::process::exit(1);
     }
 }
+
+// Module-scope imports for the bridge HTTP client used by `bridge_request`
+// and `build_bridge_client`. The hyper-util stack is declared here because
+// it's referenced from multiple file-scope functions; the imports inside
+// `run()` (rustyline, serde, void_control) are local to that body and stay
+// scoped there.
+#[cfg(feature = "serde")]
+use bytes::Bytes;
+#[cfg(feature = "serde")]
+use http_body_util::{BodyExt, Full};
+#[cfg(feature = "serde")]
+use hyper::{Method, Request as HyperRequest};
+#[cfg(feature = "serde")]
+use hyper_util::client::legacy::connect::HttpConnector;
+#[cfg(feature = "serde")]
+use hyper_util::client::legacy::Client;
+#[cfg(feature = "serde")]
+use hyper_util::rt::TokioExecutor;
 
 #[cfg(feature = "serde")]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -487,60 +513,59 @@ fn top_level_help_text() -> &'static str {
   voidctl team run --stdin"
 }
 
+/// Build a hyper-util HTTP client for talking to the local bridge.
+///
+/// Distinct from the `VoidBoxRuntimeClient` HTTP transport: that one
+/// dispatches to the void-box daemon (TCP or AF_UNIX), this one only ever
+/// talks to the local bridge (TCP, no auth). Each `bridge_request` call
+/// constructs a fresh client; per-CLI-invocation request volume is low
+/// enough that pool sharing isn't worth threading state through the
+/// interactive shell.
 #[cfg(feature = "serde")]
-fn parse_host_port(base_url: &str) -> Result<(String, u16), String> {
-    let stripped = base_url
-        .strip_prefix("http://")
-        .ok_or_else(|| format!("bridge URL must start with http://, got '{base_url}'"))?;
-    let host_port = stripped.split('/').next().unwrap_or(stripped);
-    match host_port.split_once(':') {
-        Some((host, port)) => port
-            .parse::<u16>()
-            .map(|port| (host.to_string(), port))
-            .map_err(|_| format!("invalid port in bridge URL '{base_url}'")),
-        None => Ok((host_port.to_string(), 80)),
-    }
+fn build_bridge_client() -> hyper_util::client::legacy::Client<
+    hyper_util::client::legacy::connect::HttpConnector,
+    http_body_util::Full<bytes::Bytes>,
+> {
+    Client::builder(TokioExecutor::new()).build(HttpConnector::new())
 }
 
 #[cfg(feature = "serde")]
-fn bridge_request(
+async fn bridge_request(
     base_url: &str,
     method: &str,
     path: &str,
     body: Option<&str>,
 ) -> Result<BridgeJsonResponse, String> {
-    use std::io::{Read, Write};
-    use std::net::TcpStream;
-
-    let (host, port) = parse_host_port(base_url)?;
-    let mut stream =
-        TcpStream::connect(format!("{host}:{port}")).map_err(|e| format!("connect failed: {e}"))?;
-    let body = body.unwrap_or("");
-    let request = format!(
-        "{method} {path} HTTP/1.1\r\nHost: {host}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-        body.len(),
-        body
-    );
-    stream
-        .write_all(request.as_bytes())
-        .map_err(|e| format!("request write failed: {e}"))?;
-    let mut response = String::new();
-    stream
-        .read_to_string(&mut response)
+    let client = build_bridge_client();
+    let url = format!("{}{}", base_url.trim_end_matches('/'), path);
+    let uri: hyper::Uri = url
+        .parse()
+        .map_err(|e| format!("invalid bridge URL {url:?}: {e}"))?;
+    let parsed_method = Method::from_bytes(method.as_bytes())
+        .map_err(|e| format!("unsupported HTTP method {method:?}: {e}"))?;
+    let body_bytes = Bytes::copy_from_slice(body.unwrap_or("").as_bytes());
+    let request = HyperRequest::builder()
+        .method(parsed_method)
+        .uri(uri)
+        .header("content-type", "application/json")
+        .body(Full::new(body_bytes))
+        .map_err(|e| format!("build request: {e}"))?;
+    let resp = client
+        .request(request)
+        .await
+        .map_err(|e| format!("connect failed: {e}"))?;
+    let status = resp.status().as_u16();
+    let collected = resp
+        .into_body()
+        .collect()
+        .await
         .map_err(|e| format!("response read failed: {e}"))?;
-    let Some((headers, body)) = response.split_once("\r\n\r\n") else {
-        return Err("invalid HTTP response".to_string());
+    let body = String::from_utf8_lossy(&collected.to_bytes()).into_owned();
+    let json = if body.trim().is_empty() {
+        serde_json::Value::Null
+    } else {
+        serde_json::from_str(&body).map_err(|e| format!("invalid JSON response: {e}"))?
     };
-    let Some(status_line) = headers.lines().next() else {
-        return Err("invalid HTTP response status line".to_string());
-    };
-    let Some(status) = status_line.split_whitespace().nth(1) else {
-        return Err("invalid HTTP response status line".to_string());
-    };
-    let status = status
-        .parse::<u16>()
-        .map_err(|_| "invalid HTTP status code".to_string())?;
-    let json = serde_json::from_str(body).map_err(|e| format!("invalid JSON response: {e}"))?;
     Ok(BridgeJsonResponse { status, json })
 }
 
@@ -936,7 +961,7 @@ fn bridge_error_message(response: &BridgeJsonResponse) -> String {
 }
 
 #[cfg(feature = "serde")]
-fn run() -> Result<(), String> {
+async fn run() -> Result<(), String> {
     use std::collections::BTreeMap;
     use std::env;
     use std::fs;
@@ -961,7 +986,7 @@ fn run() -> Result<(), String> {
     let args = env::args().skip(1).collect::<Vec<_>>();
     let parsed_cli = parse_cli_args(args.iter().map(String::as_str))?;
     match &parsed_cli {
-        CliCommand::Serve => return void_control::bridge::run_bridge(),
+        CliCommand::Serve => return void_control::bridge::run_bridge().await,
         CliCommand::Help => {
             println!("{}", top_level_help_text());
             return Ok(());
@@ -1738,7 +1763,7 @@ Policy presets: fast | balanced | safe"
         let _ = io::stdout().flush();
     }
 
-    fn stream_run(
+    async fn stream_run(
         client: &VoidBoxRuntimeClient,
         session: &mut ConsoleSession,
         run_id: &str,
@@ -1749,10 +1774,13 @@ Policy presets: fast | balanced | safe"
         println!("streaming run={} (Ctrl+C to stop)", run_id);
         loop {
             let from = session.last_seen_event_id_by_run.get(run_id).cloned();
-            match client.subscribe_events(SubscribeEventsRequest {
-                handle: handle.clone(),
-                from_event_id: from,
-            }) {
+            match client
+                .subscribe_events(SubscribeEventsRequest {
+                    handle: handle.clone(),
+                    from_event_id: from,
+                })
+                .await
+            {
                 Ok(events) => {
                     for event in &events {
                         if logs_only && event.payload.is_empty() {
@@ -1772,7 +1800,7 @@ Policy presets: fast | balanced | safe"
                 }
             }
 
-            match client.inspect(&handle) {
+            match client.inspect(&handle).await {
                 Ok(inspect) => {
                     if show_status {
                         let last_event = session
@@ -1795,14 +1823,14 @@ Policy presets: fast | balanced | safe"
                 }
             }
 
-            std::thread::sleep(Duration::from_millis(client.poll_interval_ms()));
+            tokio::time::sleep(Duration::from_millis(client.poll_interval_ms())).await;
         }
         print!("\r\x1b[2K");
         let _ = io::stdout().flush();
     }
 
-    let base_url =
-        env::var("VOID_BOX_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:43100".to_string());
+    let base_url = env::var("VOID_BOX_BASE_URL")
+        .unwrap_or_else(|_| void_control::runtime::daemon_address::default_unix_url());
     let bridge_base_url = env::var("VOID_CONTROL_BRIDGE_BASE_URL")
         .unwrap_or_else(|_| "http://127.0.0.1:43210".to_string());
 
@@ -1810,7 +1838,8 @@ Policy presets: fast | balanced | safe"
         match command {
             ExecutionCommand::Submit { spec, stdin } => {
                 let spec = load_execution_spec_input(spec.as_deref(), stdin)?;
-                match bridge_request(&bridge_base_url, "POST", "/v1/executions", Some(&spec)) {
+                match bridge_request(&bridge_base_url, "POST", "/v1/executions", Some(&spec)).await
+                {
                     Ok(response) => {
                         if response.status >= 400 {
                             return Err(bridge_error_message(&response));
@@ -1828,7 +1857,9 @@ Policy presets: fast | balanced | safe"
                     "POST",
                     "/v1/executions/dry-run",
                     Some(&spec),
-                ) {
+                )
+                .await
+                {
                     Ok(response) => {
                         if response.status >= 400 {
                             let valid = response
@@ -1882,7 +1913,7 @@ Policy presets: fast | balanced | safe"
                 let mut last_event_seq = 0u64;
                 loop {
                     let path = format!("/v1/executions/{execution_id}");
-                    match bridge_request(&bridge_base_url, "GET", &path, None) {
+                    match bridge_request(&bridge_base_url, "GET", &path, None).await {
                         Ok(response) => {
                             if response.status >= 400 {
                                 return Err(bridge_error_message(&response));
@@ -1895,7 +1926,8 @@ Policy presets: fast | balanced | safe"
                                 last_line = line;
                             }
                             let path = format!("/v1/executions/{execution_id}/events");
-                            let response = bridge_request(&bridge_base_url, "GET", &path, None)?;
+                            let response =
+                                bridge_request(&bridge_base_url, "GET", &path, None).await?;
                             if response.status >= 400 {
                                 return Err(bridge_error_message(&response));
                             }
@@ -1934,13 +1966,13 @@ Policy presets: fast | balanced | safe"
                         }
                         Err(err) => return Err(err),
                     }
-                    std::thread::sleep(Duration::from_millis(1000));
+                    tokio::time::sleep(Duration::from_millis(1000)).await;
                 }
                 return Ok(());
             }
             ExecutionCommand::Inspect { execution_id } => {
                 let path = format!("/v1/executions/{execution_id}");
-                match bridge_request(&bridge_base_url, "GET", &path, None) {
+                match bridge_request(&bridge_base_url, "GET", &path, None).await {
                     Ok(response) => {
                         if response.status >= 400 {
                             return Err(bridge_error_message(&response));
@@ -1980,7 +2012,7 @@ Policy presets: fast | balanced | safe"
             }
             ExecutionCommand::Events { execution_id } => {
                 let path = format!("/v1/executions/{execution_id}/events");
-                match bridge_request(&bridge_base_url, "GET", &path, None) {
+                match bridge_request(&bridge_base_url, "GET", &path, None).await {
                     Ok(response) => {
                         if response.status >= 400 {
                             return Err(bridge_error_message(&response));
@@ -2011,7 +2043,7 @@ Policy presets: fast | balanced | safe"
             }
             ExecutionCommand::Result { execution_id } => {
                 let path = format!("/v1/executions/{execution_id}");
-                match bridge_request(&bridge_base_url, "GET", &path, None) {
+                match bridge_request(&bridge_base_url, "GET", &path, None).await {
                     Ok(response) => {
                         if response.status >= 400 {
                             return Err(bridge_error_message(&response));
@@ -2063,7 +2095,7 @@ Policy presets: fast | balanced | safe"
                 candidate_id,
             } => {
                 let path = format!("/v1/executions/{execution_id}");
-                match bridge_request(&bridge_base_url, "GET", &path, None) {
+                match bridge_request(&bridge_base_url, "GET", &path, None).await {
                     Ok(response) => {
                         if response.status >= 400 {
                             return Err(bridge_error_message(&response));
@@ -2087,7 +2119,7 @@ Policy presets: fast | balanced | safe"
     if let CliCommand::Template(command) = parsed_cli {
         match command {
             TemplateCommand::List => {
-                match bridge_request(&bridge_base_url, "GET", "/v1/templates", None) {
+                match bridge_request(&bridge_base_url, "GET", "/v1/templates", None).await {
                     Ok(response) => {
                         if response.status >= 400 {
                             return Err(bridge_error_message(&response));
@@ -2130,7 +2162,7 @@ Policy presets: fast | balanced | safe"
             }
             TemplateCommand::Get { template_id } => {
                 let path = format!("/v1/templates/{template_id}");
-                match bridge_request(&bridge_base_url, "GET", &path, None) {
+                match bridge_request(&bridge_base_url, "GET", &path, None).await {
                     Ok(response) => {
                         if response.status >= 400 {
                             return Err(bridge_error_message(&response));
@@ -2199,7 +2231,7 @@ Policy presets: fast | balanced | safe"
             } => {
                 let body = load_json_input(inputs.as_deref(), stdin)?;
                 let path = format!("/v1/templates/{template_id}/dry-run");
-                match bridge_request(&bridge_base_url, "POST", &path, Some(&body)) {
+                match bridge_request(&bridge_base_url, "POST", &path, Some(&body)).await {
                     Ok(response) => {
                         if response.status >= 400 {
                             return Err(bridge_error_message(&response));
@@ -2217,7 +2249,7 @@ Policy presets: fast | balanced | safe"
             } => {
                 let body = load_json_input(inputs.as_deref(), stdin)?;
                 let path = format!("/v1/templates/{template_id}/execute");
-                match bridge_request(&bridge_base_url, "POST", &path, Some(&body)) {
+                match bridge_request(&bridge_base_url, "POST", &path, Some(&body)).await {
                     Ok(response) => {
                         if response.status >= 400 {
                             return Err(bridge_error_message(&response));
@@ -2269,7 +2301,7 @@ Policy presets: fast | balanced | safe"
                 } else {
                     "/v1/batch/dry-run"
                 };
-                match bridge_request(&bridge_base_url, "POST", path, Some(&spec)) {
+                match bridge_request(&bridge_base_url, "POST", path, Some(&spec)).await {
                     Ok(response) => {
                         if response.status >= 400 {
                             return Err(bridge_error_message(&response));
@@ -2287,7 +2319,7 @@ Policy presets: fast | balanced | safe"
                 } else {
                     "/v1/batch/run"
                 };
-                match bridge_request(&bridge_base_url, "POST", path, Some(&spec)) {
+                match bridge_request(&bridge_base_url, "POST", path, Some(&spec)).await {
                     Ok(response) => {
                         if response.status >= 400 {
                             return Err(bridge_error_message(&response));
@@ -2332,7 +2364,9 @@ Policy presets: fast | balanced | safe"
         match command {
             TeamCommand::DryRun { spec, stdin } => {
                 let spec = load_execution_spec_input(spec.as_deref(), stdin)?;
-                match bridge_request(&bridge_base_url, "POST", "/v1/teams/dry-run", Some(&spec)) {
+                match bridge_request(&bridge_base_url, "POST", "/v1/teams/dry-run", Some(&spec))
+                    .await
+                {
                     Ok(response) => {
                         if response.status >= 400 {
                             return Err(bridge_error_message(&response));
@@ -2345,7 +2379,7 @@ Policy presets: fast | balanced | safe"
             }
             TeamCommand::Run { spec, stdin } => {
                 let spec = load_execution_spec_input(spec.as_deref(), stdin)?;
-                match bridge_request(&bridge_base_url, "POST", "/v1/teams/run", Some(&spec)) {
+                match bridge_request(&bridge_base_url, "POST", "/v1/teams/run", Some(&spec)).await {
                     Ok(response) => {
                         if response.status >= 400 {
                             return Err(bridge_error_message(&response));
@@ -2452,12 +2486,15 @@ Policy presets: fast | balanced | safe"
                         continue;
                     }
                 };
-                match client.start(StartRequest {
-                    run_id: run_id.clone(),
-                    workflow_spec: spec,
-                    launch_context: None,
-                    policy,
-                }) {
+                match client
+                    .start(StartRequest {
+                        run_id: run_id.clone(),
+                        workflow_spec: spec,
+                        launch_context: None,
+                        policy,
+                    })
+                    .await
+                {
                     Ok(started) => {
                         session.last_selected_run = Some(run_id.clone());
                         println!(
@@ -2470,7 +2507,7 @@ Policy presets: fast | balanced | safe"
             }
             Command::Status { run_id } => {
                 let handle = run_id_to_handle(&run_id);
-                match client.inspect(&handle) {
+                match client.inspect(&handle).await {
                     Ok(inspect) => {
                         session.last_selected_run = Some(run_id);
                         print_status_line(&inspect);
@@ -2493,10 +2530,13 @@ Policy presets: fast | balanced | safe"
                 from_event_id,
             } => {
                 let handle = run_id_to_handle(&run_id);
-                match client.subscribe_events(SubscribeEventsRequest {
-                    handle,
-                    from_event_id,
-                }) {
+                match client
+                    .subscribe_events(SubscribeEventsRequest {
+                        handle,
+                        from_event_id,
+                    })
+                    .await
+                {
                     Ok(events) => {
                         for event in &events {
                             print_event(event);
@@ -2514,10 +2554,13 @@ Policy presets: fast | balanced | safe"
             Command::Logs { run_id, follow } => {
                 let handle = run_id_to_handle(&run_id);
                 let from = session.last_seen_event_id_by_run.get(&run_id).cloned();
-                match client.subscribe_events(SubscribeEventsRequest {
-                    handle,
-                    from_event_id: from,
-                }) {
+                match client
+                    .subscribe_events(SubscribeEventsRequest {
+                        handle,
+                        from_event_id: from,
+                    })
+                    .await
+                {
                     Ok(events) => {
                         for event in &events {
                             if !event.payload.is_empty() {
@@ -2531,7 +2574,7 @@ Policy presets: fast | balanced | safe"
                         }
                         session.last_selected_run = Some(run_id.clone());
                         if follow {
-                            stream_run(&client, &mut session, &run_id, true, true);
+                            stream_run(&client, &mut session, &run_id, true, true).await;
                         }
                     }
                     Err(err) => print_contract_error(&err),
@@ -2539,7 +2582,7 @@ Policy presets: fast | balanced | safe"
             }
             Command::Cancel { run_id, reason } => {
                 let handle = run_id_to_handle(&run_id);
-                match client.stop(StopRequest { handle, reason }) {
+                match client.stop(StopRequest { handle, reason }).await {
                     Ok(stopped) => {
                         println!(
                             "stopped run_id={} state={:?} terminal_event_id={}",
@@ -2555,7 +2598,7 @@ Policy presets: fast | balanced | safe"
             }
             Command::List { state } => {
                 let filter = state.as_deref();
-                match client.list_runs(filter) {
+                match client.list_runs(filter).await {
                     Ok(runs) => {
                         println!("runs={}", runs.len());
                         for r in runs {
@@ -2577,29 +2620,43 @@ Policy presets: fast | balanced | safe"
             }
             Command::Watch { run_id } => {
                 session.last_selected_run = Some(run_id.clone());
-                stream_run(&client, &mut session, &run_id, false, true);
+                stream_run(&client, &mut session, &run_id, false, true).await;
             }
             Command::Resume { run_id } => {
                 session.last_selected_run = Some(run_id.clone());
-                stream_run(&client, &mut session, &run_id, false, true);
+                stream_run(&client, &mut session, &run_id, false, true).await;
             }
             Command::ExecutionCreate { spec } => {
-                match load_execution_spec_file(&spec).and_then(|spec_text| {
-                    bridge_request(&bridge_base_url, "POST", "/v1/executions", Some(&spec_text))
-                }) {
+                let spec_text = match load_execution_spec_file(&spec) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        println!("error: {e}");
+                        continue;
+                    }
+                };
+                match bridge_request(&bridge_base_url, "POST", "/v1/executions", Some(&spec_text))
+                    .await
+                {
                     Ok(response) => print_execution_summary(&response.json),
                     Err(err) => println!("error: {err}"),
                 }
             }
             Command::ExecutionDryRun { spec } => {
-                match load_execution_spec_file(&spec).and_then(|spec_text| {
-                    bridge_request(
-                        &bridge_base_url,
-                        "POST",
-                        "/v1/executions/dry-run",
-                        Some(&spec_text),
-                    )
-                }) {
+                let spec_text = match load_execution_spec_file(&spec) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        println!("error: {e}");
+                        continue;
+                    }
+                };
+                match bridge_request(
+                    &bridge_base_url,
+                    "POST",
+                    "/v1/executions/dry-run",
+                    Some(&spec_text),
+                )
+                .await
+                {
                     Ok(response) => println!(
                         "valid={} candidates_per_iteration={} max_iterations={} max_child_runs={}",
                         response
@@ -2630,7 +2687,7 @@ Policy presets: fast | balanced | safe"
                 }
             }
             Command::ExecutionList => {
-                match bridge_request(&bridge_base_url, "GET", "/v1/executions", None) {
+                match bridge_request(&bridge_base_url, "GET", "/v1/executions", None).await {
                     Ok(response) => {
                         let executions = response
                             .json
@@ -2654,7 +2711,9 @@ Policy presets: fast | balanced | safe"
                 "GET",
                 &format!("/v1/executions/{execution_id}"),
                 None,
-            ) {
+            )
+            .await
+            {
                 Ok(response) => print_execution_summary(&response.json),
                 Err(err) => println!("error: {err}"),
             },
@@ -2663,7 +2722,9 @@ Policy presets: fast | balanced | safe"
                 "POST",
                 &format!("/v1/executions/{execution_id}/pause"),
                 None,
-            ) {
+            )
+            .await
+            {
                 Ok(response) => println!(
                     "execution_id={} status={}",
                     response
@@ -2684,7 +2745,9 @@ Policy presets: fast | balanced | safe"
                 "POST",
                 &format!("/v1/executions/{execution_id}/resume"),
                 None,
-            ) {
+            )
+            .await
+            {
                 Ok(response) => println!(
                     "execution_id={} status={}",
                     response
@@ -2705,7 +2768,9 @@ Policy presets: fast | balanced | safe"
                 "POST",
                 &format!("/v1/executions/{execution_id}/cancel"),
                 None,
-            ) {
+            )
+            .await
+            {
                 Ok(response) => println!(
                     "execution_id={} status={}",
                     response
@@ -2740,7 +2805,9 @@ Policy presets: fast | balanced | safe"
                     "PATCH",
                     &format!("/v1/executions/{execution_id}/policy"),
                     Some(&body),
-                ) {
+                )
+                .await
+                {
                     Ok(response) => println!(
                         "execution_id={} max_iterations={} max_concurrent_candidates={}",
                         response
@@ -2763,7 +2830,7 @@ Policy presets: fast | balanced | safe"
                 }
             }
             Command::TemplateList => {
-                match bridge_request(&bridge_base_url, "GET", "/v1/templates", None) {
+                match bridge_request(&bridge_base_url, "GET", "/v1/templates", None).await {
                     Ok(response) => {
                         if response.status >= 400 {
                             println!("error: {}", bridge_error_message(&response));
@@ -2804,7 +2871,9 @@ Policy presets: fast | balanced | safe"
                     "GET",
                     &format!("/v1/templates/{template_id}"),
                     None,
-                ) {
+                )
+                .await
+                {
                     Ok(response) => {
                         if response.status >= 400 {
                             println!("error: {}", bridge_error_message(&response));
@@ -2845,14 +2914,21 @@ Policy presets: fast | balanced | safe"
                 template_id,
                 inputs,
             } => {
-                match load_json_input_file(&inputs).and_then(|body| {
-                    bridge_request(
-                        &bridge_base_url,
-                        "POST",
-                        &format!("/v1/templates/{template_id}/dry-run"),
-                        Some(&body),
-                    )
-                }) {
+                let body = match load_json_input_file(&inputs) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        println!("error: {e}");
+                        continue;
+                    }
+                };
+                match bridge_request(
+                    &bridge_base_url,
+                    "POST",
+                    &format!("/v1/templates/{template_id}/dry-run"),
+                    Some(&body),
+                )
+                .await
+                {
                     Ok(response) => {
                         if response.status >= 400 {
                             println!("error: {}", bridge_error_message(&response));
@@ -2867,14 +2943,21 @@ Policy presets: fast | balanced | safe"
                 template_id,
                 inputs,
             } => {
-                match load_json_input_file(&inputs).and_then(|body| {
-                    bridge_request(
-                        &bridge_base_url,
-                        "POST",
-                        &format!("/v1/templates/{template_id}/execute"),
-                        Some(&body),
-                    )
-                }) {
+                let body = match load_json_input_file(&inputs) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        println!("error: {e}");
+                        continue;
+                    }
+                };
+                match bridge_request(
+                    &bridge_base_url,
+                    "POST",
+                    &format!("/v1/templates/{template_id}/execute"),
+                    Some(&body),
+                )
+                .await
+                {
                     Ok(response) => {
                         if response.status >= 400 {
                             println!("error: {}", bridge_error_message(&response));
@@ -2920,9 +3003,14 @@ Policy presets: fast | balanced | safe"
                 } else {
                     "/v1/batch/dry-run"
                 };
-                match load_execution_spec_file(&spec).and_then(|spec_text| {
-                    bridge_request(&bridge_base_url, "POST", path, Some(&spec_text))
-                }) {
+                let spec_text = match load_execution_spec_file(&spec) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        println!("error: {e}");
+                        continue;
+                    }
+                };
+                match bridge_request(&bridge_base_url, "POST", path, Some(&spec_text)).await {
                     Ok(response) => {
                         if response.status >= 400 {
                             println!("error: {}", bridge_error_message(&response));
@@ -2939,9 +3027,14 @@ Policy presets: fast | balanced | safe"
                 } else {
                     "/v1/batch/run"
                 };
-                match load_execution_spec_file(&spec).and_then(|spec_text| {
-                    bridge_request(&bridge_base_url, "POST", path, Some(&spec_text))
-                }) {
+                let spec_text = match load_execution_spec_file(&spec) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        println!("error: {e}");
+                        continue;
+                    }
+                };
+                match bridge_request(&bridge_base_url, "POST", path, Some(&spec_text)).await {
                     Ok(response) => {
                         if response.status >= 400 {
                             println!("error: {}", bridge_error_message(&response));
@@ -2953,14 +3046,21 @@ Policy presets: fast | balanced | safe"
                 }
             }
             Command::TeamDryRun { spec } => {
-                match load_execution_spec_file(&spec).and_then(|spec_text| {
-                    bridge_request(
-                        &bridge_base_url,
-                        "POST",
-                        "/v1/teams/dry-run",
-                        Some(&spec_text),
-                    )
-                }) {
+                let spec_text = match load_execution_spec_file(&spec) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        println!("error: {e}");
+                        continue;
+                    }
+                };
+                match bridge_request(
+                    &bridge_base_url,
+                    "POST",
+                    "/v1/teams/dry-run",
+                    Some(&spec_text),
+                )
+                .await
+                {
                     Ok(response) => {
                         if response.status >= 400 {
                             println!("error: {}", bridge_error_message(&response));
@@ -2972,9 +3072,16 @@ Policy presets: fast | balanced | safe"
                 }
             }
             Command::TeamRun { spec } => {
-                match load_execution_spec_file(&spec).and_then(|spec_text| {
-                    bridge_request(&bridge_base_url, "POST", "/v1/teams/run", Some(&spec_text))
-                }) {
+                let spec_text = match load_execution_spec_file(&spec) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        println!("error: {e}");
+                        continue;
+                    }
+                };
+                match bridge_request(&bridge_base_url, "POST", "/v1/teams/run", Some(&spec_text))
+                    .await
+                {
                     Ok(response) => {
                         if response.status >= 400 {
                             println!("error: {}", bridge_error_message(&response));
@@ -3301,13 +3408,9 @@ mod tests {
         assert_eq!(execution_result_label_for_mode("swarm"), "best_candidate");
     }
 
-    #[test]
-    fn parses_host_port_without_explicit_port() {
-        assert_eq!(
-            parse_host_port("http://127.0.0.1").unwrap(),
-            ("127.0.0.1".to_string(), 80)
-        );
-    }
+    // The `parses_host_port_without_explicit_port` test was withdrawn when
+    // `parse_host_port` was removed; URL parsing now lives in hyper-util,
+    // and the bridge URL is fed straight to `hyper::Uri::parse`.
 
     #[test]
     fn bridge_error_message_prefers_message_field() {

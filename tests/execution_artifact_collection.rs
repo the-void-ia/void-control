@@ -6,8 +6,8 @@ use void_control::orchestration::{
 };
 use void_control::runtime::MockRuntime;
 
-#[test]
-fn missing_output_can_mark_failed() {
+#[tokio::test]
+async fn missing_output_can_mark_failed() {
     let mut runtime = MockRuntime::new();
     runtime.seed_missing_output("exec-run-candidate-1");
     runtime.seed_success(
@@ -28,14 +28,15 @@ fn missing_output_can_mark_failed() {
     );
     let execution = service
         .run_to_completion(spec_with_missing_output_policy("mark_failed"))
+        .await
         .expect("run execution");
 
     assert_eq!(execution.status, ExecutionStatus::Failed);
     assert_eq!(execution.failure_counts.total_candidate_failures, 1);
 }
 
-#[test]
-fn missing_output_can_mark_incomplete_without_failure_count() {
+#[tokio::test]
+async fn missing_output_can_mark_incomplete_without_failure_count() {
     let mut runtime = MockRuntime::new();
     runtime.seed_missing_output("exec-run-candidate-1");
     runtime.seed_success(
@@ -56,6 +57,7 @@ fn missing_output_can_mark_incomplete_without_failure_count() {
     );
     let execution = service
         .run_to_completion(spec_with_continue_missing_output())
+        .await
         .expect("run execution");
 
     assert_eq!(execution.status, ExecutionStatus::Completed);
@@ -66,8 +68,8 @@ fn missing_output_can_mark_incomplete_without_failure_count() {
     );
 }
 
-#[test]
-fn iteration_failure_policy_continue_advances_despite_all_failures() {
+#[tokio::test]
+async fn iteration_failure_policy_continue_advances_despite_all_failures() {
     let mut runtime = MockRuntime::new();
     runtime.seed_failure("exec-run-candidate-1");
     runtime.seed_failure("exec-run-candidate-2");
@@ -96,14 +98,15 @@ fn iteration_failure_policy_continue_advances_despite_all_failures() {
     );
     let execution = service
         .run_to_completion(spec_with_iteration_failure_policy("continue", 2))
+        .await
         .expect("run execution");
 
     assert_eq!(execution.status, ExecutionStatus::Completed);
     assert_eq!(execution.completed_iterations, 2);
 }
 
-#[test]
-fn iteration_failure_policy_retry_retries_once() {
+#[tokio::test]
+async fn iteration_failure_policy_retry_retries_once() {
     let mut runtime = MockRuntime::new();
     runtime.seed_failure("exec-run-candidate-1");
     runtime.seed_failure("exec-run-candidate-2");
@@ -132,14 +135,15 @@ fn iteration_failure_policy_retry_retries_once() {
     );
     let execution = service
         .run_to_completion(spec_with_iteration_failure_policy("retry_iteration", 1))
+        .await
         .expect("run execution");
 
     assert_eq!(execution.status, ExecutionStatus::Completed);
     assert_eq!(execution.completed_iterations, 1);
 }
 
-#[test]
-fn malformed_output_is_counted_as_candidate_failure() {
+#[tokio::test]
+async fn malformed_output_is_counted_as_candidate_failure() {
     let mut runtime = MockRuntime::new();
     runtime.seed_malformed_output("exec-run-candidate-1");
     runtime.seed_success(
@@ -160,6 +164,7 @@ fn malformed_output_is_counted_as_candidate_failure() {
     );
     let execution = service
         .run_to_completion(spec_with_missing_output_policy("mark_failed"))
+        .await
         .expect("run execution");
 
     assert_eq!(execution.status, ExecutionStatus::Failed);

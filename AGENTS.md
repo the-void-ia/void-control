@@ -21,6 +21,24 @@ belongs to `void-box`.
 When changing code here, preserve that boundary. Control-plane orchestration and
 runtime transport concerns should stay separate.
 
+## Async runtime
+
+`voidctl serve` runs on a multi-threaded tokio runtime (plain
+`#[tokio::main]` in `src/bin/voidctl.rs`) — the conventional default for
+HTTP services in Rust. The bridge HTTP server (`axum`) and the worker tick
+(`process_pending_executions_once`) both run as `tokio::spawn` tasks on
+that runtime.
+
+All async traits in the orchestration and runtime layers
+(`ExecutionRuntime`, `MessageDeliveryAdapter`, `HttpTransport`,
+`ProviderLaunchAdapter`) are bounded `Send + Sync`. Trait objects
+(`Box<dyn ProviderLaunchAdapter>`, etc.) are `Send + Sync` by way of the
+trait's supertrait. Test mocks use `Arc<Mutex<…>>` for shared recorders.
+
+The trait surface also supports `current_thread` via
+`#[tokio::main(flavor = "current_thread")]` for any future workload that
+prefers it.
+
 ## Repository layout
 
 - `spec/`: canonical specifications and design contracts
@@ -111,8 +129,16 @@ TMPDIR=$PWD/target/tmp scripts/build_claude_rootfs.sh
 export VOID_BOX_KERNEL=/boot/vmlinuz-$(uname -r)
 export VOID_BOX_INITRAMFS=$PWD/target/void-box-rootfs.cpio.gz
 export ANTHROPIC_API_KEY=sk-ant-...
-cargo run --bin voidbox -- serve --listen 127.0.0.1:43100
+cargo run --bin voidbox -- serve
 ```
+
+The daemon defaults to AF_UNIX at mode `0o600` (path-discovery chain:
+`$XDG_RUNTIME_DIR/voidbox.sock` → `$TMPDIR/voidbox-$UID.sock` →
+`/tmp/voidbox-$UID.sock`). Same-uid `void-control` finds it with no
+configuration. To listen on TCP instead, pass
+`--listen tcp://127.0.0.1:43100`; TCP requires a bearer token resolved
+from `VOIDBOX_DAEMON_TOKEN_FILE`, `VOIDBOX_DAEMON_TOKEN`, or
+`$XDG_CONFIG_HOME/voidbox/daemon-token`.
 
 In a second terminal:
 
@@ -149,10 +175,17 @@ Swarm/service template requirements:
 - `agent.mode: service` requires `agent.output_file`
 - `agent.mode: service` must not set `agent.timeout_secs`
 
-Health check:
+Health check (AF_UNIX default; pass `--unix-socket` to curl):
 
 ```bash
-curl -sS http://127.0.0.1:43100/v1/health
+curl -sS --unix-socket "$XDG_RUNTIME_DIR/voidbox.sock" http://localhost/v1/health
+```
+
+When the daemon listens on TCP:
+
+```bash
+curl -sS http://127.0.0.1:43100/v1/health \
+  -H "Authorization: Bearer $(cat "$XDG_CONFIG_HOME/voidbox/daemon-token")"
 ```
 
 Execution examples:
@@ -238,9 +271,15 @@ Important:
 
 ## Runtime compatibility commands
 
-Live daemon contract gate:
+Live daemon contract gate. The contract test dials the daemon directly,
+so `VOID_BOX_BASE_URL` must be set; both shapes are accepted.
 
 ```bash
+# AF_UNIX (default daemon listener)
+VOID_BOX_BASE_URL=unix://$XDG_RUNTIME_DIR/voidbox.sock \
+cargo test --features serde --test void_box_contract -- --ignored --nocapture
+
+# TCP
 VOID_BOX_BASE_URL=http://127.0.0.1:43100 \
 cargo test --features serde --test void_box_contract -- --ignored --nocapture
 ```
@@ -249,8 +288,19 @@ cargo test --features serde --test void_box_contract -- --ignored --nocapture
 
 Control-plane / bridge:
 
-- `VOID_BOX_BASE_URL` — void-box daemon endpoint (default:
-  `http://127.0.0.1:43100`).
+- `VOID_BOX_BASE_URL` — void-box daemon endpoint. Default: auto-discover
+  the AF_UNIX socket the daemon advertises (`$XDG_RUNTIME_DIR/voidbox.sock`
+  → `$TMPDIR/voidbox-$UID.sock` → `/tmp/voidbox-$UID.sock`). Override
+  with `unix:///abs/path` for an explicit AF_UNIX path or
+  `http://host:port` to talk to a TCP-listening daemon. TCP requires a
+  bearer token via `VOIDBOX_DAEMON_TOKEN_FILE`, `VOIDBOX_DAEMON_TOKEN`,
+  or `$XDG_CONFIG_HOME/voidbox/daemon-token`; construction fails closed
+  if none resolves.
+- `VOIDBOX_DAEMON_TOKEN_FILE` / `VOIDBOX_DAEMON_TOKEN` — bearer-token
+  sources for the TCP transport (mirrors void-box's resolution chain).
+  Token files must be owner-only (`mode & 0o077 == 0`).
+- `VOID_CONTROL_BRIDGE_LISTEN` — bridge listen address (default:
+  `127.0.0.1:43210`). The Vite dev server proxies `/api` here.
 - `VOID_CONTROL_LLM_PROVIDER` — optional global override that patches
   `llm.provider` on every runtime template at launch. Set to
   `claude-personal` to use OAuth from the macOS Keychain or
@@ -291,6 +341,22 @@ Preferred order:
 - keep implementation-facing architecture notes in `docs/`
 - update `README.md`, `AGENTS.md`, or `docs/architecture.md` when behavior or
   workflows change materially
+
+### Source-code doc and inline comments
+
+- explain *why* the code is structured the way it is, not how it got
+  there — avoid "previously did X, now does Y" and "this replaces…";
+  state the rationale in present tense
+- keep concrete attack examples or worked use-cases when pedagogically
+  useful — those are illustrations, not history
+- no ticket IDs (e.g. `R-*`) or PR/commit references inside doc
+  comments or inline comments — they belong in commit messages and PR
+  descriptions where they live as audit trail
+- never reference a private repository by name in source — if a
+  reasoning trail lives in a private repo, inline the structural
+  reasoning here instead, or refer to a public PR/issue if one exists
+- no AI-attribution trailers (`Co-Authored-By: Claude`, robot emojis,
+  "Generated by …") in commit messages or code
 
 ## Testing expectations
 

@@ -1150,9 +1150,9 @@ fn policy_no_policy_regression_allows_completion() {
     assert_eq!(status, "succeeded", "terminal={terminal}");
 }
 
-#[test]
+#[tokio::test]
 #[ignore = "requires live void-box daemon with sidecar-enabled runtime"]
-fn sidecar_delivery_adapter_smoke_against_live_daemon() {
+async fn sidecar_delivery_adapter_smoke_against_live_daemon() {
     use void_control::orchestration::{CandidateSpec, InboxEntry, InboxSnapshot};
     use void_control::runtime::{HttpSidecarAdapter, MessageDeliveryAdapter, VoidBoxRunRef};
 
@@ -1163,7 +1163,7 @@ fn sidecar_delivery_adapter_smoke_against_live_daemon() {
     let (status_start, body_start) = http_post_json(&base, "/v1/runs", &payload);
     assert_eq!(status_start, 200, "body={body_start}");
 
-    let adapter = HttpSidecarAdapter::new();
+    let adapter = HttpSidecarAdapter::with_daemon_url(base.clone());
     let run_ref = VoidBoxRunRef {
         daemon_base_url: base.clone(),
         run_id: run_id.clone(),
@@ -1183,24 +1183,28 @@ fn sidecar_delivery_adapter_smoke_against_live_daemon() {
 
     let mut injected = false;
     for _ in 0..20 {
-        match adapter.inject_at_launch(
-            &run_ref,
-            &CandidateSpec {
-                candidate_id: run_id.clone(),
-                overrides: Default::default(),
-            },
-            &inbox,
-        ) {
+        match adapter
+            .inject_at_launch(
+                &run_ref,
+                &CandidateSpec {
+                    candidate_id: run_id.clone(),
+                    overrides: Default::default(),
+                },
+                &inbox,
+            )
+            .await
+        {
             Ok(()) => {
                 injected = true;
                 break;
             }
-            Err(_) => thread::sleep(Duration::from_millis(10)),
+            Err(_) => tokio::time::sleep(Duration::from_millis(10)).await,
         }
     }
     if injected {
         let drained = adapter
             .drain_intents(&run_ref)
+            .await
             .expect("drain intents from daemon sidecar");
         assert!(
             drained.is_empty(),
@@ -1209,6 +1213,7 @@ fn sidecar_delivery_adapter_smoke_against_live_daemon() {
 
         let drained_again = adapter
             .drain_intents(&run_ref)
+            .await
             .expect("drain intents second time");
         assert!(drained_again.is_empty(), "drain should remain empty");
     } else {

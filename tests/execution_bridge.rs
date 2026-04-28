@@ -5,10 +5,11 @@ use std::path::Path;
 
 use serde_json::json;
 
-#[test]
-fn template_list_route_returns_checked_in_templates() {
+#[tokio::test]
+async fn template_list_route_returns_checked_in_templates() {
     let response =
         void_control::bridge::handle_bridge_request_for_test("GET", "/v1/templates", None)
+            .await
             .expect("response");
 
     assert_eq!(response.status, 200);
@@ -23,13 +24,14 @@ fn template_list_route_returns_checked_in_templates() {
         .any(|item| item["id"] == "warm-agent-basic"));
 }
 
-#[test]
-fn template_get_route_returns_template_details() {
+#[tokio::test]
+async fn template_get_route_returns_template_details() {
     let response = void_control::bridge::handle_bridge_request_for_test(
         "GET",
         "/v1/templates/single-agent-basic",
         None,
     )
+    .await
     .expect("response");
 
     assert_eq!(response.status, 200);
@@ -41,8 +43,8 @@ fn template_get_route_returns_template_details() {
     assert!(response.json["inputs"]["prompt"].is_object());
 }
 
-#[test]
-fn template_dry_run_route_returns_compiled_execution_preview() {
+#[tokio::test]
+async fn template_dry_run_route_returns_compiled_execution_preview() {
     let body = json!({
         "inputs": {
             "goal": "Summarize this repo",
@@ -57,6 +59,7 @@ fn template_dry_run_route_returns_compiled_execution_preview() {
         "/v1/templates/single-agent-basic/dry-run",
         Some(&body),
     )
+    .await
     .expect("response");
 
     assert_eq!(response.status, 200);
@@ -77,8 +80,8 @@ fn template_dry_run_route_returns_compiled_execution_preview() {
     );
 }
 
-#[test]
-fn template_execute_route_creates_normal_execution() {
+#[tokio::test]
+async fn template_execute_route_creates_normal_execution() {
     let root = temp_root("template-execute");
     let spec_dir = root.join("specs");
     let execution_dir = root.join("executions");
@@ -97,6 +100,7 @@ fn template_execute_route_creates_normal_execution() {
         &spec_dir,
         &execution_dir,
     )
+    .await
     .expect("response");
 
     assert_eq!(response.status, 200);
@@ -131,13 +135,14 @@ fn template_execute_route_creates_normal_execution() {
     );
 }
 
-#[test]
-fn template_get_route_returns_benchmark_template_details() {
+#[tokio::test]
+async fn template_get_route_returns_benchmark_template_details() {
     let response = void_control::bridge::handle_bridge_request_for_test(
         "GET",
         "/v1/templates/benchmark-runner-python",
         None,
     )
+    .await
     .expect("response");
 
     assert_eq!(response.status, 200);
@@ -150,8 +155,8 @@ fn template_get_route_returns_benchmark_template_details() {
     assert!(response.json["inputs"]["snapshot"].is_object());
 }
 
-#[test]
-fn template_dry_run_route_returns_benchmark_candidate_overrides() {
+#[tokio::test]
+async fn template_dry_run_route_returns_benchmark_candidate_overrides() {
     let body = json!({
         "inputs": {
             "goal": "Compare transform benchmark candidates",
@@ -166,6 +171,7 @@ fn template_dry_run_route_returns_benchmark_candidate_overrides() {
         "/v1/templates/benchmark-runner-python/dry-run",
         Some(&body),
     )
+    .await
     .expect("response");
 
     assert_eq!(response.status, 200);
@@ -198,8 +204,8 @@ fn template_dry_run_route_returns_benchmark_candidate_overrides() {
     assert_eq!(candidate_overrides[1]["llm.provider"], "claude");
 }
 
-#[test]
-fn template_execute_route_creates_benchmark_execution() {
+#[tokio::test]
+async fn template_execute_route_creates_benchmark_execution() {
     let root = temp_root("template-execute-benchmark");
     let spec_dir = root.join("specs");
     let execution_dir = root.join("executions");
@@ -218,6 +224,7 @@ fn template_execute_route_creates_benchmark_execution() {
         &spec_dir,
         &execution_dir,
     )
+    .await
     .expect("response");
 
     assert_eq!(response.status, 200);
@@ -244,8 +251,8 @@ fn template_execute_route_creates_benchmark_execution() {
     );
 }
 
-#[test]
-fn dry_run_endpoint_returns_plan_without_creating_execution() {
+#[tokio::test]
+async fn dry_run_endpoint_returns_plan_without_creating_execution() {
     let body = json!({
         "mode": "swarm",
         "goal": "optimize latency",
@@ -292,6 +299,7 @@ fn dry_run_endpoint_returns_plan_without_creating_execution() {
         "/v1/executions/dry-run",
         Some(&body),
     )
+    .await
     .expect("response");
 
     assert_eq!(response.status, 200);
@@ -299,8 +307,8 @@ fn dry_run_endpoint_returns_plan_without_creating_execution() {
     assert_eq!(response.json["plan"]["max_child_runs"], 6);
 }
 
-#[test]
-fn dry_run_endpoint_returns_validation_errors() {
+#[tokio::test]
+async fn dry_run_endpoint_returns_validation_errors() {
     let body = json!({
         "mode": "swarm",
         "goal": "optimize latency",
@@ -343,14 +351,15 @@ fn dry_run_endpoint_returns_validation_errors() {
         "/v1/executions/dry-run",
         Some(&body),
     )
+    .await
     .expect("response");
 
     assert_eq!(response.status, 400);
     assert!(response.json["errors"].as_array().is_some());
 }
 
-#[test]
-fn create_list_and_get_execution_routes_round_trip() {
+#[tokio::test]
+async fn create_list_and_get_execution_routes_round_trip() {
     let root = temp_root("create-round-trip");
     let spec_dir = root.join("specs");
     let execution_dir = root.join("executions");
@@ -363,6 +372,7 @@ fn create_list_and_get_execution_routes_round_trip() {
         &spec_dir,
         &execution_dir,
     )
+    .await
     .expect("create");
 
     assert_eq!(created.status, 200);
@@ -379,6 +389,7 @@ fn create_list_and_get_execution_routes_round_trip() {
         &spec_dir,
         &execution_dir,
     )
+    .await
     .expect("list");
     assert_eq!(listed.status, 200);
     assert_eq!(
@@ -395,6 +406,7 @@ fn create_list_and_get_execution_routes_round_trip() {
         &spec_dir,
         &execution_dir,
     )
+    .await
     .expect("get");
     assert_eq!(fetched.status, 200);
     assert_eq!(fetched.json["execution"]["execution_id"], execution_id);
@@ -416,8 +428,8 @@ fn create_list_and_get_execution_routes_round_trip() {
     assert_eq!(fetched.json["result"]["total_candidate_failures"], 0);
 }
 
-#[test]
-fn create_execution_route_rejects_search_specs() {
+#[tokio::test]
+async fn create_execution_route_rejects_search_specs() {
     let root = temp_root("create-search");
     let spec_dir = root.join("specs");
     let execution_dir = root.join("executions");
@@ -430,6 +442,7 @@ fn create_execution_route_rejects_search_specs() {
         &spec_dir,
         &execution_dir,
     )
+    .await
     .expect("create");
 
     assert_eq!(created.status, 400);
@@ -439,8 +452,8 @@ fn create_execution_route_rejects_search_specs() {
         .is_some_and(|message| message.contains("unsupported mode")));
 }
 
-#[test]
-fn create_execution_route_accepts_yaml_specs() {
+#[tokio::test]
+async fn create_execution_route_accepts_yaml_specs() {
     let root = temp_root("create-yaml");
     let spec_dir = root.join("specs");
     let execution_dir = root.join("executions");
@@ -487,6 +500,7 @@ swarm: true
         &spec_dir,
         &execution_dir,
     )
+    .await
     .expect("create");
 
     assert_eq!(created.status, 200);
@@ -495,8 +509,8 @@ swarm: true
     assert_eq!(created.json["goal"], "optimize transform latency");
 }
 
-#[test]
-fn checked_in_swarm_example_is_accepted_by_bridge() {
+#[tokio::test]
+async fn checked_in_swarm_example_is_accepted_by_bridge() {
     let root = temp_root("checked-in-swarm-example");
     let spec_dir = root.join("specs");
     let execution_dir = root.join("executions");
@@ -509,14 +523,15 @@ fn checked_in_swarm_example_is_accepted_by_bridge() {
         &spec_dir,
         &execution_dir,
     )
+    .await
     .expect("create");
 
     assert_eq!(created.status, 200);
     assert_eq!(created.json["mode"], "swarm");
 }
 
-#[test]
-fn checked_in_supervision_example_is_accepted_by_bridge() {
+#[tokio::test]
+async fn checked_in_supervision_example_is_accepted_by_bridge() {
     let root = temp_root("checked-in-supervision-example");
     let spec_dir = root.join("specs");
     let execution_dir = root.join("executions");
@@ -529,14 +544,15 @@ fn checked_in_supervision_example_is_accepted_by_bridge() {
         &spec_dir,
         &execution_dir,
     )
+    .await
     .expect("create");
 
     assert_eq!(created.status, 200);
     assert_eq!(created.json["mode"], "supervision");
 }
 
-#[test]
-fn dry_run_route_wraps_runtime_yaml_specs() {
+#[tokio::test]
+async fn dry_run_route_wraps_runtime_yaml_specs() {
     let root = temp_root("dry-run-runtime-yaml");
     let spec_dir = root.join("specs");
     let body = runtime_spec_body();
@@ -548,6 +564,7 @@ fn dry_run_route_wraps_runtime_yaml_specs() {
         &spec_dir,
         &root.join("executions"),
     )
+    .await
     .expect("dry-run");
 
     assert_eq!(response.status, 200);
@@ -557,8 +574,8 @@ fn dry_run_route_wraps_runtime_yaml_specs() {
     assert_eq!(response.json["plan"]["max_child_runs"], 1);
 }
 
-#[test]
-fn create_execution_route_wraps_runtime_yaml_specs() {
+#[tokio::test]
+async fn create_execution_route_wraps_runtime_yaml_specs() {
     let root = temp_root("create-runtime-yaml");
     let spec_dir = root.join("specs");
     let execution_dir = root.join("executions");
@@ -571,6 +588,7 @@ fn create_execution_route_wraps_runtime_yaml_specs() {
         &spec_dir,
         &execution_dir,
     )
+    .await
     .expect("create");
 
     assert_eq!(created.status, 200);
@@ -590,8 +608,8 @@ fn create_execution_route_wraps_runtime_yaml_specs() {
         .starts_with(spec_dir.to_string_lossy().as_ref()));
 }
 
-#[test]
-fn get_execution_events_route_returns_persisted_event_stream() {
+#[tokio::test]
+async fn get_execution_events_route_returns_persisted_event_stream() {
     let root = temp_root("execution-events");
     let spec_dir = root.join("specs");
     let execution_dir = root.join("executions");
@@ -604,6 +622,7 @@ fn get_execution_events_route_returns_persisted_event_stream() {
         &spec_dir,
         &execution_dir,
     )
+    .await
     .expect("create");
     let execution_id = created.json["execution_id"]
         .as_str()
@@ -617,6 +636,7 @@ fn get_execution_events_route_returns_persisted_event_stream() {
         &spec_dir,
         &execution_dir,
     )
+    .await
     .expect("events");
 
     assert_eq!(events.status, 200);
@@ -626,8 +646,8 @@ fn get_execution_events_route_returns_persisted_event_stream() {
     assert_eq!(items[1]["event_type"], "ExecutionSubmitted");
 }
 
-#[test]
-fn get_execution_route_reports_current_candidate_status_counts() {
+#[tokio::test]
+async fn get_execution_route_reports_current_candidate_status_counts() {
     let root = temp_root("execution-progress-counts");
     let spec_dir = root.join("specs");
     let execution_dir = root.join("executions");
@@ -640,6 +660,7 @@ fn get_execution_route_reports_current_candidate_status_counts() {
         &spec_dir,
         &execution_dir,
     )
+    .await
     .expect("create");
     let execution_id = created.json["execution_id"]
         .as_str()
@@ -654,7 +675,7 @@ fn get_execution_route_reports_current_candidate_status_counts() {
         void_control::runtime::MockRuntime::new(),
         store,
     );
-    planner.plan_execution(&execution_id).expect("plan");
+    planner.plan_execution(&execution_id).await.expect("plan");
 
     let fetched = void_control::bridge::handle_bridge_request_with_dirs_for_test(
         "GET",
@@ -663,6 +684,7 @@ fn get_execution_route_reports_current_candidate_status_counts() {
         &spec_dir,
         &execution_dir,
     )
+    .await
     .expect("get");
 
     assert_eq!(fetched.status, 200);
@@ -681,8 +703,8 @@ fn get_execution_route_reports_current_candidate_status_counts() {
     assert!(candidates[0]["metrics"].is_object());
 }
 
-#[test]
-fn get_execution_route_returns_not_found_for_missing_execution() {
+#[tokio::test]
+async fn get_execution_route_returns_not_found_for_missing_execution() {
     let root = temp_root("missing-execution");
     let response = void_control::bridge::handle_bridge_request_with_dirs_for_test(
         "GET",
@@ -691,14 +713,15 @@ fn get_execution_route_returns_not_found_for_missing_execution() {
         &root.join("specs"),
         &root.join("executions"),
     )
+    .await
     .expect("response");
 
     assert_eq!(response.status, 404);
     assert_eq!(response.json["code"], "NOT_FOUND");
 }
 
-#[test]
-fn pause_resume_and_cancel_execution_routes_update_persisted_status() {
+#[tokio::test]
+async fn pause_resume_and_cancel_execution_routes_update_persisted_status() {
     let root = temp_root("status-transitions");
     let spec_dir = root.join("specs");
     let execution_dir = root.join("executions");
@@ -711,6 +734,7 @@ fn pause_resume_and_cancel_execution_routes_update_persisted_status() {
         &spec_dir,
         &execution_dir,
     )
+    .await
     .expect("pause");
     assert_eq!(paused.status, 200);
     assert_eq!(paused.json["status"], "Paused");
@@ -722,6 +746,7 @@ fn pause_resume_and_cancel_execution_routes_update_persisted_status() {
         &spec_dir,
         &execution_dir,
     )
+    .await
     .expect("resume");
     assert_eq!(resumed.status, 200);
     assert_eq!(resumed.json["status"], "Running");
@@ -733,13 +758,14 @@ fn pause_resume_and_cancel_execution_routes_update_persisted_status() {
         &spec_dir,
         &execution_dir,
     )
+    .await
     .expect("cancel");
     assert_eq!(canceled.status, 200);
     assert_eq!(canceled.json["status"], "Canceled");
 }
 
-#[test]
-fn pause_route_rejects_invalid_transition() {
+#[tokio::test]
+async fn pause_route_rejects_invalid_transition() {
     let root = temp_root("invalid-transition");
     let spec_dir = root.join("specs");
     let execution_dir = root.join("executions");
@@ -752,14 +778,15 @@ fn pause_route_rejects_invalid_transition() {
         &spec_dir,
         &execution_dir,
     )
+    .await
     .expect("pause");
 
     assert_eq!(response.status, 400);
     assert_eq!(response.json["code"], "INVALID_STATE");
 }
 
-#[test]
-fn patch_policy_updates_mutable_budget_and_concurrency_fields() {
+#[tokio::test]
+async fn patch_policy_updates_mutable_budget_and_concurrency_fields() {
     let root = temp_root("policy-patch");
     let spec_dir = root.join("specs");
     let execution_dir = root.join("executions");
@@ -772,6 +799,7 @@ fn patch_policy_updates_mutable_budget_and_concurrency_fields() {
         &spec_dir,
         &execution_dir,
     )
+    .await
     .expect("create");
     let execution_id = created.json["execution_id"].as_str().expect("execution_id");
 
@@ -792,6 +820,7 @@ fn patch_policy_updates_mutable_budget_and_concurrency_fields() {
         &spec_dir,
         &execution_dir,
     )
+    .await
     .expect("patch");
 
     assert_eq!(patched.status, 200);
@@ -799,8 +828,8 @@ fn patch_policy_updates_mutable_budget_and_concurrency_fields() {
     assert_eq!(patched.json["max_concurrent_candidates"], 4);
 }
 
-#[test]
-fn patch_policy_rejects_immutable_convergence_fields() {
+#[tokio::test]
+async fn patch_policy_rejects_immutable_convergence_fields() {
     let root = temp_root("policy-immutable");
     let spec_dir = root.join("specs");
     let execution_dir = root.join("executions");
@@ -813,6 +842,7 @@ fn patch_policy_rejects_immutable_convergence_fields() {
         &spec_dir,
         &execution_dir,
     )
+    .await
     .expect("create");
     let execution_id = created.json["execution_id"].as_str().expect("execution_id");
 
@@ -831,6 +861,7 @@ fn patch_policy_rejects_immutable_convergence_fields() {
         &spec_dir,
         &execution_dir,
     )
+    .await
     .expect("patch");
 
     assert_eq!(patched.status, 400);

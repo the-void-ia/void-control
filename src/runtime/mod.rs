@@ -1,4 +1,6 @@
 #[cfg(feature = "serde")]
+pub mod daemon_address;
+#[cfg(feature = "serde")]
 mod delivery;
 #[cfg(feature = "serde")]
 mod http_sidecar;
@@ -30,8 +32,14 @@ use std::path::Path;
 #[cfg(feature = "serde")]
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Adapter that rewrites a `StartRequest` before it goes onto the wire.
+///
+/// Used by `ExecutionService` to weave an `InboxSnapshot` and any
+/// candidate-specific overrides into the workflow spec before launch.
+/// `Send + Sync` so the boxed trait object inside `ExecutionService<R>`
+/// can be moved across tasks freely.
 #[cfg(feature = "serde")]
-pub trait ProviderLaunchAdapter {
+pub trait ProviderLaunchAdapter: Send + Sync {
     fn prepare_launch_request(
         &self,
         request: StartRequest,
@@ -192,16 +200,19 @@ fn ensure_object(value: &mut Value) -> &mut Map<String, Value> {
     value.as_object_mut().expect("object value")
 }
 
+#[async_trait::async_trait]
 impl ExecutionRuntime for MockRuntime {
-    fn start_run(&mut self, request: StartRequest) -> Result<StartResult, ContractError> {
+    async fn start_run(&mut self, request: StartRequest) -> Result<StartResult, ContractError> {
+        // MockRuntime is in-process; the async wrapper is a no-op suspension
+        // point so the trait shape matches the live client. No actual I/O.
         self.start(request)
     }
 
-    fn inspect_run(&self, handle: &str) -> Result<RuntimeInspection, ContractError> {
+    async fn inspect_run(&self, handle: &str) -> Result<RuntimeInspection, ContractError> {
         self.inspect(handle)
     }
 
-    fn take_structured_output(&mut self, run_id: &str) -> StructuredOutputResult {
+    async fn take_structured_output(&mut self, run_id: &str) -> StructuredOutputResult {
         self.take_structured_output(run_id)
     }
 
@@ -215,17 +226,18 @@ impl ExecutionRuntime for MockRuntime {
 }
 
 #[cfg(feature = "serde")]
+#[async_trait::async_trait]
 impl ExecutionRuntime for VoidBoxRuntimeClient {
-    fn start_run(&mut self, request: StartRequest) -> Result<StartResult, ContractError> {
-        self.start(request)
+    async fn start_run(&mut self, request: StartRequest) -> Result<StartResult, ContractError> {
+        self.start(request).await
     }
 
-    fn inspect_run(&self, handle: &str) -> Result<RuntimeInspection, ContractError> {
-        self.inspect(handle)
+    async fn inspect_run(&self, handle: &str) -> Result<RuntimeInspection, ContractError> {
+        self.inspect(handle).await
     }
 
-    fn take_structured_output(&mut self, run_id: &str) -> StructuredOutputResult {
-        match self.fetch_structured_output(run_id) {
+    async fn take_structured_output(&mut self, run_id: &str) -> StructuredOutputResult {
+        match self.fetch_structured_output(run_id).await {
             Ok(Some(output)) => StructuredOutputResult::Found(output),
             Ok(None) => StructuredOutputResult::Missing,
             Err(err) => StructuredOutputResult::Error(err),
