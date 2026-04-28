@@ -35,8 +35,6 @@ use std::path::{Path, PathBuf};
 
 #[cfg(unix)]
 use std::ffi::CString;
-#[cfg(unix)]
-use std::os::unix::ffi::OsStrExt;
 
 /// Environment variable consulted before falling back to a generated token.
 pub const DAEMON_TOKEN_ENV: &str = "VOIDBOX_DAEMON_TOKEN";
@@ -122,7 +120,7 @@ fn is_writable_dir(path: &Path) -> bool {
     }
     #[cfg(unix)]
     unsafe {
-        let Ok(c) = CString::new(path.as_os_str().as_bytes()) else {
+        let Ok(c) = CString::new(path.as_os_str().as_encoded_bytes()) else {
             return false;
         };
         libc::access(c.as_ptr(), libc::W_OK) == 0

@@ -20,6 +20,23 @@ async fn main() {
     }
 }
 
+// Module-scope imports for the bridge HTTP client used by `bridge_request`
+// and `build_bridge_client`. The big `run()` body keeps its own scoped
+// imports (rustyline / serde / void_control) by long-standing pattern; the
+// hyper-util stack moves up here because it spans multiple file-scope fns.
+#[cfg(feature = "serde")]
+use bytes::Bytes;
+#[cfg(feature = "serde")]
+use http_body_util::{BodyExt, Full};
+#[cfg(feature = "serde")]
+use hyper::{Method, Request as HyperRequest};
+#[cfg(feature = "serde")]
+use hyper_util::client::legacy::connect::HttpConnector;
+#[cfg(feature = "serde")]
+use hyper_util::client::legacy::Client;
+#[cfg(feature = "serde")]
+use hyper_util::rt::TokioExecutor;
+
 #[cfg(feature = "serde")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ExecutionCommand {
@@ -495,7 +512,7 @@ fn top_level_help_text() -> &'static str {
   voidctl team run --stdin"
 }
 
-/// Hyper-util legacy client used to talk to the local bridge from the CLI.
+/// Hyper-util pooled HTTP client for talking to the local bridge.
 ///
 /// Distinct from the `VoidBoxRuntimeClient` HTTP transport: that one
 /// dispatches to the void-box daemon (TCP or AF_UNIX), this one only ever
@@ -507,9 +524,6 @@ fn build_bridge_client() -> hyper_util::client::legacy::Client<
     hyper_util::client::legacy::connect::HttpConnector,
     http_body_util::Full<bytes::Bytes>,
 > {
-    use hyper_util::client::legacy::connect::HttpConnector;
-    use hyper_util::client::legacy::Client;
-    use hyper_util::rt::TokioExecutor;
     Client::builder(TokioExecutor::new()).build(HttpConnector::new())
 }
 
@@ -520,10 +534,6 @@ async fn bridge_request(
     path: &str,
     body: Option<&str>,
 ) -> Result<BridgeJsonResponse, String> {
-    use bytes::Bytes;
-    use http_body_util::{BodyExt, Full};
-    use hyper::{Method, Request as HyperRequest};
-
     let client = build_bridge_client();
     let url = format!("{}{}", base_url.trim_end_matches('/'), path);
     let uri: hyper::Uri = url

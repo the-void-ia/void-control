@@ -1913,6 +1913,10 @@ mod tests {
     // behaviour — the OS-thread refresh watcher inside `with_claimed_execution`
     // races with the tokio task that holds the claim. Running it on the
     // multi-threaded flavor matches the production runtime.
+    // NOTE: this is currently the only env-mutating test in this module;
+    // the env vars below are process-global. If a second env-mutating test
+    // is added here, both tests need to share an env-lock the way the
+    // `daemon_address` module does (see its `with_env` helper).
     #[tokio::test(flavor = "multi_thread")]
     async fn claimed_execution_refresh_prevents_other_worker_from_stealing_stale_claim() {
         use tokio::sync::oneshot;

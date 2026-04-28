@@ -5,12 +5,26 @@ use std::io::Write;
 #[cfg(feature = "serde")]
 use std::path::{Path, PathBuf};
 #[cfg(feature = "serde")]
+use std::sync::Arc;
+#[cfg(feature = "serde")]
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(feature = "serde")]
+use axum::http::{header, HeaderValue, StatusCode};
+#[cfg(feature = "serde")]
+use axum::response::IntoResponse;
+#[cfg(feature = "serde")]
+use axum::routing::{get, patch, post};
+#[cfg(feature = "serde")]
+use axum::Router;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "serde")]
 use serde_json::{json, Value};
+#[cfg(feature = "serde")]
+use tokio::net::TcpListener;
+#[cfg(feature = "serde")]
+use tower_http::cors::CorsLayer;
 
 #[cfg(feature = "serde")]
 use crate::batch;
@@ -290,9 +304,6 @@ pub async fn handle_bridge_request_with_dirs_for_test(
 /// multi-threaded runtime without ceremony.
 #[cfg(feature = "serde")]
 pub async fn run_bridge() -> Result<(), String> {
-    use std::sync::Arc;
-    use tokio::net::TcpListener;
-
     let config = BridgeConfig::from_env();
 
     for dir in [&config.spec_dir, &config.execution_dir] {
@@ -390,15 +401,11 @@ async fn shutdown_signal() {
 /// (Vite dev server, deployed dashboard). The OPTIONS preflight is served by
 /// the generic CORS layer rather than per-route handlers.
 #[cfg(feature = "serde")]
-fn build_router(shared: std::sync::Arc<BridgeState>) -> axum::Router {
-    use axum::routing::{get, patch, post};
-    use axum::Router;
-    use tower_http::cors::CorsLayer;
-
-    // Match the previous tiny_http CORS surface: `*` origin,
-    // `GET,POST,PATCH,OPTIONS`, only `Content-Type` allowed in headers.
-    // The operator UI runs on a different origin (Vite dev server, deployed
-    // dashboard), so CORS is permissive by design.
+fn build_router(shared: Arc<BridgeState>) -> Router {
+    // CORS surface: `*` origin, `GET,POST,PATCH,OPTIONS`, only
+    // `Content-Type` allowed in headers. The operator UI runs on a
+    // different origin (Vite dev server, deployed dashboard), so CORS is
+    // permissive by design.
     let cors = CorsLayer::permissive();
 
     Router::new()
@@ -2143,8 +2150,6 @@ fn json_response<T: Serialize>(status: u16, body: &T) -> JsonHttpResponse {
 /// the `tower_http::cors::CorsLayer` applied at the router level.
 #[cfg(feature = "serde")]
 fn into_axum(response: JsonHttpResponse) -> axum::response::Response {
-    use axum::http::{header, HeaderValue, StatusCode};
-    use axum::response::IntoResponse;
     let status = StatusCode::from_u16(response.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
     let mut resp = (status, response.body).into_response();
     resp.headers_mut().insert(
@@ -2156,11 +2161,10 @@ fn into_axum(response: JsonHttpResponse) -> axum::response::Response {
 
 // -- axum route handlers ------------------------------------------------
 //
-// Every handler is a thin shim over the existing `handle_*` functions: take
-// axum extractors, rebuild the `(method, path, body)` shape the legacy
-// dispatch helpers want, and `into_axum` the result. This keeps the JSON
-// shapes and status codes byte-for-byte compatible with the previous
-// tiny_http server, which is what the test suite relies on.
+// Every handler is a thin shim over the matching `handle_*` function: take
+// axum extractors, rebuild the `(method, path, body)` shape the dispatch
+// helpers want, and `into_axum` the result. JSON shapes and status codes
+// stay wire-format-compatible with what the test suite asserts on.
 //
 // Path-prefix routes (`/v1/team-runs/...`, `/v1/batch-runs/...`,
 // `/v1/yolo-runs/...`) still receive the full request path so the existing

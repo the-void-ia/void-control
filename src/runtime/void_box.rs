@@ -1590,12 +1590,21 @@ mod tests {
             .expect("unix dispatch should succeed without env");
         // The boxed trait object's concrete type isn't observable from here;
         // smoke-check by attempting a request and asserting we get a connect
-        // error rather than a parse error (proves it's the unix path that ran).
+        // error (proves it's the unix path that ran). Match the structural
+        // shape of the error our `send_with_timeout` helper produces — the
+        // code, retryable flag, and message prefix are all set by us
+        // explicitly, so the assertion doesn't depend on hyper-util's wording.
         let err = transport
             .request("GET", "/v1/health", "")
             .await
             .expect_err("connect should fail against missing socket");
-        assert!(err.message.contains("unix:") || err.message.contains("connect"));
+        assert_eq!(err.code, ContractErrorCode::InternalError);
+        assert!(err.retryable);
+        assert!(
+            err.message.starts_with("connect to unix://"),
+            "expected connect-failure prefix, got: {}",
+            err.message
+        );
     }
 
     #[test]
