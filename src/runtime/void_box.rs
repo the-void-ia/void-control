@@ -38,10 +38,19 @@ type TcpHyperClient = HyperClient<HttpConnector, Full<Bytes>>;
 /// code path once the URI is built.
 type UnixHyperClient = HyperClient<UnixConnector, Full<Bytes>>;
 
+/// Shared HTTP client for the void-box daemon.
+///
+/// Cheap to `clone` — the underlying transport is held in an `Arc`, and
+/// the wrapped hyper-util `Client` already pools connections internally,
+/// so all clones share one connection pool. This is the shape the bridge
+/// uses to fan a single startup-built client out to the worker tick and
+/// per-request handlers without re-running the construction-time token
+/// resolution.
+#[derive(Clone)]
 pub struct VoidBoxRuntimeClient {
     base_url: String,
     poll_interval_ms: u64,
-    transport: Box<dyn HttpTransport + Send + Sync>,
+    transport: std::sync::Arc<dyn HttpTransport + Send + Sync>,
 }
 
 impl VoidBoxRuntimeClient {
@@ -70,7 +79,7 @@ impl VoidBoxRuntimeClient {
         Self {
             base_url: url,
             poll_interval_ms,
-            transport,
+            transport: transport.into(),
         }
     }
 
@@ -83,7 +92,7 @@ impl VoidBoxRuntimeClient {
         Self {
             base_url,
             poll_interval_ms,
-            transport,
+            transport: transport.into(),
         }
     }
 

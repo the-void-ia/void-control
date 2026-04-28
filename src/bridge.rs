@@ -306,22 +306,29 @@ pub async fn run_bridge() -> Result<(), String> {
 
     let listen_addr = config.listen.clone();
     let base_url_for_log = config.base_url.clone();
+    // Build the runtime client exactly once. Construction can panic
+    // (e.g. TCP daemon URL with no resolvable bearer token), and we want
+    // that panic to abort the bridge process at startup rather than silently
+    // killing the spawned worker task on the first tick. Cloning is cheap:
+    // VoidBoxRuntimeClient holds an Arc<dyn HttpTransport> internally and
+    // hyper-util's connection pool persists across clones.
+    let client = VoidBoxRuntimeClient::new(config.base_url.clone(), 250);
     let shared = Arc::new(BridgeState {
         config: config.clone(),
-        client: VoidBoxRuntimeClient::new(config.base_url.clone(), 250),
+        client: client.clone(),
     });
 
-    // Worker tick: re-create the runtime client per pass so the connection
-    // pool can recycle if the daemon restarts.
+    // Worker tick: clone the shared client per pass — connection pool stays
+    // warm.
     let worker_config = config.clone();
+    let worker_client = client;
     tokio::spawn(async move {
         loop {
-            let runtime = VoidBoxRuntimeClient::new(worker_config.base_url.clone(), 250);
             if let Err(err) = process_pending_executions_once(
                 GlobalConfig {
                     max_concurrent_child_runs: 20,
                 },
-                runtime,
+                worker_client.clone(),
                 worker_config.execution_dir.clone(),
             )
             .await

@@ -21,7 +21,7 @@ use super::void_box::{build_transport, HttpResponse, HttpTransport};
 
 #[cfg(feature = "serde")]
 pub struct HttpSidecarAdapter {
-    transport: Box<dyn HttpTransport + Send + Sync>,
+    transport: std::sync::Arc<dyn HttpTransport + Send + Sync>,
 }
 
 #[cfg(feature = "serde")]
@@ -50,7 +50,9 @@ impl HttpSidecarAdapter {
         let transport = build_transport(&url).unwrap_or_else(|err| {
             panic!("HttpSidecarAdapter construction failed: {err}");
         });
-        Self { transport }
+        Self {
+            transport: transport.into(),
+        }
     }
 
     async fn request(
