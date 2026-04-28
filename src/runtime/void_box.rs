@@ -109,6 +109,24 @@ impl VoidBoxRuntimeClient {
         self.poll_interval_ms
     }
 
+    /// Generic HTTP passthrough to the daemon. Method, path-and-query, and
+    /// body are forwarded as-is; the daemon's response is returned unchanged.
+    /// The bridge uses this for routes (e.g. `/v1/runs`) that the typed
+    /// orchestration surface doesn't model and that the dashboard polls
+    /// directly.
+    ///
+    /// `Err` only fires for transport-level failures (network, malformed
+    /// response). Daemon-returned non-2xx statuses come back as `Ok` with
+    /// the corresponding `HttpResponse.status`.
+    pub async fn forward(
+        &self,
+        method: &str,
+        path_and_query: &str,
+        body: &str,
+    ) -> Result<HttpResponse, ContractError> {
+        self.transport.request(method, path_and_query, body).await
+    }
+
     #[cfg(feature = "serde")]
     pub fn delivery_run_ref(&self, handle: &str) -> Result<VoidBoxRunRef, ContractError> {
         Ok(VoidBoxRunRef {
@@ -699,9 +717,9 @@ pub(crate) fn build_transport(
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct HttpResponse {
-    pub(crate) status: u16,
-    pub(crate) body: String,
+pub struct HttpResponse {
+    pub status: u16,
+    pub body: String,
 }
 
 fn handle_from_run_id(run_id: &str) -> String {
@@ -1741,6 +1759,44 @@ mod tests {
             .expect("tcp request");
         assert_eq!(resp.status, 200);
         mock.assert_async().await;
+    }
+
+    #[test]
+    fn forward_relays_method_path_query_and_body() {
+        // The bridge's `/v1/runs` passthrough relies on `forward` preserving
+        // method, full path-and-query, and body. Spin a mock daemon, dispatch
+        // `GET /v1/runs?state=active`, and assert the mock saw exactly that.
+        use httpmock::prelude::*;
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        with_env(
+            &[
+                ("VOIDBOX_DAEMON_TOKEN_FILE", None),
+                ("VOIDBOX_DAEMON_TOKEN", Some("test-token")),
+            ],
+            || {
+                rt.block_on(async {
+                    let server = MockServer::start_async().await;
+                    let mock = server
+                        .mock_async(|when, then| {
+                            when.method(GET)
+                                .path("/v1/runs")
+                                .query_param("state", "active");
+                            then.status(200).body(r#"{"runs":[{"id":"r-1"}]}"#);
+                        })
+                        .await;
+
+                    let c = VoidBoxRuntimeClient::new(server.base_url(), 250);
+                    let resp = c
+                        .forward("GET", "/v1/runs?state=active", "")
+                        .await
+                        .expect("forward");
+                    assert_eq!(resp.status, 200);
+                    assert!(resp.body.contains("r-1"));
+                    mock.assert_async().await;
+                });
+            },
+        );
     }
 
     #[test]

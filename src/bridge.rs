@@ -14,7 +14,7 @@ use axum::http::{header, HeaderValue, StatusCode};
 #[cfg(feature = "serde")]
 use axum::response::IntoResponse;
 #[cfg(feature = "serde")]
-use axum::routing::{get, patch, post};
+use axum::routing::{any, get, patch, post};
 #[cfg(feature = "serde")]
 use axum::Router;
 #[cfg(feature = "serde")]
@@ -459,9 +459,58 @@ fn build_router(shared: Arc<BridgeState>) -> Router {
             post(route_execution_cancel),
         )
         .route("/v1/launch", post(route_launch))
+        // Daemon-level run inventory (`/v1/runs`, `/v1/runs/{id}/...`) is not
+        // part of the bridge's typed orchestration surface but is polled by
+        // the dashboard. Forward method, path-and-query, and body unchanged.
+        .route("/v1/runs", any(route_runs_passthrough))
+        .route("/v1/runs/{*rest}", any(route_runs_passthrough))
         .fallback(route_not_found)
         .layer(cors)
         .with_state(shared)
+}
+
+/// Generic passthrough for `/v1/runs[/...]` to the void-box daemon. The
+/// dashboard polls daemon-level run state directly; the bridge forwards
+/// method, path-and-query, and body unchanged and returns the daemon's
+/// response (status + body) unmodified.
+#[cfg(feature = "serde")]
+async fn route_runs_passthrough(
+    axum::extract::State(shared): axum::extract::State<Arc<BridgeState>>,
+    method: axum::http::Method,
+    axum::extract::OriginalUri(uri): axum::extract::OriginalUri,
+    body: String,
+) -> axum::response::Response {
+    let path_and_query = uri
+        .path_and_query()
+        .map(|pq| pq.as_str())
+        .unwrap_or_else(|| uri.path());
+    match shared
+        .client
+        .forward(method.as_str(), path_and_query, &body)
+        .await
+    {
+        Ok(resp) => {
+            let status =
+                StatusCode::from_u16(resp.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            (
+                status,
+                [(
+                    header::CONTENT_TYPE,
+                    HeaderValue::from_static("application/json"),
+                )],
+                resp.body,
+            )
+                .into_response()
+        }
+        Err(err) => into_axum(json_response(
+            502,
+            &ApiError {
+                code: "DAEMON_UNREACHABLE",
+                message: err.message.clone(),
+                retryable: err.retryable,
+            },
+        )),
+    }
 }
 
 /// Fallback handler for unknown routes. Mirrors the JSON shape the prior
