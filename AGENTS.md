@@ -26,11 +26,13 @@ runtime transport concerns should stay separate.
 `voidctl serve` runs on a single-threaded `current_thread` tokio runtime
 (`#[tokio::main(flavor = "current_thread")]` in `src/bin/voidctl.rs`). The
 bridge HTTP server (`axum`) and the worker tick (`process_pending_executions_once`)
-share the same runtime via a `tokio::task::LocalSet` so neither needs to be
-`Send`. `ExecutionRuntime` and `MessageDeliveryAdapter` are `?Send` async
-traits because the orchestration types they parameterize hold non-`Send`
-adapters (`Box<dyn ProviderLaunchAdapter>`, plus test mocks that use
-`Rc<RefCell<…>>`).
+both run as `tokio::spawn` tasks on that runtime.
+
+All async traits in the orchestration and runtime layers
+(`ExecutionRuntime`, `MessageDeliveryAdapter`, `HttpTransport`,
+`ProviderLaunchAdapter`) are bounded `Send + Sync`. Trait objects
+(`Box<dyn ProviderLaunchAdapter>`, etc.) are `Send + Sync` by way of the
+trait's supertrait. Test mocks use `Arc<Mutex<…>>` for shared recorders.
 
 Revisit the runtime flavor when:
 
@@ -38,7 +40,11 @@ Revisit the runtime flavor when:
   connections), or
 - bridge throughput becomes a measurable bottleneck.
 
-Until then, `current_thread` is simpler to reason about and uses less memory.
+Both are workload-driven decisions. Because the type-system bounds are
+already `Send + Sync`, flipping to `rt-multi-thread` is a one-line macro
+change in `voidctl::main` rather than a trait-bound refactor across the
+crate. Until then, `current_thread` is simpler to reason about and uses
+less memory.
 
 ## Repository layout
 
