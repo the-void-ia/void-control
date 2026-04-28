@@ -5,12 +5,12 @@ fn main() {
 }
 
 /// Multi-threaded tokio runtime. The conventional default for HTTP services
-/// in Rust, and the one all our async traits (`ExecutionRuntime`,
+/// in Rust, and the one all async traits in this crate (`ExecutionRuntime`,
 /// `MessageDeliveryAdapter`, `HttpTransport`, `ProviderLaunchAdapter`)
-/// already support natively via their `Send + Sync` bounds.
+/// support via their `Send + Sync` bounds.
 ///
-/// `current_thread` remains available via `#[tokio::main(flavor = "current_thread")]`
-/// for any future workload that prefers it.
+/// `current_thread` is also supported via
+/// `#[tokio::main(flavor = "current_thread")]` for workloads that prefer it.
 #[cfg(feature = "serde")]
 #[tokio::main]
 async fn main() {
@@ -21,9 +21,10 @@ async fn main() {
 }
 
 // Module-scope imports for the bridge HTTP client used by `bridge_request`
-// and `build_bridge_client`. The big `run()` body keeps its own scoped
-// imports (rustyline / serde / void_control) by long-standing pattern; the
-// hyper-util stack moves up here because it spans multiple file-scope fns.
+// and `build_bridge_client`. The hyper-util stack is declared here because
+// it's referenced from multiple file-scope functions; the imports inside
+// `run()` (rustyline, serde, void_control) are local to that body and stay
+// scoped there.
 #[cfg(feature = "serde")]
 use bytes::Bytes;
 #[cfg(feature = "serde")]
