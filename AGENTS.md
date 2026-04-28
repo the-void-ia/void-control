@@ -35,9 +35,9 @@ All async traits in the orchestration and runtime layers
 (`Box<dyn ProviderLaunchAdapter>`, etc.) are `Send + Sync` by way of the
 trait's supertrait. Test mocks use `Arc<Mutex<…>>` for shared recorders.
 
-`current_thread` remains available via
+The trait surface also supports `current_thread` via
 `#[tokio::main(flavor = "current_thread")]` for any future workload that
-prefers it; the trait surface supports both flavors.
+prefers it.
 
 ## Repository layout
 
