@@ -1734,35 +1734,55 @@ mod tests {
         mock.assert_async().await;
     }
 
-    #[tokio::test]
-    async fn tcp_transport_routes_through_httpmock_end_to_end() {
-        // End-to-end check that the new hyper-util TCP transport dispatches
-        // correctly against a regular HTTP server. This test also covers
-        // AC#7-new (an httpmock test exercises the async TCP path).
+    #[test]
+    fn tcp_transport_routes_through_httpmock_end_to_end() {
+        // End-to-end check that the hyper-util TCP transport dispatches
+        // correctly against a regular HTTP server, going through the full
+        // `VoidBoxRuntimeClient::new` construction path (which resolves a
+        // bearer token from the env / token-file chain).
+        //
+        // Sync `#[test]` + `with_env` + `Runtime::block_on` rather than
+        // `#[tokio::test]`: the env-mutation lock that `with_env` holds is a
+        // `std::sync::Mutex`, and holding it across an `.await` would be a
+        // multi-thread runtime hazard. The block_on lives in test code only.
         use httpmock::prelude::*;
 
-        let server = MockServer::start_async().await;
-        let mock = server
-            .mock_async(|when, then| {
-                when.method(POST)
-                    .path("/v1/runs")
-                    .header("content-type", "application/json")
-                    .json_body(serde_json::json!({"file":"fixtures/sample.vbrun","input":null}));
-                then.status(200).body(r#"{"run_id":"run-async-1"}"#);
-            })
-            .await;
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        with_env(
+            &[
+                ("VOIDBOX_DAEMON_TOKEN_FILE", None),
+                ("VOIDBOX_DAEMON_TOKEN", Some("test-token")),
+            ],
+            || {
+                rt.block_on(async {
+                    let server = MockServer::start_async().await;
+                    let mock = server
+                        .mock_async(|when, then| {
+                            when.method(POST)
+                                .path("/v1/runs")
+                                .header("content-type", "application/json")
+                                .json_body(serde_json::json!({
+                                    "file": "fixtures/sample.vbrun",
+                                    "input": null,
+                                }));
+                            then.status(200).body(r#"{"run_id":"run-async-1"}"#);
+                        })
+                        .await;
 
-        let c = VoidBoxRuntimeClient::new(server.base_url(), 250);
-        let started = c
-            .start(StartRequest {
-                run_id: "controller-run-1".to_string(),
-                workflow_spec: "fixtures/sample.vbrun".to_string(),
-                launch_context: None,
-                policy: policy(),
-            })
-            .await
-            .expect("start");
-        assert_eq!(started.handle, "vb:run-async-1");
-        mock.assert_async().await;
+                    let c = VoidBoxRuntimeClient::new(server.base_url(), 250);
+                    let started = c
+                        .start(StartRequest {
+                            run_id: "controller-run-1".to_string(),
+                            workflow_spec: "fixtures/sample.vbrun".to_string(),
+                            launch_context: None,
+                            policy: policy(),
+                        })
+                        .await
+                        .expect("start");
+                    assert_eq!(started.handle, "vb:run-async-1");
+                    mock.assert_async().await;
+                });
+            },
+        );
     }
 }
