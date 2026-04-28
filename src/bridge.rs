@@ -396,17 +396,20 @@ async fn shutdown_signal() {
 
 /// Build the axum `Router` for the 22 bridge routes.
 ///
-/// All routes are CORS-permissive (`*` origin, `GET,POST,PATCH,OPTIONS`,
-/// `Content-Type` header) because the operator UI runs on a different origin
-/// (Vite dev server, deployed dashboard). The OPTIONS preflight is served by
-/// the generic CORS layer rather than per-route handlers.
+/// CORS surface: `*` origin, `GET,POST,PATCH` methods, `Content-Type` header
+/// only. The operator UI runs on a different origin (Vite dev server,
+/// deployed dashboard); the allow-list is the minimum needed to serve it.
+/// The `OPTIONS` preflight is satisfied by the generic CORS layer.
 #[cfg(feature = "serde")]
 fn build_router(shared: Arc<BridgeState>) -> Router {
-    // CORS surface: `*` origin, `GET,POST,PATCH,OPTIONS`, only
-    // `Content-Type` allowed in headers. The operator UI runs on a
-    // different origin (Vite dev server, deployed dashboard), so CORS is
-    // permissive by design.
-    let cors = CorsLayer::permissive();
+    let cors = CorsLayer::new()
+        .allow_origin(tower_http::cors::Any)
+        .allow_methods([
+            axum::http::Method::GET,
+            axum::http::Method::POST,
+            axum::http::Method::PATCH,
+        ])
+        .allow_headers([axum::http::header::CONTENT_TYPE]);
 
     Router::new()
         .route("/v1/health", get(route_health))
@@ -456,8 +459,27 @@ fn build_router(shared: Arc<BridgeState>) -> Router {
             post(route_execution_cancel),
         )
         .route("/v1/launch", post(route_launch))
+        .fallback(route_not_found)
         .layer(cors)
         .with_state(shared)
+}
+
+/// Fallback handler for unknown routes. Mirrors the JSON shape the prior
+/// hand-rolled dispatcher returned for unmatched paths so clients that
+/// parsed the `code` / `message` / `retryable` fields keep working.
+#[cfg(feature = "serde")]
+async fn route_not_found(
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+) -> axum::response::Response {
+    into_axum(json_response(
+        404,
+        &ApiError {
+            code: "NOT_FOUND",
+            message: format!("no route for {} {}", method, uri.path()),
+            retryable: false,
+        },
+    ))
 }
 
 /// Shared state passed to each axum handler.
@@ -1677,7 +1699,7 @@ fn handle_execution_policy_patch(
 }
 
 #[cfg(feature = "serde")]
-async fn process_pending_executions_once<R: ExecutionRuntime + Sync>(
+async fn process_pending_executions_once<R: ExecutionRuntime>(
     global: GlobalConfig,
     runtime: R,
     execution_dir: PathBuf,
@@ -1800,7 +1822,7 @@ async fn process_pending_executions_once<R: ExecutionRuntime + Sync>(
 }
 
 #[cfg(feature = "serde")]
-pub async fn process_pending_executions_once_for_test<R: ExecutionRuntime + Sync>(
+pub async fn process_pending_executions_once_for_test<R: ExecutionRuntime>(
     global: GlobalConfig,
     runtime: R,
     execution_dir: PathBuf,
@@ -2347,4 +2369,31 @@ async fn route_launch(
     body: String,
 ) -> axum::response::Response {
     into_axum(handle_launch(&body, &shared.config, Some(&shared.client)).await)
+}
+
+#[cfg(all(test, feature = "serde"))]
+mod tests {
+    use super::*;
+    use axum::body::to_bytes;
+    use axum::http::{Method, StatusCode, Uri};
+
+    #[tokio::test]
+    async fn fallback_returns_json_not_found() {
+        let resp = route_not_found(Method::GET, Uri::from_static("/v1/nonexistent")).await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            resp.headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .unwrap(),
+            "application/json",
+        );
+        let body = to_bytes(resp.into_body(), 1024).await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["code"], "NOT_FOUND");
+        assert_eq!(parsed["retryable"], false);
+        assert!(parsed["message"]
+            .as_str()
+            .unwrap()
+            .contains("/v1/nonexistent"));
+    }
 }
