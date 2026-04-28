@@ -18,11 +18,15 @@ The first supported surface is:
 - `client.batchRuns`
 - `client.yolo`
 - `client.yoloRuns`
+- `client.sandboxes`
+- `client.snapshots`
+- `client.pools`
 
 Examples under `examples/` are bridge examples against `void-control`:
 
 - `templateExecute.mjs`
 - `batchRun.mjs`
+- `sandboxCreate.mjs`
 
 `batch` is the canonical remote-background execution API. `yolo` is an alias
 for the same high-level surface.

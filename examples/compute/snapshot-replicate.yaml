@@ -1,0 +1,4 @@
+mode: copy
+targets:
+  - node-a
+  - node-c

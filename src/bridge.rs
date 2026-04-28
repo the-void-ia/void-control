@@ -27,7 +27,11 @@ use crate::orchestration::{
     WorkflowTemplateRef,
 };
 #[cfg(feature = "serde")]
-use crate::runtime::{MockRuntime, VoidBoxRuntimeClient};
+use crate::runtime::{
+    MockRuntime, SandboxExecResult, SandboxRecord, SandboxState, VoidBoxRuntimeClient,
+};
+#[cfg(feature = "serde")]
+use crate::sandbox;
 #[cfg(feature = "serde")]
 use crate::team;
 #[cfg(feature = "serde")]
@@ -216,6 +220,66 @@ struct LaunchResponse {
 #[derive(Debug, Deserialize)]
 struct TemplateRequestBody {
     inputs: Value,
+}
+
+#[cfg(feature = "serde")]
+#[derive(Debug, Deserialize)]
+struct SandboxExecRequestBody {
+    kind: String,
+    command: Option<Vec<String>>,
+    runtime: Option<String>,
+    code: Option<String>,
+}
+
+#[cfg(feature = "serde")]
+#[derive(Debug, Serialize, Deserialize)]
+struct StoredSandboxRecord {
+    sandbox: SandboxRecord,
+    spec: sandbox::SandboxSpec,
+}
+
+#[cfg(feature = "serde")]
+#[derive(Debug, Deserialize)]
+struct SnapshotReplicateRequestBody {
+    mode: String,
+    targets: Vec<String>,
+}
+
+#[cfg(feature = "serde")]
+#[derive(Debug, Serialize, Deserialize)]
+struct SnapshotRecordView {
+    snapshot_id: String,
+    source_sandbox_id: String,
+    distribution: Option<sandbox::SnapshotDistribution>,
+}
+
+#[cfg(feature = "serde")]
+#[derive(Debug, Serialize, Deserialize)]
+struct StoredSnapshotRecord {
+    snapshot: SnapshotRecordView,
+    spec: sandbox::SnapshotSpec,
+}
+
+#[cfg(feature = "serde")]
+#[derive(Debug, Deserialize)]
+struct PoolScaleRequestBody {
+    warm: u32,
+    max: u32,
+}
+
+#[cfg(feature = "serde")]
+#[derive(Debug, Serialize, Deserialize)]
+struct PoolRecordView {
+    pool_id: String,
+    sandbox_spec: sandbox::SandboxPoolSandboxSpec,
+    capacity: sandbox::PoolCapacity,
+}
+
+#[cfg(feature = "serde")]
+#[derive(Debug, Serialize, Deserialize)]
+struct StoredPoolRecord {
+    pool: PoolRecordView,
+    spec: sandbox::SandboxPoolSpec,
 }
 
 #[cfg(feature = "serde")]
@@ -408,6 +472,26 @@ struct JsonHttpResponse {
 }
 
 #[cfg(feature = "serde")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BridgeMethod {
+    Get,
+    Post,
+    Patch,
+    Delete,
+}
+
+#[cfg(feature = "serde")]
+fn parse_bridge_method(method: &str) -> Option<BridgeMethod> {
+    match method {
+        "GET" => Some(BridgeMethod::Get),
+        "POST" => Some(BridgeMethod::Post),
+        "PATCH" => Some(BridgeMethod::Patch),
+        "DELETE" => Some(BridgeMethod::Delete),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "serde")]
 fn handle_bridge_request(
     method: &str,
     path: &str,
@@ -415,47 +499,120 @@ fn handle_bridge_request(
     config: &BridgeConfig,
     client: Option<&VoidBoxRuntimeClient>,
 ) -> JsonHttpResponse {
-    if method == "GET" && path == "/v1/health" {
+    let raw_method = method;
+    let method = parse_bridge_method(method);
+
+    if method == Some(BridgeMethod::Get) && path == "/v1/health" {
         return json_response(200, &json!({"status":"ok","service":"voidctl-bridge"}));
     }
 
-    if method == "POST" && path == "/v1/executions/dry-run" {
+    if method == Some(BridgeMethod::Post) && path == "/v1/executions/dry-run" {
         return handle_execution_dry_run(body);
     }
 
-    if method == "POST" && (path == "/v1/batch/dry-run" || path == "/v1/yolo/dry-run") {
+    if method == Some(BridgeMethod::Post) && path == "/v1/sandboxes" {
+        return handle_sandbox_create(body, config);
+    }
+
+    if method == Some(BridgeMethod::Get) && path == "/v1/sandboxes" {
+        return handle_sandbox_list(config);
+    }
+
+    if method == Some(BridgeMethod::Post)
+        && path.starts_with("/v1/sandboxes/")
+        && path.ends_with("/exec")
+    {
+        return handle_sandbox_exec(path, body, config);
+    }
+
+    if method == Some(BridgeMethod::Post)
+        && path.starts_with("/v1/sandboxes/")
+        && path.ends_with("/stop")
+    {
+        return handle_sandbox_stop(path, config);
+    }
+
+    if method == Some(BridgeMethod::Get) && path.starts_with("/v1/sandboxes/") {
+        return handle_sandbox_get(path, config);
+    }
+
+    if method == Some(BridgeMethod::Delete) && path.starts_with("/v1/sandboxes/") {
+        return handle_sandbox_delete(path, config);
+    }
+
+    if method == Some(BridgeMethod::Post) && path == "/v1/snapshots" {
+        return handle_snapshot_create(body, config);
+    }
+
+    if method == Some(BridgeMethod::Get) && path == "/v1/snapshots" {
+        return handle_snapshot_list(config);
+    }
+
+    if method == Some(BridgeMethod::Post)
+        && path.starts_with("/v1/snapshots/")
+        && path.ends_with("/replicate")
+    {
+        return handle_snapshot_replicate(path, body, config);
+    }
+
+    if method == Some(BridgeMethod::Get) && path.starts_with("/v1/snapshots/") {
+        return handle_snapshot_get(path, config);
+    }
+
+    if method == Some(BridgeMethod::Delete) && path.starts_with("/v1/snapshots/") {
+        return handle_snapshot_delete(path, config);
+    }
+
+    if method == Some(BridgeMethod::Post) && path == "/v1/pools" {
+        return handle_pool_create(body, config);
+    }
+
+    if method == Some(BridgeMethod::Post)
+        && path.starts_with("/v1/pools/")
+        && path.ends_with("/scale")
+    {
+        return handle_pool_scale(path, body, config);
+    }
+
+    if method == Some(BridgeMethod::Get) && path.starts_with("/v1/pools/") {
+        return handle_pool_get(path, config);
+    }
+
+    if method == Some(BridgeMethod::Post)
+        && (path == "/v1/batch/dry-run" || path == "/v1/yolo/dry-run")
+    {
         return handle_batch_dry_run(body);
     }
 
-    if method == "POST" && path == "/v1/teams/dry-run" {
+    if method == Some(BridgeMethod::Post) && path == "/v1/teams/dry-run" {
         return handle_team_dry_run(body);
     }
 
-    if method == "POST" && path == "/v1/teams/run" {
+    if method == Some(BridgeMethod::Post) && path == "/v1/teams/run" {
         return handle_team_run(body, config);
     }
 
-    if method == "GET" && path.starts_with("/v1/team-runs/") {
+    if method == Some(BridgeMethod::Get) && path.starts_with("/v1/team-runs/") {
         return handle_team_get(path, config);
     }
 
-    if method == "POST" && (path == "/v1/batch/run" || path == "/v1/yolo/run") {
+    if method == Some(BridgeMethod::Post) && (path == "/v1/batch/run" || path == "/v1/yolo/run") {
         return handle_batch_run(body, config);
     }
 
-    if method == "GET" && path.starts_with("/v1/batch-runs/") {
+    if method == Some(BridgeMethod::Get) && path.starts_with("/v1/batch-runs/") {
         return handle_batch_get(path, config);
     }
 
-    if method == "GET" && path.starts_with("/v1/yolo-runs/") {
+    if method == Some(BridgeMethod::Get) && path.starts_with("/v1/yolo-runs/") {
         return handle_batch_get(path, config);
     }
 
-    if method == "GET" && path == "/v1/templates" {
+    if method == Some(BridgeMethod::Get) && path == "/v1/templates" {
         return handle_template_list();
     }
 
-    if method == "GET"
+    if method == Some(BridgeMethod::Get)
         && path.starts_with("/v1/templates/")
         && !path.ends_with("/dry-run")
         && !path.ends_with("/execute")
@@ -463,47 +620,68 @@ fn handle_bridge_request(
         return handle_template_get(path);
     }
 
-    if method == "POST" && path.starts_with("/v1/templates/") && path.ends_with("/dry-run") {
+    if method == Some(BridgeMethod::Post)
+        && path.starts_with("/v1/templates/")
+        && path.ends_with("/dry-run")
+    {
         return handle_template_dry_run(path, body);
     }
 
-    if method == "POST" && path.starts_with("/v1/templates/") && path.ends_with("/execute") {
+    if method == Some(BridgeMethod::Post)
+        && path.starts_with("/v1/templates/")
+        && path.ends_with("/execute")
+    {
         return handle_template_execute(path, body, config);
     }
 
-    if method == "POST" && path == "/v1/executions" {
+    if method == Some(BridgeMethod::Post) && path == "/v1/executions" {
         return handle_execution_create(body, config, client.is_some());
     }
 
-    if method == "GET" && path == "/v1/executions" {
+    if method == Some(BridgeMethod::Get) && path == "/v1/executions" {
         return handle_execution_list(config);
     }
 
-    if method == "GET" && path.starts_with("/v1/executions/") && path.ends_with("/events") {
+    if method == Some(BridgeMethod::Get)
+        && path.starts_with("/v1/executions/")
+        && path.ends_with("/events")
+    {
         return handle_execution_events(path, config);
     }
 
-    if method == "GET" && path.starts_with("/v1/executions/") {
+    if method == Some(BridgeMethod::Get) && path.starts_with("/v1/executions/") {
         return handle_execution_get(path, config);
     }
 
-    if method == "PATCH" && path.starts_with("/v1/executions/") && path.ends_with("/policy") {
+    if method == Some(BridgeMethod::Patch)
+        && path.starts_with("/v1/executions/")
+        && path.ends_with("/policy")
+    {
         return handle_execution_policy_patch(path, body, config);
     }
 
-    if method == "POST" && path.starts_with("/v1/executions/") && path.ends_with("/pause") {
+    if method == Some(BridgeMethod::Post)
+        && path.starts_with("/v1/executions/")
+        && path.ends_with("/pause")
+    {
         return handle_execution_action(path, config, ExecutionAction::Pause);
     }
 
-    if method == "POST" && path.starts_with("/v1/executions/") && path.ends_with("/resume") {
+    if method == Some(BridgeMethod::Post)
+        && path.starts_with("/v1/executions/")
+        && path.ends_with("/resume")
+    {
         return handle_execution_action(path, config, ExecutionAction::Resume);
     }
 
-    if method == "POST" && path.starts_with("/v1/executions/") && path.ends_with("/cancel") {
+    if method == Some(BridgeMethod::Post)
+        && path.starts_with("/v1/executions/")
+        && path.ends_with("/cancel")
+    {
         return handle_execution_action(path, config, ExecutionAction::Cancel);
     }
 
-    if method == "POST" && path == "/v1/launch" {
+    if method == Some(BridgeMethod::Post) && path == "/v1/launch" {
         return handle_launch(body, config, client);
     }
 
@@ -511,7 +689,7 @@ fn handle_bridge_request(
         404,
         &ApiError {
             code: "NOT_FOUND",
-            message: format!("no route for {} {}", method, path),
+            message: format!("no route for {} {}", raw_method, path),
             retryable: false,
         },
     )
@@ -792,6 +970,678 @@ fn handle_batch_get(path: &str, config: &BridgeConfig) -> JsonHttpResponse {
 }
 
 #[cfg(feature = "serde")]
+fn handle_sandbox_create(body: &str, config: &BridgeConfig) -> JsonHttpResponse {
+    let spec = match parse_submitted_sandbox_spec(body) {
+        Ok(spec) => spec,
+        Err(response) => return response,
+    };
+    let sandbox_id = format!("sbx-{}", now_ms());
+    let record = StoredSandboxRecord {
+        sandbox: SandboxRecord {
+            sandbox_id: sandbox_id.clone(),
+            state: SandboxState::Running,
+            restore_from_snapshot: spec
+                .snapshot
+                .as_ref()
+                .and_then(|snapshot| snapshot.restore_from.clone()),
+        },
+        spec,
+    };
+    if let Err(err) = save_sandbox_record(config, &record) {
+        return json_response(
+            500,
+            &ApiError {
+                code: "INTERNAL_ERROR",
+                message: err.to_string(),
+                retryable: true,
+            },
+        );
+    }
+    json_response(
+        200,
+        &json!({
+            "kind": "sandbox",
+            "sandbox": record.sandbox
+        }),
+    )
+}
+
+#[cfg(feature = "serde")]
+fn handle_sandbox_list(config: &BridgeConfig) -> JsonHttpResponse {
+    match list_sandbox_records(config) {
+        Ok(records) => {
+            let mut sandboxes = Vec::new();
+            for record in records {
+                sandboxes.push(record.sandbox);
+            }
+            json_response(
+                200,
+                &json!({ "kind": "sandbox_list", "sandboxes": sandboxes }),
+            )
+        }
+        Err(err) => json_response(
+            500,
+            &ApiError {
+                code: "INTERNAL_ERROR",
+                message: err.to_string(),
+                retryable: true,
+            },
+        ),
+    }
+}
+
+#[cfg(feature = "serde")]
+fn handle_sandbox_get(path: &str, config: &BridgeConfig) -> JsonHttpResponse {
+    let Some(sandbox_id) = path.strip_prefix("/v1/sandboxes/") else {
+        return json_response(
+            404,
+            &ApiError {
+                code: "NOT_FOUND",
+                message: format!("no route for GET {path}"),
+                retryable: false,
+            },
+        );
+    };
+    if sandbox_id.contains('/') {
+        return json_response(
+            404,
+            &ApiError {
+                code: "NOT_FOUND",
+                message: format!("no route for GET {path}"),
+                retryable: false,
+            },
+        );
+    }
+    match load_sandbox_record(config, sandbox_id) {
+        Ok(record) => json_response(
+            200,
+            &json!({
+                "kind": "sandbox",
+                "sandbox": record.sandbox
+            }),
+        ),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => json_response(
+            404,
+            &ApiError {
+                code: "NOT_FOUND",
+                message: format!("sandbox '{sandbox_id}' not found"),
+                retryable: false,
+            },
+        ),
+        Err(err) => json_response(
+            500,
+            &ApiError {
+                code: "INTERNAL_ERROR",
+                message: err.to_string(),
+                retryable: true,
+            },
+        ),
+    }
+}
+
+#[cfg(feature = "serde")]
+fn handle_sandbox_exec(path: &str, body: &str, config: &BridgeConfig) -> JsonHttpResponse {
+    let Some(sandbox_id) = path
+        .strip_prefix("/v1/sandboxes/")
+        .and_then(|rest| rest.strip_suffix("/exec"))
+    else {
+        return json_response(
+            404,
+            &ApiError {
+                code: "NOT_FOUND",
+                message: format!("no route for POST {path}"),
+                retryable: false,
+            },
+        );
+    };
+    let record = match load_sandbox_record(config, sandbox_id) {
+        Ok(record) => record,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return json_response(
+                404,
+                &ApiError {
+                    code: "NOT_FOUND",
+                    message: format!("sandbox '{sandbox_id}' not found"),
+                    retryable: false,
+                },
+            )
+        }
+        Err(err) => {
+            return json_response(
+                500,
+                &ApiError {
+                    code: "INTERNAL_ERROR",
+                    message: err.to_string(),
+                    retryable: true,
+                },
+            )
+        }
+    };
+    if record.sandbox.state != SandboxState::Running {
+        return json_response(
+            400,
+            &ApiError {
+                code: "INVALID_STATE",
+                message: format!("sandbox '{sandbox_id}' is not running"),
+                retryable: false,
+            },
+        );
+    }
+    let request = match parse_sandbox_exec_request(body) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    let result = match request.kind.as_str() {
+        "command" => SandboxExecResult {
+            exit_code: 0,
+            stdout: request.command.unwrap_or_default().join(" "),
+            stderr: String::new(),
+        },
+        "code" => SandboxExecResult {
+            exit_code: 0,
+            stdout: format!(
+                "{}: {}",
+                request.runtime.unwrap_or_else(|| "unknown".to_string()),
+                request.code.unwrap_or_default()
+            ),
+            stderr: String::new(),
+        },
+        _ => unreachable!("validated sandbox exec kind"),
+    };
+    json_response(
+        200,
+        &json!({
+            "kind": "sandbox_exec",
+            "sandbox_id": sandbox_id,
+            "result": result
+        }),
+    )
+}
+
+#[cfg(feature = "serde")]
+fn handle_sandbox_stop(path: &str, config: &BridgeConfig) -> JsonHttpResponse {
+    let Some(sandbox_id) = path
+        .strip_prefix("/v1/sandboxes/")
+        .and_then(|rest| rest.strip_suffix("/stop"))
+    else {
+        return json_response(
+            404,
+            &ApiError {
+                code: "NOT_FOUND",
+                message: format!("no route for POST {path}"),
+                retryable: false,
+            },
+        );
+    };
+    let mut record = match load_sandbox_record(config, sandbox_id) {
+        Ok(record) => record,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return json_response(
+                404,
+                &ApiError {
+                    code: "NOT_FOUND",
+                    message: format!("sandbox '{sandbox_id}' not found"),
+                    retryable: false,
+                },
+            )
+        }
+        Err(err) => {
+            return json_response(
+                500,
+                &ApiError {
+                    code: "INTERNAL_ERROR",
+                    message: err.to_string(),
+                    retryable: true,
+                },
+            )
+        }
+    };
+    record.sandbox.state = SandboxState::Stopped;
+    if let Err(err) = save_sandbox_record(config, &record) {
+        return json_response(
+            500,
+            &ApiError {
+                code: "INTERNAL_ERROR",
+                message: err.to_string(),
+                retryable: true,
+            },
+        );
+    }
+    json_response(
+        200,
+        &json!({
+            "kind": "sandbox",
+            "sandbox": record.sandbox
+        }),
+    )
+}
+
+#[cfg(feature = "serde")]
+fn handle_sandbox_delete(path: &str, config: &BridgeConfig) -> JsonHttpResponse {
+    let Some(sandbox_id) = path.strip_prefix("/v1/sandboxes/") else {
+        return json_response(
+            404,
+            &ApiError {
+                code: "NOT_FOUND",
+                message: format!("no route for DELETE {path}"),
+                retryable: false,
+            },
+        );
+    };
+    if sandbox_id.contains('/') {
+        return json_response(
+            404,
+            &ApiError {
+                code: "NOT_FOUND",
+                message: format!("no route for DELETE {path}"),
+                retryable: false,
+            },
+        );
+    }
+    let sandbox_path = sandbox_file_path(config, sandbox_id);
+    match fs::remove_file(&sandbox_path) {
+        Ok(()) => json_response(
+            200,
+            &json!({
+                "kind": "sandbox_deleted",
+                "sandbox_id": sandbox_id
+            }),
+        ),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => json_response(
+            404,
+            &ApiError {
+                code: "NOT_FOUND",
+                message: format!("sandbox '{sandbox_id}' not found"),
+                retryable: false,
+            },
+        ),
+        Err(err) => json_response(
+            500,
+            &ApiError {
+                code: "INTERNAL_ERROR",
+                message: err.to_string(),
+                retryable: true,
+            },
+        ),
+    }
+}
+
+#[cfg(feature = "serde")]
+fn handle_snapshot_create(body: &str, config: &BridgeConfig) -> JsonHttpResponse {
+    let spec = match parse_submitted_snapshot_spec(body) {
+        Ok(spec) => spec,
+        Err(response) => return response,
+    };
+    let snapshot_id = format!("snap-{}", now_ms());
+    let record = StoredSnapshotRecord {
+        snapshot: SnapshotRecordView {
+            snapshot_id: snapshot_id.clone(),
+            source_sandbox_id: spec.source.sandbox_id.clone(),
+            distribution: spec.distribution.clone(),
+        },
+        spec,
+    };
+    if let Err(err) = save_snapshot_record(config, &record) {
+        return json_response(
+            500,
+            &ApiError {
+                code: "INTERNAL_ERROR",
+                message: err.to_string(),
+                retryable: true,
+            },
+        );
+    }
+    json_response(
+        200,
+        &json!({
+            "kind": "snapshot",
+            "snapshot": record.snapshot
+        }),
+    )
+}
+
+#[cfg(feature = "serde")]
+fn handle_snapshot_list(config: &BridgeConfig) -> JsonHttpResponse {
+    match list_snapshot_records(config) {
+        Ok(records) => {
+            let mut snapshots = Vec::new();
+            for record in records {
+                snapshots.push(record.snapshot);
+            }
+            json_response(
+                200,
+                &json!({
+                    "kind": "snapshot_list",
+                    "snapshots": snapshots
+                }),
+            )
+        }
+        Err(err) => json_response(
+            500,
+            &ApiError {
+                code: "INTERNAL_ERROR",
+                message: err.to_string(),
+                retryable: true,
+            },
+        ),
+    }
+}
+
+#[cfg(feature = "serde")]
+fn handle_snapshot_get(path: &str, config: &BridgeConfig) -> JsonHttpResponse {
+    let Some(snapshot_id) = path.strip_prefix("/v1/snapshots/") else {
+        return json_response(
+            404,
+            &ApiError {
+                code: "NOT_FOUND",
+                message: format!("no route for GET {path}"),
+                retryable: false,
+            },
+        );
+    };
+    if snapshot_id.contains('/') {
+        return json_response(
+            404,
+            &ApiError {
+                code: "NOT_FOUND",
+                message: format!("no route for GET {path}"),
+                retryable: false,
+            },
+        );
+    }
+    match load_snapshot_record(config, snapshot_id) {
+        Ok(record) => json_response(
+            200,
+            &json!({
+                "kind": "snapshot",
+                "snapshot": record.snapshot
+            }),
+        ),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => json_response(
+            404,
+            &ApiError {
+                code: "NOT_FOUND",
+                message: format!("snapshot '{snapshot_id}' not found"),
+                retryable: false,
+            },
+        ),
+        Err(err) => json_response(
+            500,
+            &ApiError {
+                code: "INTERNAL_ERROR",
+                message: err.to_string(),
+                retryable: true,
+            },
+        ),
+    }
+}
+
+#[cfg(feature = "serde")]
+fn handle_snapshot_replicate(path: &str, body: &str, config: &BridgeConfig) -> JsonHttpResponse {
+    let Some(snapshot_id) = path
+        .strip_prefix("/v1/snapshots/")
+        .and_then(|rest| rest.strip_suffix("/replicate"))
+    else {
+        return json_response(
+            404,
+            &ApiError {
+                code: "NOT_FOUND",
+                message: format!("no route for POST {path}"),
+                retryable: false,
+            },
+        );
+    };
+    let mut record = match load_snapshot_record(config, snapshot_id) {
+        Ok(record) => record,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return json_response(
+                404,
+                &ApiError {
+                    code: "NOT_FOUND",
+                    message: format!("snapshot '{snapshot_id}' not found"),
+                    retryable: false,
+                },
+            )
+        }
+        Err(err) => {
+            return json_response(
+                500,
+                &ApiError {
+                    code: "INTERNAL_ERROR",
+                    message: err.to_string(),
+                    retryable: true,
+                },
+            )
+        }
+    };
+    let request = match parse_snapshot_replicate_request(body) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    record.snapshot.distribution = Some(sandbox::SnapshotDistribution {
+        mode: request.mode.clone(),
+        targets: request.targets.clone(),
+    });
+    record.spec.distribution = record.snapshot.distribution.clone();
+    if let Err(err) = save_snapshot_record(config, &record) {
+        return json_response(
+            500,
+            &ApiError {
+                code: "INTERNAL_ERROR",
+                message: err.to_string(),
+                retryable: true,
+            },
+        );
+    }
+    json_response(
+        200,
+        &json!({
+            "kind": "snapshot",
+            "snapshot": record.snapshot
+        }),
+    )
+}
+
+#[cfg(feature = "serde")]
+fn handle_snapshot_delete(path: &str, config: &BridgeConfig) -> JsonHttpResponse {
+    let Some(snapshot_id) = path.strip_prefix("/v1/snapshots/") else {
+        return json_response(
+            404,
+            &ApiError {
+                code: "NOT_FOUND",
+                message: format!("no route for DELETE {path}"),
+                retryable: false,
+            },
+        );
+    };
+    if snapshot_id.contains('/') {
+        return json_response(
+            404,
+            &ApiError {
+                code: "NOT_FOUND",
+                message: format!("no route for DELETE {path}"),
+                retryable: false,
+            },
+        );
+    }
+    let snapshot_path = snapshot_file_path(config, snapshot_id);
+    match fs::remove_file(&snapshot_path) {
+        Ok(()) => json_response(
+            200,
+            &json!({
+                "kind": "snapshot_deleted",
+                "snapshot_id": snapshot_id
+            }),
+        ),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => json_response(
+            404,
+            &ApiError {
+                code: "NOT_FOUND",
+                message: format!("snapshot '{snapshot_id}' not found"),
+                retryable: false,
+            },
+        ),
+        Err(err) => json_response(
+            500,
+            &ApiError {
+                code: "INTERNAL_ERROR",
+                message: err.to_string(),
+                retryable: true,
+            },
+        ),
+    }
+}
+
+#[cfg(feature = "serde")]
+fn handle_pool_create(body: &str, config: &BridgeConfig) -> JsonHttpResponse {
+    let spec = match parse_submitted_pool_spec(body) {
+        Ok(spec) => spec,
+        Err(response) => return response,
+    };
+    let pool_id = format!("pool-{}", now_ms());
+    let record = StoredPoolRecord {
+        pool: PoolRecordView {
+            pool_id: pool_id.clone(),
+            sandbox_spec: spec.sandbox_spec.clone(),
+            capacity: spec.capacity.clone(),
+        },
+        spec,
+    };
+    if let Err(err) = save_pool_record(config, &record) {
+        return json_response(
+            500,
+            &ApiError {
+                code: "INTERNAL_ERROR",
+                message: err.to_string(),
+                retryable: true,
+            },
+        );
+    }
+    json_response(
+        200,
+        &json!({
+            "kind": "pool",
+            "pool": record.pool
+        }),
+    )
+}
+
+#[cfg(feature = "serde")]
+fn handle_pool_get(path: &str, config: &BridgeConfig) -> JsonHttpResponse {
+    let Some(pool_id) = path.strip_prefix("/v1/pools/") else {
+        return json_response(
+            404,
+            &ApiError {
+                code: "NOT_FOUND",
+                message: format!("no route for GET {path}"),
+                retryable: false,
+            },
+        );
+    };
+    if pool_id.contains('/') {
+        return json_response(
+            404,
+            &ApiError {
+                code: "NOT_FOUND",
+                message: format!("no route for GET {path}"),
+                retryable: false,
+            },
+        );
+    }
+    match load_pool_record(config, pool_id) {
+        Ok(record) => json_response(
+            200,
+            &json!({
+                "kind": "pool",
+                "pool": record.pool
+            }),
+        ),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => json_response(
+            404,
+            &ApiError {
+                code: "NOT_FOUND",
+                message: format!("pool '{pool_id}' not found"),
+                retryable: false,
+            },
+        ),
+        Err(err) => json_response(
+            500,
+            &ApiError {
+                code: "INTERNAL_ERROR",
+                message: err.to_string(),
+                retryable: true,
+            },
+        ),
+    }
+}
+
+#[cfg(feature = "serde")]
+fn handle_pool_scale(path: &str, body: &str, config: &BridgeConfig) -> JsonHttpResponse {
+    let Some(pool_id) = path
+        .strip_prefix("/v1/pools/")
+        .and_then(|rest| rest.strip_suffix("/scale"))
+    else {
+        return json_response(
+            404,
+            &ApiError {
+                code: "NOT_FOUND",
+                message: format!("no route for POST {path}"),
+                retryable: false,
+            },
+        );
+    };
+    let request = match parse_pool_scale_request(body) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    let mut record = match load_pool_record(config, pool_id) {
+        Ok(record) => record,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return json_response(
+                404,
+                &ApiError {
+                    code: "NOT_FOUND",
+                    message: format!("pool '{pool_id}' not found"),
+                    retryable: false,
+                },
+            )
+        }
+        Err(err) => {
+            return json_response(
+                500,
+                &ApiError {
+                    code: "INTERNAL_ERROR",
+                    message: err.to_string(),
+                    retryable: true,
+                },
+            )
+        }
+    };
+    record.pool.capacity = sandbox::PoolCapacity {
+        warm: request.warm,
+        max: request.max,
+    };
+    record.spec.capacity = record.pool.capacity.clone();
+    if let Err(err) = save_pool_record(config, &record) {
+        return json_response(
+            500,
+            &ApiError {
+                code: "INTERNAL_ERROR",
+                message: err.to_string(),
+                retryable: true,
+            },
+        );
+    }
+    json_response(
+        200,
+        &json!({
+            "kind": "pool",
+            "pool": record.pool
+        }),
+    )
+}
+
+#[cfg(feature = "serde")]
 fn parse_submitted_batch_spec(body: &str) -> Result<batch::BatchSpec, JsonHttpResponse> {
     let trimmed = body.trim_start();
     let parsed = if trimmed.starts_with('{') || trimmed.starts_with('[') {
@@ -829,6 +1679,347 @@ fn parse_submitted_team_spec(body: &str) -> Result<team::TeamSpec, JsonHttpRespo
             },
         )
     })
+}
+
+#[cfg(feature = "serde")]
+fn parse_submitted_sandbox_spec(body: &str) -> Result<sandbox::SandboxSpec, JsonHttpResponse> {
+    let trimmed = body.trim_start();
+    let parsed = if trimmed.starts_with('{') || trimmed.starts_with('[') {
+        sandbox::parse_sandbox_json(body)
+    } else {
+        sandbox::parse_sandbox_yaml(body)
+    };
+    parsed.map_err(|err| {
+        json_response(
+            400,
+            &ApiError {
+                code: "INVALID_SANDBOX",
+                message: err.to_string(),
+                retryable: false,
+            },
+        )
+    })
+}
+
+#[cfg(feature = "serde")]
+fn parse_submitted_snapshot_spec(body: &str) -> Result<sandbox::SnapshotSpec, JsonHttpResponse> {
+    let trimmed = body.trim_start();
+    let parsed = if trimmed.starts_with('{') || trimmed.starts_with('[') {
+        sandbox::parse_snapshot_json(body)
+    } else {
+        sandbox::parse_snapshot_yaml(body)
+    };
+    parsed.map_err(|err| {
+        json_response(
+            400,
+            &ApiError {
+                code: "INVALID_SNAPSHOT",
+                message: err.to_string(),
+                retryable: false,
+            },
+        )
+    })
+}
+
+#[cfg(feature = "serde")]
+fn parse_submitted_pool_spec(body: &str) -> Result<sandbox::SandboxPoolSpec, JsonHttpResponse> {
+    let trimmed = body.trim_start();
+    let parsed = if trimmed.starts_with('{') || trimmed.starts_with('[') {
+        sandbox::parse_pool_json(body)
+    } else {
+        sandbox::parse_pool_yaml(body)
+    };
+    parsed.map_err(|err| {
+        json_response(
+            400,
+            &ApiError {
+                code: "INVALID_POOL",
+                message: err.to_string(),
+                retryable: false,
+            },
+        )
+    })
+}
+
+#[cfg(feature = "serde")]
+fn parse_sandbox_exec_request(body: &str) -> Result<SandboxExecRequestBody, JsonHttpResponse> {
+    let request: SandboxExecRequestBody = serde_json::from_str(body).or_else(|json_err| {
+        serde_yaml::from_str(body).map_err(|yaml_err| {
+            format!("invalid sandbox exec body: JSON parse error: {json_err}; YAML parse error: {yaml_err}")
+        })
+    })
+    .map_err(|err| {
+        json_response(
+            400,
+            &ApiError {
+                code: "INVALID_SANDBOX_EXEC",
+                message: err,
+                retryable: false,
+            },
+        )
+    })?;
+
+    match request.kind.as_str() {
+        "command" => {}
+        "code" => {}
+        _ => {
+            return Err(json_response(
+                400,
+                &ApiError {
+                    code: "INVALID_SANDBOX_EXEC",
+                    message: "kind must be 'command' or 'code'".to_string(),
+                    retryable: false,
+                },
+            ))
+        }
+    }
+    if request.kind == "command" && request.command.as_ref().is_none_or(Vec::is_empty) {
+        return Err(json_response(
+            400,
+            &ApiError {
+                code: "INVALID_SANDBOX_EXEC",
+                message: "command exec requires a non-empty command".to_string(),
+                retryable: false,
+            },
+        ));
+    }
+    if request.kind == "code" && request.code.as_deref().unwrap_or("").trim().is_empty() {
+        return Err(json_response(
+            400,
+            &ApiError {
+                code: "INVALID_SANDBOX_EXEC",
+                message: "code exec requires non-empty code".to_string(),
+                retryable: false,
+            },
+        ));
+    }
+    Ok(request)
+}
+
+#[cfg(feature = "serde")]
+fn parse_snapshot_replicate_request(
+    body: &str,
+) -> Result<SnapshotReplicateRequestBody, JsonHttpResponse> {
+    let request: SnapshotReplicateRequestBody = serde_json::from_str(body).or_else(|json_err| {
+        serde_yaml::from_str(body).map_err(|yaml_err| {
+            format!(
+                "invalid snapshot replicate body: JSON parse error: {json_err}; YAML parse error: {yaml_err}"
+            )
+        })
+    })
+    .map_err(|err| {
+        json_response(
+            400,
+            &ApiError {
+                code: "INVALID_SNAPSHOT_REPLICATION",
+                message: err,
+                retryable: false,
+            },
+        )
+    })?;
+
+    match request.mode.as_str() {
+        "cached" | "copy" => {}
+        _ => {
+            return Err(json_response(
+                400,
+                &ApiError {
+                    code: "INVALID_SNAPSHOT_REPLICATION",
+                    message: "mode must be one of cached, copy".to_string(),
+                    retryable: false,
+                },
+            ))
+        }
+    }
+    if request.targets.is_empty() {
+        return Err(json_response(
+            400,
+            &ApiError {
+                code: "INVALID_SNAPSHOT_REPLICATION",
+                message: "targets must not be empty".to_string(),
+                retryable: false,
+            },
+        ));
+    }
+    Ok(request)
+}
+
+#[cfg(feature = "serde")]
+fn parse_pool_scale_request(body: &str) -> Result<PoolScaleRequestBody, JsonHttpResponse> {
+    let request: PoolScaleRequestBody = serde_json::from_str(body).or_else(|json_err| {
+        serde_yaml::from_str(body).map_err(|yaml_err| {
+            format!(
+                "invalid pool scale body: JSON parse error: {json_err}; YAML parse error: {yaml_err}"
+            )
+        })
+    })
+    .map_err(|err| {
+        json_response(
+            400,
+            &ApiError {
+                code: "INVALID_POOL_SCALE",
+                message: err,
+                retryable: false,
+            },
+        )
+    })?;
+
+    if request.max == 0 {
+        return Err(json_response(
+            400,
+            &ApiError {
+                code: "INVALID_POOL_SCALE",
+                message: "max must be positive".to_string(),
+                retryable: false,
+            },
+        ));
+    }
+    if request.warm > request.max {
+        return Err(json_response(
+            400,
+            &ApiError {
+                code: "INVALID_POOL_SCALE",
+                message: "warm must not exceed max".to_string(),
+                retryable: false,
+            },
+        ));
+    }
+
+    Ok(request)
+}
+
+#[cfg(feature = "serde")]
+fn sandbox_dir(config: &BridgeConfig) -> PathBuf {
+    config.execution_dir.join("sandboxes")
+}
+
+#[cfg(feature = "serde")]
+fn sandbox_file_path(config: &BridgeConfig, sandbox_id: &str) -> PathBuf {
+    sandbox_dir(config).join(format!("{sandbox_id}.json"))
+}
+
+#[cfg(feature = "serde")]
+fn save_sandbox_record(config: &BridgeConfig, record: &StoredSandboxRecord) -> std::io::Result<()> {
+    let dir = sandbox_dir(config);
+    fs::create_dir_all(&dir)?;
+    let bytes =
+        serde_json::to_vec_pretty(record).map_err(|err| std::io::Error::other(err.to_string()))?;
+    fs::write(sandbox_file_path(config, &record.sandbox.sandbox_id), bytes)
+}
+
+#[cfg(feature = "serde")]
+fn load_sandbox_record(
+    config: &BridgeConfig,
+    sandbox_id: &str,
+) -> std::io::Result<StoredSandboxRecord> {
+    let path = sandbox_file_path(config, sandbox_id);
+    let bytes = fs::read(path)?;
+    serde_json::from_slice(&bytes).map_err(|err| std::io::Error::other(err.to_string()))
+}
+
+#[cfg(feature = "serde")]
+fn list_sandbox_records(config: &BridgeConfig) -> std::io::Result<Vec<StoredSandboxRecord>> {
+    let dir = sandbox_dir(config);
+    let mut records = Vec::new();
+    if !dir.exists() {
+        return Ok(records);
+    }
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
+        let bytes = fs::read(path)?;
+        let record: StoredSandboxRecord =
+            serde_json::from_slice(&bytes).map_err(|err| std::io::Error::other(err.to_string()))?;
+        records.push(record);
+    }
+    records.sort_by(|left, right| left.sandbox.sandbox_id.cmp(&right.sandbox.sandbox_id));
+    Ok(records)
+}
+
+#[cfg(feature = "serde")]
+fn snapshot_dir(config: &BridgeConfig) -> PathBuf {
+    config.execution_dir.join("snapshots")
+}
+
+#[cfg(feature = "serde")]
+fn snapshot_file_path(config: &BridgeConfig, snapshot_id: &str) -> PathBuf {
+    snapshot_dir(config).join(format!("{snapshot_id}.json"))
+}
+
+#[cfg(feature = "serde")]
+fn save_snapshot_record(
+    config: &BridgeConfig,
+    record: &StoredSnapshotRecord,
+) -> std::io::Result<()> {
+    let dir = snapshot_dir(config);
+    fs::create_dir_all(&dir)?;
+    let bytes =
+        serde_json::to_vec_pretty(record).map_err(|err| std::io::Error::other(err.to_string()))?;
+    fs::write(
+        snapshot_file_path(config, &record.snapshot.snapshot_id),
+        bytes,
+    )
+}
+
+#[cfg(feature = "serde")]
+fn load_snapshot_record(
+    config: &BridgeConfig,
+    snapshot_id: &str,
+) -> std::io::Result<StoredSnapshotRecord> {
+    let path = snapshot_file_path(config, snapshot_id);
+    let bytes = fs::read(path)?;
+    serde_json::from_slice(&bytes).map_err(|err| std::io::Error::other(err.to_string()))
+}
+
+#[cfg(feature = "serde")]
+fn list_snapshot_records(config: &BridgeConfig) -> std::io::Result<Vec<StoredSnapshotRecord>> {
+    let dir = snapshot_dir(config);
+    let mut records = Vec::new();
+    if !dir.exists() {
+        return Ok(records);
+    }
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
+        let bytes = fs::read(path)?;
+        let record: StoredSnapshotRecord =
+            serde_json::from_slice(&bytes).map_err(|err| std::io::Error::other(err.to_string()))?;
+        records.push(record);
+    }
+    records.sort_by(|left, right| left.snapshot.snapshot_id.cmp(&right.snapshot.snapshot_id));
+    Ok(records)
+}
+
+#[cfg(feature = "serde")]
+fn pool_dir(config: &BridgeConfig) -> PathBuf {
+    config.execution_dir.join("pools")
+}
+
+#[cfg(feature = "serde")]
+fn pool_file_path(config: &BridgeConfig, pool_id: &str) -> PathBuf {
+    pool_dir(config).join(format!("{pool_id}.json"))
+}
+
+#[cfg(feature = "serde")]
+fn save_pool_record(config: &BridgeConfig, record: &StoredPoolRecord) -> std::io::Result<()> {
+    let dir = pool_dir(config);
+    fs::create_dir_all(&dir)?;
+    let bytes =
+        serde_json::to_vec_pretty(record).map_err(|err| std::io::Error::other(err.to_string()))?;
+    fs::write(pool_file_path(config, &record.pool.pool_id), bytes)
+}
+
+#[cfg(feature = "serde")]
+fn load_pool_record(config: &BridgeConfig, pool_id: &str) -> std::io::Result<StoredPoolRecord> {
+    let path = pool_file_path(config, pool_id);
+    let bytes = fs::read(path)?;
+    serde_json::from_slice(&bytes).map_err(|err| std::io::Error::other(err.to_string()))
 }
 
 #[cfg(feature = "serde")]
@@ -1677,6 +2868,20 @@ fn process_pending_executions_once<R: ExecutionRuntime>(
         );
     }
     Ok(())
+}
+
+#[cfg(all(test, feature = "serde"))]
+mod tests {
+    use super::{parse_bridge_method, BridgeMethod};
+
+    #[test]
+    fn parse_bridge_method_normalizes_supported_methods() {
+        assert_eq!(parse_bridge_method("GET"), Some(BridgeMethod::Get));
+        assert_eq!(parse_bridge_method("POST"), Some(BridgeMethod::Post));
+        assert_eq!(parse_bridge_method("PATCH"), Some(BridgeMethod::Patch));
+        assert_eq!(parse_bridge_method("DELETE"), Some(BridgeMethod::Delete));
+        assert_eq!(parse_bridge_method("TRACE"), None);
+    }
 }
 
 #[cfg(feature = "serde")]

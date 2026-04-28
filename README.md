@@ -374,6 +374,133 @@ Interactive console:
 /team run examples/team/rust_article_team.yaml
 ```
 
+### Sandbox
+
+`sandbox` is the new compute-oriented bridge surface for contract-first work on
+reusable environments, snapshots, and prewarm flows.
+
+Current limitation:
+- these routes are currently bridge-managed and mock-backed
+- the live `VoidBoxRuntimeClient` still returns unsupported for sandbox
+  lifecycle calls until the `void-box` daemon exposes matching routes
+
+HTTP:
+
+```bash
+curl -sS -X POST http://127.0.0.1:43210/v1/sandboxes \
+  -H 'Content-Type: text/yaml' \
+  --data-binary @examples/compute/sandbox-python.yaml
+
+curl -sS http://127.0.0.1:43210/v1/sandboxes
+
+curl -sS -X POST http://127.0.0.1:43210/v1/sandboxes/<sandbox-id>/exec \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "kind": "command",
+    "command": ["python3", "-V"]
+  }'
+
+curl -sS -X POST http://127.0.0.1:43210/v1/sandboxes/<sandbox-id>/stop \
+  -H 'Content-Type: application/json' \
+  -d '{}'
+
+curl -sS -X DELETE http://127.0.0.1:43210/v1/sandboxes/<sandbox-id>
+```
+
+SDKs:
+
+```python
+from void_control import VoidControlClient
+
+async with VoidControlClient(base_url="http://127.0.0.1:43210") as client:
+    sandbox = await client.sandboxes.create(
+        {
+            "api_version": "v1",
+            "kind": "sandbox",
+            "runtime": {
+                "image": "python:3.12-slim",
+                "cpus": 2,
+                "memory_mb": 2048,
+            },
+        }
+    )
+```
+
+```js
+import { VoidControlClient } from "./sdks/node/src/index.js";
+
+const client = new VoidControlClient({ baseUrl: "http://127.0.0.1:43210" });
+const sandbox = await client.sandboxes.create({
+  api_version: "v1",
+  kind: "sandbox",
+  runtime: {
+    image: "python:3.12-slim",
+    cpus: 2,
+    memory_mb: 2048
+  }
+});
+```
+
+```go
+client := voidcontrol.NewClient("http://127.0.0.1:43210")
+sandbox, err := client.Sandboxes.Create(map[string]any{
+    "api_version": "v1",
+    "kind": "sandbox",
+    "runtime": map[string]any{
+        "image": "python:3.12-slim",
+        "cpus": 2,
+        "memory_mb": 2048,
+    },
+})
+```
+
+### Snapshot
+
+`snapshot` is the bridge-managed resource for checkpoint creation metadata and
+distribution policy. In phase 1, replication updates the persisted control-plane
+record only; it does not copy artifacts across live `void-box` nodes yet.
+
+HTTP:
+
+```bash
+curl -sS -X POST http://127.0.0.1:43210/v1/snapshots \
+  -H 'Content-Type: text/yaml' \
+  --data-binary @examples/compute/snapshot-from-sandbox.yaml
+
+curl -sS http://127.0.0.1:43210/v1/snapshots
+
+curl -sS -X POST http://127.0.0.1:43210/v1/snapshots/<snapshot-id>/replicate \
+  -H 'Content-Type: text/yaml' \
+  --data-binary @examples/compute/snapshot-replicate.yaml
+
+curl -sS -X DELETE http://127.0.0.1:43210/v1/snapshots/<snapshot-id>
+```
+
+### Pool
+
+`pool` is a `void-control` control-plane abstraction over reusable sandbox
+shapes. It is where prewarm targets, warm capacity, and future lease policy
+belong.
+
+Current limitation:
+- pool routes are bridge-managed and mock-backed
+- they define desired warm capacity, but they do not yet drive a live
+  `void-box` daemon fleet
+
+HTTP:
+
+```bash
+curl -sS -X POST http://127.0.0.1:43210/v1/pools \
+  -H 'Content-Type: text/yaml' \
+  --data-binary @examples/compute/pool-python.yaml
+
+curl -sS http://127.0.0.1:43210/v1/pools/<pool-id>
+
+curl -sS -X POST http://127.0.0.1:43210/v1/pools/<pool-id>/scale \
+  -H 'Content-Type: text/yaml' \
+  --data-binary @examples/compute/pool-scale.yaml
+```
+
 ### 7) Run the supervision example
 
 Use the checked-in supervision example to exercise the flat
@@ -488,6 +615,48 @@ The interactive `voidctl` console exposes the same path:
 /template get single-agent-basic
 /template dry-run single-agent-basic template-inputs.json
 /template execute warm-agent-basic template-inputs.json
+```
+
+The contract-first compute surface is available from the same CLI. These routes
+are bridge-managed today, so they are good for contract work and mocks even
+before live `void-box` daemon support lands.
+
+Create and inspect reusable sandboxes:
+
+```bash
+voidctl sandbox create sandbox.json
+cat sandbox.json | voidctl sandbox create --stdin
+voidctl sandbox list
+voidctl sandbox get <sandbox-id>
+voidctl sandbox stop <sandbox-id>
+voidctl sandbox delete <sandbox-id>
+```
+
+Create and replicate snapshots:
+
+```bash
+voidctl snapshot create snapshot.json
+cat replicate.json | voidctl snapshot replicate <snapshot-id> --stdin
+voidctl snapshot list
+voidctl snapshot get <snapshot-id>
+voidctl snapshot delete <snapshot-id>
+```
+
+Manage pool warm-capacity targets in the control plane:
+
+```bash
+voidctl pool create pool.json
+voidctl pool get <pool-id>
+cat scale.json | voidctl pool scale <pool-id> --stdin
+```
+
+The interactive console exposes the same compute routes:
+
+```text
+/sandbox create sandbox.json
+/sandbox list
+/snapshot replicate <snapshot-id> replicate.json
+/pool scale <pool-id> scale.json
 ```
 
 Example execution:

@@ -6,6 +6,10 @@ use crate::contract::{
     StartRequest, StartResult, StopRequest, StopResult, SubscribeEventsRequest,
 };
 use crate::orchestration::{CandidateOutput, StructuredOutputResult};
+use crate::runtime::{
+    SandboxCreateRequest, SandboxExecKind, SandboxExecRequest, SandboxExecResult, SandboxRecord,
+    SandboxRuntime, SandboxState,
+};
 
 #[derive(Debug, Clone)]
 struct RunRecord {
@@ -68,6 +72,7 @@ impl RunRecord {
 pub struct MockRuntime {
     runs: Vec<RunRecord>,
     seeded: BTreeMap<String, SeededOutcome>,
+    sandboxes: BTreeMap<String, SandboxRecord>,
 }
 
 impl MockRuntime {
@@ -247,6 +252,105 @@ impl MockRuntime {
             }
             _ => StructuredOutputResult::Missing,
         }
+    }
+}
+
+impl SandboxRuntime for MockRuntime {
+    fn create_sandbox(
+        &mut self,
+        request: SandboxCreateRequest,
+    ) -> Result<SandboxRecord, ContractError> {
+        let record = SandboxRecord {
+            sandbox_id: request.sandbox_id,
+            state: SandboxState::Running,
+            #[cfg(feature = "serde")]
+            restore_from_snapshot: request
+                .spec
+                .snapshot
+                .and_then(|snapshot| snapshot.restore_from),
+            #[cfg(not(feature = "serde"))]
+            restore_from_snapshot: None,
+        };
+        self.sandboxes
+            .insert(record.sandbox_id.clone(), record.clone());
+        Ok(record)
+    }
+
+    fn inspect_sandbox(&self, sandbox_id: &str) -> Result<SandboxRecord, ContractError> {
+        let Some(record) = self.sandboxes.get(sandbox_id) else {
+            return Err(ContractError::new(
+                ContractErrorCode::NotFound,
+                format!("sandbox '{sandbox_id}' not found"),
+                false,
+            ));
+        };
+        Ok(record.clone())
+    }
+
+    fn list_sandboxes(&self) -> Result<Vec<SandboxRecord>, ContractError> {
+        let mut sandboxes = Vec::new();
+        for sandbox in self.sandboxes.values() {
+            sandboxes.push(sandbox.clone());
+        }
+        Ok(sandboxes)
+    }
+
+    fn exec_sandbox(
+        &mut self,
+        request: SandboxExecRequest,
+    ) -> Result<SandboxExecResult, ContractError> {
+        let Some(record) = self.sandboxes.get(&request.sandbox_id) else {
+            return Err(ContractError::new(
+                ContractErrorCode::NotFound,
+                format!("sandbox '{}' not found", request.sandbox_id),
+                false,
+            ));
+        };
+        if record.state != SandboxState::Running {
+            return Err(ContractError::new(
+                ContractErrorCode::InternalError,
+                format!("sandbox '{}' is not running", request.sandbox_id),
+                false,
+            ));
+        }
+
+        let stdout = match request.kind {
+            SandboxExecKind::Command => request.command.unwrap_or_default().join(" "),
+            SandboxExecKind::Code => {
+                let runtime = request.runtime.unwrap_or_else(|| "unknown".to_string());
+                let code = request.code.unwrap_or_default();
+                format!("{runtime}: {code}")
+            }
+        };
+
+        Ok(SandboxExecResult {
+            exit_code: 0,
+            stdout,
+            stderr: String::new(),
+        })
+    }
+
+    fn stop_sandbox(&mut self, sandbox_id: &str) -> Result<SandboxRecord, ContractError> {
+        let Some(record) = self.sandboxes.get_mut(sandbox_id) else {
+            return Err(ContractError::new(
+                ContractErrorCode::NotFound,
+                format!("sandbox '{sandbox_id}' not found"),
+                false,
+            ));
+        };
+        record.state = SandboxState::Stopped;
+        Ok(record.clone())
+    }
+
+    fn delete_sandbox(&mut self, sandbox_id: &str) -> Result<(), ContractError> {
+        let Some(_) = self.sandboxes.remove(sandbox_id) else {
+            return Err(ContractError::new(
+                ContractErrorCode::NotFound,
+                format!("sandbox '{sandbox_id}' not found"),
+                false,
+            ));
+        };
+        Ok(())
     }
 }
 

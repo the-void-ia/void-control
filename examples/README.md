@@ -3,6 +3,7 @@
 These examples are intentionally split across two layers:
 
 - `examples/*.yaml`: `void-control` execution specs
+- `examples/compute/*.yaml`: bridge-managed compute resource payloads
 - `examples/runtime-templates/*.yaml`: runtime workflow templates launched by `void-box`
 - `examples/runtime-assets/`: helper scripts and data mounted into runtime templates
 
@@ -31,6 +32,12 @@ Boundary:
   - plain runtime template used by the swarm example
 - `runtime-templates/transform_supervision_worker.yaml`
   - runtime template used by the supervision example
+- `compute/sandbox-python.yaml`
+  - checked-in bridge payload for a reusable Python sandbox
+- `compute/snapshot-from-sandbox.yaml`
+  - checked-in bridge payload for snapshot creation metadata
+- `compute/pool-python.yaml`
+  - checked-in bridge payload for a warm-capacity pool definition
 
 ## Transform Swarm Examples
 

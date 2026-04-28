@@ -18,11 +18,15 @@ The first supported surface is:
 - `client.batch_runs`
 - `client.yolo`
 - `client.yolo_runs`
+- `client.sandboxes`
+- `client.snapshots`
+- `client.pools`
 
 Examples under `examples/` are bridge examples against `void-control`:
 
 - `template_execute.py`
 - `batch_run.py`
+- `sandbox_create.py`
 
 `batch` is the canonical remote-background execution API. `yolo` is an alias
 for the same high-level surface.

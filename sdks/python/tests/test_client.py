@@ -26,6 +26,9 @@ class ClientScaffoldTest(unittest.TestCase):
         self.assertIsNotNone(client.batch_runs)
         self.assertIsNotNone(client.yolo)
         self.assertIsNotNone(client.yolo_runs)
+        self.assertIsNotNone(client.sandboxes)
+        self.assertIsNotNone(client.snapshots)
+        self.assertIsNotNone(client.pools)
 
 
 class ClientMethodsTest(unittest.IsolatedAsyncioTestCase):
@@ -303,6 +306,317 @@ class ClientMethodsTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(requests[2][:2], ("GET", "/v1/batch-runs/exec-batch-1"))
         self.assertEqual(requests[3][:2], ("POST", "/v1/yolo/run"))
         self.assertEqual(requests[4][:2], ("GET", "/v1/yolo-runs/exec-yolo-1"))
+
+    async def test_compute_methods(self) -> None:
+        from void_control import VoidControlClient
+
+        responses = [
+            {
+                "kind": "sandbox",
+                "sandbox": {
+                    "sandbox_id": "sbx-1",
+                    "state": "running",
+                    "image": "python:3.12-slim",
+                    "cpus": 2,
+                    "memory_mb": 2048,
+                },
+            },
+            {
+                "kind": "sandbox_list",
+                "sandboxes": [
+                    {
+                        "sandbox_id": "sbx-1",
+                        "state": "running",
+                        "image": "python:3.12-slim",
+                        "cpus": 2,
+                        "memory_mb": 2048,
+                    }
+                ],
+            },
+            {
+                "kind": "sandbox",
+                "sandbox": {
+                    "sandbox_id": "sbx-1",
+                    "state": "running",
+                    "image": "python:3.12-slim",
+                    "cpus": 2,
+                    "memory_mb": 2048,
+                },
+            },
+            {
+                "kind": "sandbox_exec",
+                "result": {
+                    "exit_code": 0,
+                    "stdout": "hello\n",
+                    "stderr": "",
+                },
+            },
+            {
+                "kind": "sandbox_deleted",
+                "sandbox_id": "sbx-1",
+            },
+            {
+                "kind": "snapshot",
+                "snapshot": {
+                    "snapshot_id": "snap-1",
+                    "source_sandbox_id": "sbx-1",
+                    "distribution": {
+                        "mode": "cached",
+                        "targets": ["node-a", "node-b"],
+                    },
+                },
+            },
+            {
+                "kind": "snapshot_list",
+                "snapshots": [
+                    {
+                        "snapshot_id": "snap-1",
+                        "source_sandbox_id": "sbx-1",
+                        "distribution": {
+                            "mode": "cached",
+                            "targets": ["node-a", "node-b"],
+                        },
+                    }
+                ],
+            },
+            {
+                "kind": "snapshot",
+                "snapshot": {
+                    "snapshot_id": "snap-1",
+                    "source_sandbox_id": "sbx-1",
+                    "distribution": {
+                        "mode": "cached",
+                        "targets": ["node-a", "node-b"],
+                    },
+                },
+            },
+            {
+                "kind": "snapshot",
+                "snapshot": {
+                    "snapshot_id": "snap-1",
+                    "source_sandbox_id": "sbx-1",
+                    "distribution": {
+                        "mode": "copy",
+                        "targets": ["node-a", "node-c"],
+                    },
+                },
+            },
+            {
+                "kind": "snapshot_deleted",
+                "snapshot_id": "snap-1",
+            },
+            {
+                "kind": "pool",
+                "pool": {
+                    "pool_id": "pool-1",
+                    "sandbox_spec": {
+                        "runtime": {
+                            "image": "python:3.12-slim",
+                            "cpus": 2,
+                            "memory_mb": 2048,
+                        }
+                    },
+                    "capacity": {
+                        "warm": 5,
+                        "max": 20,
+                    },
+                },
+            },
+            {
+                "kind": "pool",
+                "pool": {
+                    "pool_id": "pool-1",
+                    "sandbox_spec": {
+                        "runtime": {
+                            "image": "python:3.12-slim",
+                            "cpus": 2,
+                            "memory_mb": 2048,
+                        }
+                    },
+                    "capacity": {
+                        "warm": 5,
+                        "max": 20,
+                    },
+                },
+            },
+            {
+                "kind": "pool",
+                "pool": {
+                    "pool_id": "pool-1",
+                    "sandbox_spec": {
+                        "runtime": {
+                            "image": "python:3.12-slim",
+                            "cpus": 2,
+                            "memory_mb": 2048,
+                        }
+                    },
+                    "capacity": {
+                        "warm": 8,
+                        "max": 24,
+                    },
+                },
+            },
+        ]
+        requests: list[tuple[str, str, str | None]] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            body = request.content.decode() if request.content else None
+            requests.append((request.method, request.url.path, body))
+            payload = responses.pop(0)
+            return httpx.Response(200, json=payload)
+
+        client = VoidControlClient(
+            base_url="http://127.0.0.1:43210",
+            transport=httpx.MockTransport(handler),
+        )
+
+        sandbox = await client.sandboxes.create(
+            {
+                "api_version": "v1",
+                "kind": "sandbox",
+                "runtime": {
+                    "image": "python:3.12-slim",
+                    "cpus": 2,
+                    "memory_mb": 2048,
+                },
+            }
+        )
+        sandboxes = await client.sandboxes.list()
+        fetched_sandbox = await client.sandboxes.get("sbx-1")
+        exec_result = await client.sandboxes.exec(
+            "sbx-1",
+            {
+                "kind": "command",
+                "command": ["python3", "-c", "print('hello')"],
+            },
+        )
+        deleted_sandbox = await client.sandboxes.delete("sbx-1")
+        snapshot = await client.snapshots.create(
+            {
+                "api_version": "v1",
+                "kind": "snapshot",
+                "source": {"sandbox_id": "sbx-1"},
+                "distribution": {
+                    "mode": "cached",
+                    "targets": ["node-a", "node-b"],
+                },
+            }
+        )
+        snapshots = await client.snapshots.list()
+        fetched_snapshot = await client.snapshots.get("snap-1")
+        replicated = await client.snapshots.replicate(
+            "snap-1",
+            {
+                "mode": "copy",
+                "targets": ["node-a", "node-c"],
+            },
+        )
+        deleted_snapshot = await client.snapshots.delete("snap-1")
+        pool = await client.pools.create(
+            {
+                "api_version": "v1",
+                "kind": "sandbox_pool",
+                "sandbox_spec": {
+                    "runtime": {
+                        "image": "python:3.12-slim",
+                        "cpus": 2,
+                        "memory_mb": 2048,
+                    }
+                },
+                "capacity": {"warm": 5, "max": 20},
+            }
+        )
+        fetched_pool = await client.pools.get("pool-1")
+        scaled = await client.pools.scale("pool-1", {"warm": 8, "max": 24})
+        await client.aclose()
+
+        self.assertEqual(sandbox.sandbox_id, "sbx-1")
+        self.assertEqual(sandboxes[0].state, "running")
+        self.assertEqual(fetched_sandbox.image, "python:3.12-slim")
+        self.assertEqual(exec_result.exit_code, 0)
+        self.assertEqual(deleted_sandbox.kind, "sandbox_deleted")
+        self.assertEqual(snapshot.snapshot_id, "snap-1")
+        self.assertEqual(snapshots[0].snapshot_id, "snap-1")
+        self.assertEqual(fetched_snapshot.source_sandbox_id, "sbx-1")
+        self.assertEqual(replicated.distribution["mode"], "copy")
+        self.assertEqual(deleted_snapshot.kind, "snapshot_deleted")
+        self.assertEqual(pool.pool_id, "pool-1")
+        self.assertEqual(fetched_pool.capacity["warm"], 5)
+        self.assertEqual(scaled.capacity["warm"], 8)
+
+        self.assertEqual(requests[0][:2], ("POST", "/v1/sandboxes"))
+        self.assertEqual(requests[1][:2], ("GET", "/v1/sandboxes"))
+        self.assertEqual(requests[2][:2], ("GET", "/v1/sandboxes/sbx-1"))
+        self.assertEqual(requests[3][:2], ("POST", "/v1/sandboxes/sbx-1/exec"))
+        self.assertEqual(requests[4][:2], ("DELETE", "/v1/sandboxes/sbx-1"))
+        self.assertEqual(requests[5][:2], ("POST", "/v1/snapshots"))
+        self.assertEqual(requests[6][:2], ("GET", "/v1/snapshots"))
+        self.assertEqual(requests[7][:2], ("GET", "/v1/snapshots/snap-1"))
+        self.assertEqual(requests[8][:2], ("POST", "/v1/snapshots/snap-1/replicate"))
+        self.assertEqual(requests[9][:2], ("DELETE", "/v1/snapshots/snap-1"))
+        self.assertEqual(requests[10][:2], ("POST", "/v1/pools"))
+        self.assertEqual(requests[11][:2], ("GET", "/v1/pools/pool-1"))
+        self.assertEqual(requests[12][:2], ("POST", "/v1/pools/pool-1/scale"))
+
+    async def test_compute_methods_raise_bridge_error(self) -> None:
+        from void_control import VoidControlClient
+        from void_control.models import BridgeError
+
+        responses = [
+            (
+                404,
+                {
+                    "message": "sandbox 'sbx-missing' not found",
+                    "code": "SANDBOX_NOT_FOUND",
+                    "retryable": False,
+                },
+            ),
+            (
+                404,
+                {
+                    "message": "snapshot 'snap-missing' not found",
+                    "code": "SNAPSHOT_NOT_FOUND",
+                    "retryable": False,
+                },
+            ),
+            (
+                503,
+                {
+                    "message": "pool controller unavailable",
+                    "code": "POOL_UNAVAILABLE",
+                    "retryable": True,
+                },
+            ),
+        ]
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            status, payload = responses.pop(0)
+            return httpx.Response(status, json=payload)
+
+        client = VoidControlClient(
+            base_url="http://127.0.0.1:43210",
+            transport=httpx.MockTransport(handler),
+        )
+
+        with self.assertRaises(BridgeError) as sandbox_err:
+            await client.sandboxes.get("sbx-missing")
+        self.assertEqual(str(sandbox_err.exception), "sandbox 'sbx-missing' not found")
+        self.assertEqual(sandbox_err.exception.code, "SANDBOX_NOT_FOUND")
+        self.assertFalse(sandbox_err.exception.retryable)
+
+        with self.assertRaises(BridgeError) as snapshot_err:
+            await client.snapshots.delete("snap-missing")
+        self.assertEqual(str(snapshot_err.exception), "snapshot 'snap-missing' not found")
+        self.assertEqual(snapshot_err.exception.code, "SNAPSHOT_NOT_FOUND")
+        self.assertFalse(snapshot_err.exception.retryable)
+
+        with self.assertRaises(BridgeError) as pool_err:
+            await client.pools.scale("pool-1", {"warm": 8, "max": 24})
+        self.assertEqual(str(pool_err.exception), "pool controller unavailable")
+        self.assertEqual(pool_err.exception.code, "POOL_UNAVAILABLE")
+        self.assertTrue(pool_err.exception.retryable)
+
+        await client.aclose()
 
 
 if __name__ == "__main__":

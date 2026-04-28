@@ -212,11 +212,43 @@ Important:
 - `batch` is the canonical high-level remote background execution surface
 - `yolo` is an accepted alias for `batch`
 - `team` is the phase-1 high-level multi-agent authoring surface
+- `sandbox` is the contract-first compute bridge surface for reusable
+  environments and snapshot-based restore flows
+- `pool` is the contract-first compute control-plane surface for warm capacity
+  and future leasing over sandbox specs
 - current phase-1 `team` limitations:
   - `depends_on` is not supported yet
   - `sequential` preserves ordering only; task outputs are not threaded between agents
+- current phase-1 `sandbox` limitation:
+  - bridge routes are mock-backed and persisted by `void-control`
+  - the live `VoidBoxRuntimeClient` still reports sandbox lifecycle calls as
+    unsupported until the `void-box` daemon exposes matching routes
+- current phase-1 `pool` limitation:
+  - pool routes are mock-backed and persisted by `void-control`
+  - they express desired warm capacity only; they do not yet drive live daemon
+    prewarm behavior
 - use `voidctl execution ...` for terminal operator workflows; use the bridge
   HTTP API or UI when you need direct API-driven inspection or browser workflows
+- non-interactive compute commands:
+  - `voidctl sandbox create [<spec-path> | --stdin]`
+  - `voidctl sandbox list`
+  - `voidctl sandbox get <sandbox-id>`
+  - `voidctl sandbox exec <sandbox-id> [<request-path> | --stdin]`
+  - `voidctl sandbox stop <sandbox-id>`
+  - `voidctl sandbox delete <sandbox-id>`
+  - `voidctl snapshot create [<spec-path> | --stdin]`
+  - `voidctl snapshot list`
+  - `voidctl snapshot get <snapshot-id>`
+  - `voidctl snapshot replicate <snapshot-id> [<request-path> | --stdin]`
+  - `voidctl snapshot delete <snapshot-id>`
+  - `voidctl pool create [<spec-path> | --stdin]`
+  - `voidctl pool get <pool-id>`
+  - `voidctl pool scale <pool-id> [<request-path> | --stdin]`
+- interactive compute commands:
+  - `/sandbox create <spec_file>`
+  - `/sandbox list`
+  - `/snapshot replicate <snapshot_id> <request_file>`
+  - `/pool scale <pool_id> <request_file>`
 - quote URLs that contain `?` when using `curl` from `zsh`
 - template-first bridge endpoints:
   - `GET /v1/templates`
@@ -235,6 +267,23 @@ Important:
   - `POST /v1/teams/dry-run`
   - `POST /v1/teams/run`
   - `GET /v1/team-runs/{id}`
+- sandbox bridge endpoints:
+  - `POST /v1/sandboxes`
+  - `GET /v1/sandboxes`
+  - `GET /v1/sandboxes/{id}`
+  - `POST /v1/sandboxes/{id}/exec`
+  - `POST /v1/sandboxes/{id}/stop`
+  - `DELETE /v1/sandboxes/{id}`
+- snapshot bridge endpoints:
+  - `POST /v1/snapshots`
+  - `GET /v1/snapshots`
+  - `GET /v1/snapshots/{id}`
+  - `POST /v1/snapshots/{id}/replicate`
+  - `DELETE /v1/snapshots/{id}`
+- pool bridge endpoints:
+  - `POST /v1/pools`
+  - `GET /v1/pools/{id}`
+  - `POST /v1/pools/{id}/scale`
 
 ## Runtime compatibility commands
 
