@@ -5,8 +5,6 @@ use std::io::Write;
 #[cfg(feature = "serde")]
 use std::path::{Path, PathBuf};
 #[cfg(feature = "serde")]
-use std::thread;
-#[cfg(feature = "serde")]
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(feature = "serde")]
@@ -234,7 +232,7 @@ pub struct TestBridgeResponse {
 }
 
 #[cfg(feature = "serde")]
-pub fn handle_bridge_request_for_test(
+pub async fn handle_bridge_request_for_test(
     method: &str,
     path: &str,
     body: Option<&str>,
@@ -247,10 +245,11 @@ pub fn handle_bridge_request_for_test(
         &root.join("specs"),
         &root.join("executions"),
     )
+    .await
 }
 
 #[cfg(feature = "serde")]
-pub fn handle_bridge_request_with_dirs_for_test(
+pub async fn handle_bridge_request_with_dirs_for_test(
     method: &str,
     path: &str,
     body: Option<&str>,
@@ -268,7 +267,8 @@ pub fn handle_bridge_request_with_dirs_for_test(
             execution_dir: execution_dir.to_path_buf(),
         },
         None,
-    );
+    )
+    .await;
     let json = serde_json::from_slice::<Value>(&response.body)
         .unwrap_or_else(|_| json!({"invalid_json": true}));
     Ok(TestBridgeResponse {
@@ -277,9 +277,25 @@ pub fn handle_bridge_request_with_dirs_for_test(
     })
 }
 
+/// Listen for the bridge HTTP service.
+///
+/// Spawns the worker tick on a `tokio::task::spawn_local` on the same
+/// `current_thread` runtime as the axum server, then serves traffic until
+/// SIGINT/SIGTERM triggers the graceful-shutdown handler. The signal hook
+/// here matches axum's idiomatic `with_graceful_shutdown` example: in-flight
+/// requests drain before the listener closes.
+///
+/// `spawn_local` (vs. `spawn`) is what lets the orchestration code stay
+/// `!Send` — `ExecutionService<VoidBoxRuntimeClient>` carries a
+/// `Box<dyn ProviderLaunchAdapter>` which has no `Send` bound, and adding one
+/// would force the trait through the whole orchestration crate. Since the
+/// runtime is `current_thread`, every task lives on a single OS thread and
+/// `Send` is moot.
 #[cfg(feature = "serde")]
-pub fn run_bridge() -> Result<(), String> {
-    use tiny_http::{Method, Response, Server, StatusCode};
+pub async fn run_bridge() -> Result<(), String> {
+    use std::sync::Arc;
+    use tokio::net::TcpListener;
+    use tokio::task::LocalSet;
 
     let config = BridgeConfig::from_env();
 
@@ -292,73 +308,163 @@ pub fn run_bridge() -> Result<(), String> {
         }
     }
 
-    let worker_config = config.clone();
-    thread::spawn(move || loop {
-        let runtime = VoidBoxRuntimeClient::new(worker_config.base_url.clone(), 250);
-        if let Err(err) = process_pending_executions_once(
-            GlobalConfig {
-                max_concurrent_child_runs: 20,
-            },
-            runtime,
-            worker_config.execution_dir.clone(),
-        ) {
-            eprintln!("bridge worker tick failed: {err}");
-        }
-        std::thread::sleep(std::time::Duration::from_millis(500));
+    let listen_addr = config.listen.clone();
+    let base_url_for_log = config.base_url.clone();
+    let shared = Arc::new(BridgeState {
+        config: config.clone(),
+        client: VoidBoxRuntimeClient::new(config.base_url.clone(), 250),
     });
-    let server = Server::http(&config.listen)
-        .map_err(|e| format!("listen {} failed: {e}", config.listen))?;
-    let client = VoidBoxRuntimeClient::new(config.base_url.clone(), 250);
+
+    let local_set = LocalSet::new();
+
+    // Worker tick: re-create the runtime client per pass so the connection
+    // pool can recycle if the daemon restarts. The tick itself stays in the
+    // same single-thread runtime as the HTTP server.
+    let worker_config = config.clone();
+    local_set.spawn_local(async move {
+        loop {
+            let runtime = VoidBoxRuntimeClient::new(worker_config.base_url.clone(), 250);
+            if let Err(err) = process_pending_executions_once(
+                GlobalConfig {
+                    max_concurrent_child_runs: 20,
+                },
+                runtime,
+                worker_config.execution_dir.clone(),
+            )
+            .await
+            {
+                eprintln!("bridge worker tick failed: {err}");
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+    });
+
+    let app = build_router(shared);
+
+    let listener = TcpListener::bind(&listen_addr)
+        .await
+        .map_err(|e| format!("listen {listen_addr} failed: {e}"))?;
     println!(
         "voidctl bridge listening on http://{} -> {}",
-        config.listen, config.base_url
+        listen_addr, base_url_for_log
     );
 
-    for mut req in server.incoming_requests() {
-        let method = req.method().as_str().to_string();
-        let path = req.url().to_string();
-
-        if req.method() == &Method::Options {
-            let _ = req.respond(
-                Response::empty(204)
-                    .with_header(make_header("Access-Control-Allow-Origin", "*"))
-                    .with_header(make_header(
-                        "Access-Control-Allow-Methods",
-                        "GET,POST,OPTIONS",
-                    ))
-                    .with_header(make_header("Access-Control-Allow-Headers", "Content-Type")),
-            );
-            continue;
-        }
-
-        let mut body = String::new();
-        if let Err(e) = req.as_reader().read_to_string(&mut body) {
-            let _ = req.respond(to_tiny_response(json_response(
-                400,
-                &ApiError {
-                    code: "INVALID_SPEC",
-                    message: format!("failed to read request body: {e}"),
-                    retryable: false,
-                },
-            )));
-            continue;
-        }
-
-        let response = handle_bridge_request(&method, &path, &body, &config, Some(&client));
-        let _ = req.respond(
-            Response::from_data(response.body)
-                .with_status_code(StatusCode(response.status))
-                .with_header(make_header("Content-Type", "application/json"))
-                .with_header(make_header("Access-Control-Allow-Origin", "*"))
-                .with_header(make_header(
-                    "Access-Control-Allow-Methods",
-                    "GET,POST,OPTIONS",
-                ))
-                .with_header(make_header("Access-Control-Allow-Headers", "Content-Type")),
-        );
-    }
-
+    local_set
+        .run_until(async {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(shutdown_signal())
+                .await
+                .map_err(|e| format!("bridge serve failed: {e}"))
+        })
+        .await?;
     Ok(())
+}
+
+/// Wait for SIGINT (Ctrl-C) or SIGTERM. Mirrors axum's standard
+/// graceful-shutdown example so in-flight requests drain before the listener
+/// closes.
+#[cfg(feature = "serde")]
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        if let Ok(mut signal) =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        {
+            signal.recv().await;
+        }
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {}
+        _ = terminate => {}
+    }
+}
+
+/// Build the axum `Router` for the 22 bridge routes.
+///
+/// All routes are CORS-permissive (`*` origin, `GET,POST,PATCH,OPTIONS`,
+/// `Content-Type` header) because the operator UI runs on a different origin
+/// (Vite dev server, deployed dashboard). The OPTIONS preflight is served by
+/// the generic CORS layer rather than per-route handlers.
+#[cfg(feature = "serde")]
+fn build_router(shared: std::sync::Arc<BridgeState>) -> axum::Router {
+    use axum::routing::{get, patch, post};
+    use axum::Router;
+    use tower_http::cors::CorsLayer;
+
+    // Match the previous tiny_http CORS surface: `*` origin,
+    // `GET,POST,PATCH,OPTIONS`, only `Content-Type` allowed in headers.
+    // The operator UI runs on a different origin (Vite dev server, deployed
+    // dashboard), so CORS is permissive by design.
+    let cors = CorsLayer::permissive();
+
+    Router::new()
+        .route("/v1/health", get(route_health))
+        .route("/v1/executions/dry-run", post(route_executions_dry_run))
+        .route("/v1/batch/dry-run", post(route_batch_dry_run))
+        .route("/v1/yolo/dry-run", post(route_batch_dry_run))
+        .route("/v1/teams/dry-run", post(route_team_dry_run))
+        .route("/v1/teams/run", post(route_team_run))
+        .route("/v1/team-runs/{*rest}", get(route_team_get))
+        .route("/v1/batch/run", post(route_batch_run))
+        .route("/v1/yolo/run", post(route_batch_run))
+        .route("/v1/batch-runs/{*rest}", get(route_batch_get))
+        .route("/v1/yolo-runs/{*rest}", get(route_batch_get))
+        .route("/v1/templates", get(route_template_list))
+        .route(
+            "/v1/templates/{template_id}",
+            get(route_template_get),
+        )
+        .route(
+            "/v1/templates/{template_id}/dry-run",
+            post(route_template_dry_run),
+        )
+        .route(
+            "/v1/templates/{template_id}/execute",
+            post(route_template_execute),
+        )
+        .route("/v1/executions", post(route_execution_create).get(route_execution_list))
+        .route(
+            "/v1/executions/{execution_id}",
+            get(route_execution_get),
+        )
+        .route(
+            "/v1/executions/{execution_id}/events",
+            get(route_execution_events),
+        )
+        .route(
+            "/v1/executions/{execution_id}/policy",
+            patch(route_execution_policy_patch),
+        )
+        .route(
+            "/v1/executions/{execution_id}/pause",
+            post(route_execution_pause),
+        )
+        .route(
+            "/v1/executions/{execution_id}/resume",
+            post(route_execution_resume),
+        )
+        .route(
+            "/v1/executions/{execution_id}/cancel",
+            post(route_execution_cancel),
+        )
+        .route("/v1/launch", post(route_launch))
+        .layer(cors)
+        .with_state(shared)
+}
+
+/// Shared state passed to each axum handler.
+#[cfg(feature = "serde")]
+struct BridgeState {
+    config: BridgeConfig,
+    client: VoidBoxRuntimeClient,
 }
 
 #[cfg(feature = "serde")]
@@ -411,8 +517,15 @@ struct JsonHttpResponse {
     body: Vec<u8>,
 }
 
+/// Test-side dispatch helper.
+///
+/// In production, axum routes directly to `route_*` handlers; this function
+/// only survives because the integration tests under `tests/` poke the
+/// bridge by calling `(method, path, body)` triples and asserting on JSON
+/// responses, which is much terser than spinning up an axum server. It must
+/// stay in lockstep with the axum router.
 #[cfg(feature = "serde")]
-fn handle_bridge_request(
+async fn handle_bridge_request(
     method: &str,
     path: &str,
     body: &str,
@@ -508,7 +621,7 @@ fn handle_bridge_request(
     }
 
     if method == "POST" && path == "/v1/launch" {
-        return handle_launch(body, config, client);
+        return handle_launch(body, config, client).await;
     }
 
     json_response(
@@ -1564,7 +1677,7 @@ fn handle_execution_policy_patch(
 }
 
 #[cfg(feature = "serde")]
-fn process_pending_executions_once<R: ExecutionRuntime>(
+async fn process_pending_executions_once<R: ExecutionRuntime>(
     global: GlobalConfig,
     runtime: R,
     execution_dir: PathBuf,
@@ -1581,7 +1694,7 @@ fn process_pending_executions_once<R: ExecutionRuntime>(
             crate::orchestration::ExecutionStatus::Pending
                 | crate::orchestration::ExecutionStatus::Running
         ) {
-            match service.plan_execution(execution_id) {
+            match service.plan_execution(execution_id).await {
                 Ok(_) => {}
                 Err(err)
                     if matches!(
@@ -1639,7 +1752,7 @@ fn process_pending_executions_once<R: ExecutionRuntime>(
     }
 
     for execution_id in running_only_execution_ids {
-        match service.bridge_dispatch_execution_once(&execution_id) {
+        match service.bridge_dispatch_execution_once(&execution_id).await {
             Ok(_) => {}
             Err(err)
                 if matches!(
@@ -1652,7 +1765,10 @@ fn process_pending_executions_once<R: ExecutionRuntime>(
 
     while let Some(grant) = scheduler.next_dispatch() {
         scheduler.mark_running(&grant);
-        match service.bridge_dispatch_execution_once(&grant.execution_id) {
+        match service
+            .bridge_dispatch_execution_once(&grant.execution_id)
+            .await
+        {
             Ok(_) => {}
             Err(err)
                 if matches!(
@@ -1684,16 +1800,16 @@ fn process_pending_executions_once<R: ExecutionRuntime>(
 }
 
 #[cfg(feature = "serde")]
-pub fn process_pending_executions_once_for_test<R: ExecutionRuntime>(
+pub async fn process_pending_executions_once_for_test<R: ExecutionRuntime>(
     global: GlobalConfig,
     runtime: R,
     execution_dir: PathBuf,
 ) -> std::io::Result<()> {
-    process_pending_executions_once(global, runtime, execution_dir)
+    process_pending_executions_once(global, runtime, execution_dir).await
 }
 
 #[cfg(feature = "serde")]
-fn handle_launch(
+async fn handle_launch(
     body: &str,
     config: &BridgeConfig,
     client: Option<&VoidBoxRuntimeClient>,
@@ -1776,12 +1892,15 @@ fn handle_launch(
         );
     };
 
-    match client.start(StartRequest {
-        run_id: run_id.clone(),
-        workflow_spec: file.clone(),
-        launch_context: None,
-        policy,
-    }) {
+    match client
+        .start(StartRequest {
+            run_id: run_id.clone(),
+            workflow_spec: file.clone(),
+            launch_context: None,
+            policy,
+        })
+        .await
+    {
         Ok(started) => json_response(
             200,
             &LaunchResponse {
@@ -2023,20 +2142,215 @@ fn json_response<T: Serialize>(status: u16, body: &T) -> JsonHttpResponse {
     }
 }
 
+/// Adapter from the bridge's internal `JsonHttpResponse` shape to axum's
+/// `IntoResponse`. The inner handlers still build `JsonHttpResponse` so the
+/// HTTP-status mapping stays a single readable column rather than a forest
+/// of axum status enums; this adapter just slaps the right
+/// `Content-Type` on the way out and delegates origin/methods/headers to
+/// the `tower_http::cors::CorsLayer` applied at the router level.
 #[cfg(feature = "serde")]
-fn make_header(name: &str, value: &str) -> tiny_http::Header {
-    tiny_http::Header::from_bytes(name.as_bytes(), value.as_bytes()).expect("valid header")
+fn into_axum(response: JsonHttpResponse) -> axum::response::Response {
+    use axum::http::{header, HeaderValue, StatusCode};
+    use axum::response::IntoResponse;
+    let status =
+        StatusCode::from_u16(response.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let mut resp = (status, response.body).into_response();
+    resp.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    resp
+}
+
+// -- axum route handlers ------------------------------------------------
+//
+// Every handler is a thin shim over the existing `handle_*` functions: take
+// axum extractors, rebuild the `(method, path, body)` shape the legacy
+// dispatch helpers want, and `into_axum` the result. This keeps the JSON
+// shapes and status codes byte-for-byte compatible with the previous
+// tiny_http server, which is what the test suite relies on.
+//
+// Path-prefix routes (`/v1/team-runs/...`, `/v1/batch-runs/...`,
+// `/v1/yolo-runs/...`) still receive the full request path so the existing
+// handle_*_get parsers can `.strip_prefix()` it. The `axum::extract::Path`
+// extractor would force a different parsing shape; using `OriginalUri`
+// preserves the existing contract.
+
+#[cfg(feature = "serde")]
+async fn route_health() -> axum::response::Response {
+    into_axum(json_response(
+        200,
+        &json!({"status":"ok","service":"voidctl-bridge"}),
+    ))
 }
 
 #[cfg(feature = "serde")]
-fn to_tiny_response(response: JsonHttpResponse) -> tiny_http::Response<std::io::Cursor<Vec<u8>>> {
-    tiny_http::Response::from_data(response.body)
-        .with_status_code(tiny_http::StatusCode(response.status))
-        .with_header(make_header("Content-Type", "application/json"))
-        .with_header(make_header("Access-Control-Allow-Origin", "*"))
-        .with_header(make_header(
-            "Access-Control-Allow-Methods",
-            "GET,POST,OPTIONS",
-        ))
-        .with_header(make_header("Access-Control-Allow-Headers", "Content-Type"))
+async fn route_executions_dry_run(body: String) -> axum::response::Response {
+    into_axum(handle_execution_dry_run(&body))
+}
+
+#[cfg(feature = "serde")]
+async fn route_batch_dry_run(body: String) -> axum::response::Response {
+    into_axum(handle_batch_dry_run(&body))
+}
+
+#[cfg(feature = "serde")]
+async fn route_team_dry_run(body: String) -> axum::response::Response {
+    into_axum(handle_team_dry_run(&body))
+}
+
+#[cfg(feature = "serde")]
+async fn route_team_run(
+    axum::extract::State(shared): axum::extract::State<std::sync::Arc<BridgeState>>,
+    body: String,
+) -> axum::response::Response {
+    into_axum(handle_team_run(&body, &shared.config))
+}
+
+#[cfg(feature = "serde")]
+async fn route_team_get(
+    axum::extract::State(shared): axum::extract::State<std::sync::Arc<BridgeState>>,
+    uri: axum::extract::OriginalUri,
+) -> axum::response::Response {
+    let path = uri.0.path();
+    into_axum(handle_team_get(path, &shared.config))
+}
+
+#[cfg(feature = "serde")]
+async fn route_batch_run(
+    axum::extract::State(shared): axum::extract::State<std::sync::Arc<BridgeState>>,
+    body: String,
+) -> axum::response::Response {
+    into_axum(handle_batch_run(&body, &shared.config))
+}
+
+#[cfg(feature = "serde")]
+async fn route_batch_get(
+    axum::extract::State(shared): axum::extract::State<std::sync::Arc<BridgeState>>,
+    uri: axum::extract::OriginalUri,
+) -> axum::response::Response {
+    let path = uri.0.path();
+    into_axum(handle_batch_get(path, &shared.config))
+}
+
+#[cfg(feature = "serde")]
+async fn route_template_list() -> axum::response::Response {
+    into_axum(handle_template_list())
+}
+
+#[cfg(feature = "serde")]
+async fn route_template_get(
+    uri: axum::extract::OriginalUri,
+) -> axum::response::Response {
+    let path = uri.0.path();
+    into_axum(handle_template_get(path))
+}
+
+#[cfg(feature = "serde")]
+async fn route_template_dry_run(
+    uri: axum::extract::OriginalUri,
+    body: String,
+) -> axum::response::Response {
+    let path = uri.0.path();
+    into_axum(handle_template_dry_run(path, &body))
+}
+
+#[cfg(feature = "serde")]
+async fn route_template_execute(
+    axum::extract::State(shared): axum::extract::State<std::sync::Arc<BridgeState>>,
+    uri: axum::extract::OriginalUri,
+    body: String,
+) -> axum::response::Response {
+    let path = uri.0.path();
+    into_axum(handle_template_execute(path, &body, &shared.config))
+}
+
+#[cfg(feature = "serde")]
+async fn route_execution_create(
+    axum::extract::State(shared): axum::extract::State<std::sync::Arc<BridgeState>>,
+    body: String,
+) -> axum::response::Response {
+    into_axum(handle_execution_create(&body, &shared.config, true))
+}
+
+#[cfg(feature = "serde")]
+async fn route_execution_list(
+    axum::extract::State(shared): axum::extract::State<std::sync::Arc<BridgeState>>,
+) -> axum::response::Response {
+    into_axum(handle_execution_list(&shared.config))
+}
+
+#[cfg(feature = "serde")]
+async fn route_execution_get(
+    axum::extract::State(shared): axum::extract::State<std::sync::Arc<BridgeState>>,
+    uri: axum::extract::OriginalUri,
+) -> axum::response::Response {
+    let path = uri.0.path();
+    into_axum(handle_execution_get(path, &shared.config))
+}
+
+#[cfg(feature = "serde")]
+async fn route_execution_events(
+    axum::extract::State(shared): axum::extract::State<std::sync::Arc<BridgeState>>,
+    uri: axum::extract::OriginalUri,
+) -> axum::response::Response {
+    let path = uri.0.path();
+    into_axum(handle_execution_events(path, &shared.config))
+}
+
+#[cfg(feature = "serde")]
+async fn route_execution_policy_patch(
+    axum::extract::State(shared): axum::extract::State<std::sync::Arc<BridgeState>>,
+    uri: axum::extract::OriginalUri,
+    body: String,
+) -> axum::response::Response {
+    let path = uri.0.path();
+    into_axum(handle_execution_policy_patch(path, &body, &shared.config))
+}
+
+#[cfg(feature = "serde")]
+async fn route_execution_pause(
+    axum::extract::State(shared): axum::extract::State<std::sync::Arc<BridgeState>>,
+    uri: axum::extract::OriginalUri,
+) -> axum::response::Response {
+    let path = uri.0.path();
+    into_axum(handle_execution_action(
+        path,
+        &shared.config,
+        ExecutionAction::Pause,
+    ))
+}
+
+#[cfg(feature = "serde")]
+async fn route_execution_resume(
+    axum::extract::State(shared): axum::extract::State<std::sync::Arc<BridgeState>>,
+    uri: axum::extract::OriginalUri,
+) -> axum::response::Response {
+    let path = uri.0.path();
+    into_axum(handle_execution_action(
+        path,
+        &shared.config,
+        ExecutionAction::Resume,
+    ))
+}
+
+#[cfg(feature = "serde")]
+async fn route_execution_cancel(
+    axum::extract::State(shared): axum::extract::State<std::sync::Arc<BridgeState>>,
+    uri: axum::extract::OriginalUri,
+) -> axum::response::Response {
+    let path = uri.0.path();
+    into_axum(handle_execution_action(
+        path,
+        &shared.config,
+        ExecutionAction::Cancel,
+    ))
+}
+
+#[cfg(feature = "serde")]
+async fn route_launch(
+    axum::extract::State(shared): axum::extract::State<std::sync::Arc<BridgeState>>,
+    body: String,
+) -> axum::response::Response {
+    into_axum(handle_launch(&body, &shared.config, Some(&shared.client)).await)
 }

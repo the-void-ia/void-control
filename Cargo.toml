@@ -18,6 +18,7 @@ serde = [
     "dep:http-body-util",
     "dep:bytes",
     "dep:tower",
+    "dep:tower-http",
 ]
 
 [dependencies]
@@ -50,6 +51,7 @@ hyperlocal = { version = "0.9", optional = true }
 http-body-util = { version = "0.1", optional = true }
 bytes = { version = "1", optional = true }
 tower = { version = "0.5", optional = true }
+tower-http = { version = "0.6", features = ["cors"], optional = true }
 
 [target.'cfg(unix)'.dependencies]
 # Direct dep so we can call `geteuid` and `access(W_OK)` for the same-uid
