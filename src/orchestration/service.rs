@@ -5,6 +5,8 @@ use std::sync::{
     Arc,
 };
 
+use async_trait::async_trait;
+
 use crate::contract::{
     ContractError, ExecutionPolicy, RuntimeInspection, StartRequest, StartResult,
 };
@@ -29,10 +31,20 @@ use crate::runtime::{LaunchInjectionAdapter, MessageDeliveryAdapter, ProviderLau
 #[cfg(feature = "serde")]
 use serde::Serialize;
 
-pub trait ExecutionRuntime {
-    fn start_run(&mut self, request: StartRequest) -> Result<StartResult, ContractError>;
-    fn inspect_run(&self, handle: &str) -> Result<RuntimeInspection, ContractError>;
-    fn take_structured_output(&mut self, run_id: &str) -> StructuredOutputResult;
+/// Orchestration's view of a runtime.
+///
+/// Methods that touch the void-box daemon are `async` so the hyper-util
+/// transport can be `.await`ed without a `block_on` shim. Pure-compute
+/// helpers (`persisted_run_handle`, `inline_poll_*`, `delivery_run_ref`)
+/// stay sync — they don't do I/O.
+#[async_trait]
+pub trait ExecutionRuntime: Send {
+    async fn start_run(
+        &mut self,
+        request: StartRequest,
+    ) -> Result<StartResult, ContractError>;
+    async fn inspect_run(&self, handle: &str) -> Result<RuntimeInspection, ContractError>;
+    async fn take_structured_output(&mut self, run_id: &str) -> StructuredOutputResult;
 
     fn inline_poll_budget(&self) -> usize {
         40
@@ -248,12 +260,29 @@ impl<R> ExecutionService<R>
 where
     R: ExecutionRuntime,
 {
+    /// Acquire the persistent claim for `execution_id`, run `operation`, and
+    /// release it in all branches. The closure is async because it ultimately
+    /// fans out to the runtime; the surrounding claim/refresh/release plumbing
+    /// stays synchronous filesystem work running on the same task.
+    ///
+    /// The refresh watcher is a `std::thread`, not a tokio task: it does
+    /// blocking filesystem `metadata`/`write` calls every
+    /// `claim_refresh_interval_ms` and would otherwise need its own
+    /// `spawn_blocking`. Keeping it on a real OS thread also means the
+    /// refresh keeps running if the surrounding tokio runtime parks.
     #[cfg(feature = "serde")]
-    fn with_claimed_execution<T>(
+    async fn with_claimed_execution<T, F>(
         &mut self,
         execution_id: &str,
-        operation: impl FnOnce(&mut Self, &str) -> io::Result<T>,
-    ) -> io::Result<T> {
+        operation: F,
+    ) -> io::Result<T>
+    where
+        F: for<'a> FnOnce(
+            &'a mut Self,
+            String,
+        )
+            -> futures::future::BoxFuture<'a, io::Result<T>>,
+    {
         let worker_id = Self::worker_id();
         if !self.store.claim_execution(execution_id, &worker_id)? {
             return Err(io::Error::new(
@@ -278,7 +307,7 @@ where
             }
         });
 
-        let result = operation(self, &worker_id);
+        let result = operation(self, worker_id).await;
         release_signal.store(true, Ordering::Relaxed);
         let _ = refresher.join();
         let release_result = self.store.release_claim(execution_id);
@@ -321,7 +350,7 @@ where
         })
     }
 
-    fn wait_for_terminal_run(
+    async fn wait_for_terminal_run(
         &self,
         execution_id: &str,
         worker_id: &str,
@@ -345,13 +374,14 @@ where
             let inspection = self
                 .runtime
                 .inspect_run(handle)
+                .await
                 .map_err(|err| io::Error::other(err.message.clone()))?;
             if inspection.state.is_terminal() {
                 return Ok(RunPollOutcome::Terminal(inspection));
             }
             last = Some(inspection);
             if poll_idx + 1 < max_polls && poll_sleep_ms > 0 {
-                std::thread::sleep(std::time::Duration::from_millis(poll_sleep_ms));
+                tokio::time::sleep(std::time::Duration::from_millis(poll_sleep_ms)).await;
             }
         }
         last.map(RunPollOutcome::InFlight).ok_or_else(|| {
@@ -416,7 +446,7 @@ where
         }
     }
 
-    pub fn run_to_completion(&mut self, spec: ExecutionSpec) -> io::Result<Execution> {
+    pub async fn run_to_completion(&mut self, spec: ExecutionSpec) -> io::Result<Execution> {
         spec.validate(&self.global)
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))?;
 
@@ -441,6 +471,7 @@ where
             None,
             false,
         )
+        .await
     }
 
     pub fn dry_run(&self, spec: &ExecutionSpec) -> io::Result<DryRunResult> {
@@ -509,35 +540,61 @@ where
     }
 
     #[cfg(feature = "serde")]
-    pub fn process_execution(&mut self, execution_id: &str) -> io::Result<Execution> {
+    pub async fn process_execution(&mut self, execution_id: &str) -> io::Result<Execution> {
+        let id_owned = execution_id.to_string();
         self.with_claimed_execution(execution_id, |service, worker_id| {
-            service.process_execution_claimed(execution_id, worker_id)
+            Box::pin(async move {
+                service
+                    .process_execution_claimed(&id_owned, &worker_id)
+                    .await
+            })
         })
+        .await
     }
 
     #[cfg(feature = "serde")]
-    pub fn dispatch_execution_once(&mut self, execution_id: &str) -> io::Result<Execution> {
+    pub async fn dispatch_execution_once(
+        &mut self,
+        execution_id: &str,
+    ) -> io::Result<Execution> {
+        let id_owned = execution_id.to_string();
         self.with_claimed_execution(execution_id, |service, worker_id| {
-            service.dispatch_execution_once_claimed(execution_id, worker_id, false)
+            Box::pin(async move {
+                service
+                    .dispatch_execution_once_claimed(&id_owned, &worker_id, false)
+                    .await
+            })
         })
+        .await
     }
 
     #[cfg(feature = "serde")]
-    pub fn bridge_dispatch_execution_once(&mut self, execution_id: &str) -> io::Result<Execution> {
+    pub async fn bridge_dispatch_execution_once(
+        &mut self,
+        execution_id: &str,
+    ) -> io::Result<Execution> {
+        let id_owned = execution_id.to_string();
         self.with_claimed_execution(execution_id, |service, worker_id| {
-            service.dispatch_execution_once_claimed(execution_id, worker_id, true)
+            Box::pin(async move {
+                service
+                    .dispatch_execution_once_claimed(&id_owned, &worker_id, true)
+                    .await
+            })
         })
+        .await
     }
 
     #[cfg(feature = "serde")]
-    pub fn plan_execution(&mut self, execution_id: &str) -> io::Result<Execution> {
+    pub async fn plan_execution(&mut self, execution_id: &str) -> io::Result<Execution> {
+        let id_owned = execution_id.to_string();
         self.with_claimed_execution(execution_id, |service, _worker_id| {
-            service.plan_execution_claimed(execution_id)
+            Box::pin(async move { service.plan_execution_claimed(&id_owned) })
         })
+        .await
     }
 
     #[cfg(feature = "serde")]
-    fn process_execution_claimed(
+    async fn process_execution_claimed(
         &mut self,
         execution_id: &str,
         worker_id: &str,
@@ -552,10 +609,11 @@ where
         self.append_event(execution_id, ControlEventType::ExecutionStarted)?;
         let accumulator = snapshot.accumulator;
         self.execute_execution(&mut execution, &spec, &accumulator, worker_id, None, false)
+            .await
     }
 
     #[cfg(feature = "serde")]
-    fn dispatch_execution_once_claimed(
+    async fn dispatch_execution_once_claimed(
         &mut self,
         execution_id: &str,
         worker_id: &str,
@@ -580,6 +638,7 @@ where
             Some(1),
             prefer_queued_when_capacity,
         )
+        .await
     }
 
     #[cfg(feature = "serde")]
@@ -723,7 +782,7 @@ where
     }
 
     #[cfg(feature = "serde")]
-    fn drain_delivery_intents(
+    async fn drain_delivery_intents(
         &self,
         handle: &str,
     ) -> io::Result<Vec<super::types::CommunicationIntent>> {
@@ -736,16 +795,16 @@ where
                 "delivery adapter configured for runtime without delivery run references",
             )
         })?;
-        adapter.drain_intents(&run_ref)
+        adapter.drain_intents(&run_ref).await
     }
 
     #[cfg(feature = "serde")]
-    fn collect_candidate_intents(
+    async fn collect_candidate_intents(
         &self,
         handle: &str,
         output_intents: &[super::types::CommunicationIntent],
     ) -> io::Result<Vec<super::types::CommunicationIntent>> {
-        let drained = self.drain_delivery_intents(handle)?;
+        let drained = self.drain_delivery_intents(handle).await?;
         Ok(message_box::merge_and_dedup(
             drained,
             output_intents.to_vec(),
@@ -753,12 +812,12 @@ where
     }
 
     #[cfg(feature = "serde")]
-    fn collect_candidate_intents_best_effort(
+    async fn collect_candidate_intents_best_effort(
         &self,
         handle: &str,
         output_intents: &[super::types::CommunicationIntent],
     ) -> Vec<super::types::CommunicationIntent> {
-        match self.collect_candidate_intents(handle, output_intents) {
+        match self.collect_candidate_intents(handle, output_intents).await {
             Ok(intents) => intents,
             Err(err) => {
                 eprintln!("candidate intent drain skipped for '{handle}': {err}");
@@ -885,7 +944,7 @@ where
             .collect())
     }
 
-    fn dispatch_candidate(
+    async fn dispatch_candidate(
         &mut self,
         execution: &mut Execution,
         spec: &ExecutionSpec,
@@ -923,6 +982,7 @@ where
         let started = self
             .runtime
             .start_run(launch_request)
+            .await
             .map_err(|err| io::Error::other(err.message))?;
         #[cfg(feature = "serde")]
         if let Some(adapter) = self.delivery_adapter.as_ref() {
@@ -935,7 +995,9 @@ where
                         "delivery adapter configured for runtime without delivery run references",
                     )
                 })?;
-            adapter.inject_at_launch(&run_ref, candidate, &launch_inbox)?;
+            adapter
+                .inject_at_launch(&run_ref, candidate, &launch_inbox)
+                .await?;
         }
         #[cfg(not(feature = "serde"))]
         let started = self
@@ -946,6 +1008,7 @@ where
                 launch_context: None,
                 policy: default_runtime_policy(),
             })
+            .await
             .map_err(|err| io::Error::other(err.message))?;
         self.save_candidate_state(CandidateStateUpdate {
             execution_id: &execution.execution_id,
@@ -961,39 +1024,42 @@ where
             revision_round: 0,
         })?;
 
-        let inspection =
-            match self.wait_for_terminal_run(&execution.execution_id, worker_id, &started.handle) {
-                Ok(RunPollOutcome::Terminal(inspection)) => inspection,
-                Ok(RunPollOutcome::Canceled) => {
-                    self.save_candidate_state(CandidateStateUpdate {
-                        execution_id: &execution.execution_id,
-                        candidate_id: &candidate.candidate_id,
+        let inspection = match self
+            .wait_for_terminal_run(&execution.execution_id, worker_id, &started.handle)
+            .await
+        {
+            Ok(RunPollOutcome::Terminal(inspection)) => inspection,
+            Ok(RunPollOutcome::Canceled) => {
+                self.save_candidate_state(CandidateStateUpdate {
+                    execution_id: &execution.execution_id,
+                    candidate_id: &candidate.candidate_id,
+                    created_seq,
+                    iteration,
+                    status: CandidateStatus::Canceled,
+                    runtime_run_id: Some(run_id),
+                    overrides: &candidate.overrides,
+                    succeeded: None,
+                    metrics: &Default::default(),
+                    review_status: None,
+                    revision_round: 0,
+                })?;
+                return Ok(DispatchOutcome::Canceled);
+            }
+            Ok(RunPollOutcome::InFlight(inspection)) => {
+                return self
+                    .try_finalize_candidate_from_ready_output(
+                        execution,
+                        spec,
+                        candidate,
                         created_seq,
-                        iteration,
-                        status: CandidateStatus::Canceled,
-                        runtime_run_id: Some(run_id),
-                        overrides: &candidate.overrides,
-                        succeeded: None,
-                        metrics: &Default::default(),
-                        review_status: None,
-                        revision_round: 0,
-                    })?;
-                    return Ok(DispatchOutcome::Canceled);
-                }
-                Ok(RunPollOutcome::InFlight(inspection)) => {
-                    return self
-                        .try_finalize_candidate_from_ready_output(
-                            execution,
-                            spec,
-                            candidate,
-                            created_seq,
-                            &started.handle,
-                            inspection,
-                        )?
-                        .map_or(Ok(DispatchOutcome::InFlight), Ok);
-                }
-                Err(err) => return Err(err),
-            };
+                        &started.handle,
+                        inspection,
+                    )
+                    .await?
+                    .map_or(Ok(DispatchOutcome::InFlight), Ok);
+            }
+            Err(err) => return Err(err),
+        };
 
         self.finalize_candidate_after_terminal_inspection(
             execution,
@@ -1003,9 +1069,10 @@ where
             &started.handle,
             inspection,
         )
+        .await
     }
 
-    fn resume_running_candidate(
+    async fn resume_running_candidate(
         &mut self,
         execution: &mut Execution,
         spec: &ExecutionSpec,
@@ -1022,42 +1089,45 @@ where
             )
         })?;
         let handle = self.runtime.persisted_run_handle(persisted_run_id);
-        let inspection =
-            match self.wait_for_terminal_run(&execution.execution_id, worker_id, &handle) {
-                Ok(RunPollOutcome::Terminal(inspection)) => inspection,
-                Ok(RunPollOutcome::Canceled) => {
-                    self.save_candidate_state(CandidateStateUpdate {
-                        execution_id: &execution.execution_id,
-                        candidate_id: &candidate.candidate_id,
-                        created_seq: candidate.created_seq,
-                        iteration: candidate.iteration,
-                        status: CandidateStatus::Canceled,
-                        runtime_run_id: Some(persisted_run_id.to_string()),
-                        overrides: &candidate.overrides,
-                        succeeded: None,
-                        metrics: &Default::default(),
-                        review_status: None,
-                        revision_round: 0,
-                    })?;
-                    return Ok(DispatchOutcome::Canceled);
-                }
-                Ok(RunPollOutcome::InFlight(inspection)) => {
-                    return self
-                        .try_finalize_candidate_from_ready_output(
-                            execution,
-                            spec,
-                            &CandidateSpec {
-                                candidate_id: candidate.candidate_id.clone(),
-                                overrides: candidate.overrides.clone(),
-                            },
-                            candidate.created_seq,
-                            &handle,
-                            inspection,
-                        )?
-                        .map_or(Ok(DispatchOutcome::InFlight), Ok);
-                }
-                Err(err) => return Err(err),
-            };
+        let inspection = match self
+            .wait_for_terminal_run(&execution.execution_id, worker_id, &handle)
+            .await
+        {
+            Ok(RunPollOutcome::Terminal(inspection)) => inspection,
+            Ok(RunPollOutcome::Canceled) => {
+                self.save_candidate_state(CandidateStateUpdate {
+                    execution_id: &execution.execution_id,
+                    candidate_id: &candidate.candidate_id,
+                    created_seq: candidate.created_seq,
+                    iteration: candidate.iteration,
+                    status: CandidateStatus::Canceled,
+                    runtime_run_id: Some(persisted_run_id.to_string()),
+                    overrides: &candidate.overrides,
+                    succeeded: None,
+                    metrics: &Default::default(),
+                    review_status: None,
+                    revision_round: 0,
+                })?;
+                return Ok(DispatchOutcome::Canceled);
+            }
+            Ok(RunPollOutcome::InFlight(inspection)) => {
+                return self
+                    .try_finalize_candidate_from_ready_output(
+                        execution,
+                        spec,
+                        &CandidateSpec {
+                            candidate_id: candidate.candidate_id.clone(),
+                            overrides: candidate.overrides.clone(),
+                        },
+                        candidate.created_seq,
+                        &handle,
+                        inspection,
+                    )
+                    .await?
+                    .map_or(Ok(DispatchOutcome::InFlight), Ok);
+            }
+            Err(err) => return Err(err),
+        };
 
         let candidate_spec = CandidateSpec {
             candidate_id: candidate.candidate_id.clone(),
@@ -1071,9 +1141,10 @@ where
             &handle,
             inspection,
         )
+        .await
     }
 
-    fn try_finalize_candidate_from_ready_output(
+    async fn try_finalize_candidate_from_ready_output(
         &mut self,
         execution: &mut Execution,
         spec: &ExecutionSpec,
@@ -1092,16 +1163,19 @@ where
                     handle,
                     inspection,
                 )
+                .await
                 .map(Some);
         }
         if inspection.active_stage_count > 0 || inspection.active_microvm_count > 0 {
             return Ok(None);
         }
 
-        match self.runtime.take_structured_output(&inspection.run_id) {
+        match self.runtime.take_structured_output(&inspection.run_id).await {
             StructuredOutputResult::Found(mut output) => {
                 #[cfg(feature = "serde")]
-                let intents = self.collect_candidate_intents_best_effort(handle, &output.intents);
+                let intents = self
+                    .collect_candidate_intents_best_effort(handle, &output.intents)
+                    .await;
                 self.save_candidate_state(CandidateStateUpdate {
                     execution_id: &execution.execution_id,
                     candidate_id: &candidate.candidate_id,
@@ -1178,7 +1252,7 @@ where
         }
     }
 
-    fn finalize_candidate_after_terminal_inspection(
+    async fn finalize_candidate_after_terminal_inspection(
         &mut self,
         execution: &mut Execution,
         spec: &ExecutionSpec,
@@ -1187,10 +1261,12 @@ where
         handle: &str,
         inspection: crate::contract::RuntimeInspection,
     ) -> io::Result<DispatchOutcome> {
-        match self.runtime.take_structured_output(&inspection.run_id) {
+        match self.runtime.take_structured_output(&inspection.run_id).await {
             StructuredOutputResult::Found(mut output) => {
                 #[cfg(feature = "serde")]
-                let intents = self.collect_candidate_intents_best_effort(handle, &output.intents);
+                let intents = self
+                    .collect_candidate_intents_best_effort(handle, &output.intents)
+                    .await;
                 self.save_candidate_state(CandidateStateUpdate {
                     execution_id: &execution.execution_id,
                     candidate_id: &candidate.candidate_id,
@@ -1223,7 +1299,7 @@ where
             }
             StructuredOutputResult::Missing => {
                 #[cfg(feature = "serde")]
-                let intents = self.collect_candidate_intents_best_effort(handle, &[]);
+                let intents = self.collect_candidate_intents_best_effort(handle, &[]).await;
                 let failed = inspection.state == crate::contract::RunState::Failed
                     || spec.policy.missing_output_policy == "mark_failed";
                 self.save_candidate_state(CandidateStateUpdate {
@@ -1266,7 +1342,7 @@ where
             StructuredOutputResult::Error(err) => match err.code {
                 crate::contract::ContractErrorCode::StructuredOutputMissing => {
                     #[cfg(feature = "serde")]
-                    let intents = self.collect_candidate_intents_best_effort(handle, &[]);
+                    let intents = self.collect_candidate_intents_best_effort(handle, &[]).await;
                     let failed = inspection.state == crate::contract::RunState::Failed
                         || spec.policy.missing_output_policy == "mark_failed";
                     self.save_candidate_state(CandidateStateUpdate {
@@ -1347,7 +1423,7 @@ where
         }
     }
 
-    fn execute_execution(
+    async fn execute_execution(
         &mut self,
         execution: &mut Execution,
         spec: &ExecutionSpec,
@@ -1468,20 +1544,26 @@ where
                     }
                 }
                 let outcome = match candidate_record.status {
-                    CandidateStatus::Queued => self.dispatch_candidate(
-                        execution,
-                        spec,
-                        worker_id,
-                        candidate,
-                        iteration,
-                        candidate_seq,
-                    )?,
-                    CandidateStatus::Running => self.resume_running_candidate(
-                        execution,
-                        spec,
-                        worker_id,
-                        &candidate_record,
-                    )?,
+                    CandidateStatus::Queued => {
+                        self.dispatch_candidate(
+                            execution,
+                            spec,
+                            worker_id,
+                            candidate,
+                            iteration,
+                            candidate_seq,
+                        )
+                        .await?
+                    }
+                    CandidateStatus::Running => {
+                        self.resume_running_candidate(
+                            execution,
+                            spec,
+                            worker_id,
+                            &candidate_record,
+                        )
+                        .await?
+                    }
                     CandidateStatus::Completed
                     | CandidateStatus::Failed
                     | CandidateStatus::Canceled => continue,

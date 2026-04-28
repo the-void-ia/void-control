@@ -2,6 +2,9 @@
 use std::io;
 
 #[cfg(feature = "serde")]
+use async_trait::async_trait;
+
+#[cfg(feature = "serde")]
 use crate::orchestration::{CandidateSpec, CommunicationIntent, InboxEntry, InboxSnapshot};
 
 #[cfg(feature = "serde")]
@@ -25,10 +28,11 @@ pub struct VoidBoxRunRef {
 }
 
 #[cfg(feature = "serde")]
+#[async_trait]
 pub trait MessageDeliveryAdapter: Send + Sync {
     fn capabilities(&self) -> Vec<DeliveryCapability>;
 
-    fn inject_at_launch(
+    async fn inject_at_launch(
         &self,
         run: &VoidBoxRunRef,
         candidate: &CandidateSpec,
@@ -37,11 +41,11 @@ pub trait MessageDeliveryAdapter: Send + Sync {
 
     /// Drain intents from the transport buffer.
     /// This is non-idempotent by contract: the second drain observes an empty buffer.
-    fn drain_intents(&self, _run: &VoidBoxRunRef) -> io::Result<Vec<CommunicationIntent>> {
+    async fn drain_intents(&self, _run: &VoidBoxRunRef) -> io::Result<Vec<CommunicationIntent>> {
         Ok(Vec::new())
     }
 
-    fn push_live(&self, _run: &VoidBoxRunRef, _message: &InboxEntry) -> io::Result<()> {
+    async fn push_live(&self, _run: &VoidBoxRunRef, _message: &InboxEntry) -> io::Result<()> {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "live push is unsupported",

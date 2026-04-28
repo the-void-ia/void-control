@@ -2,6 +2,9 @@
 use std::io;
 
 #[cfg(feature = "serde")]
+use async_trait::async_trait;
+
+#[cfg(feature = "serde")]
 use crate::contract::{ContractError, ContractErrorCode};
 #[cfg(feature = "serde")]
 use crate::orchestration::{CandidateSpec, CommunicationIntent, InboxSnapshot};
@@ -50,7 +53,7 @@ impl HttpSidecarAdapter {
         Self { transport }
     }
 
-    fn request(
+    async fn request(
         &self,
         _run: &VoidBoxRunRef,
         method: &str,
@@ -63,6 +66,7 @@ impl HttpSidecarAdapter {
         // assumed stable for the lifetime of the adapter.
         self.transport
             .request(method, path, body)
+            .await
             .map_err(contract_error_to_io)
     }
 }
@@ -75,6 +79,7 @@ impl Default for HttpSidecarAdapter {
 }
 
 #[cfg(feature = "serde")]
+#[async_trait]
 impl MessageDeliveryAdapter for HttpSidecarAdapter {
     fn capabilities(&self) -> Vec<DeliveryCapability> {
         vec![
@@ -83,7 +88,7 @@ impl MessageDeliveryAdapter for HttpSidecarAdapter {
         ]
     }
 
-    fn inject_at_launch(
+    async fn inject_at_launch(
         &self,
         run: &VoidBoxRunRef,
         candidate: &CandidateSpec,
@@ -92,7 +97,7 @@ impl MessageDeliveryAdapter for HttpSidecarAdapter {
         debug_assert_eq!(candidate.candidate_id, inbox.candidate_id);
         let body = serde_json::to_string(inbox).map_err(io::Error::other)?;
         let path = format!("/v1/runs/{}/inbox", run.run_id);
-        let response = self.request(run, "PUT", &path, &body)?;
+        let response = self.request(run, "PUT", &path, &body).await?;
         if response.status >= 400 {
             return Err(io::Error::other(format!(
                 "void-box inbox injection failed: HTTP {}",
@@ -102,9 +107,9 @@ impl MessageDeliveryAdapter for HttpSidecarAdapter {
         Ok(())
     }
 
-    fn drain_intents(&self, run: &VoidBoxRunRef) -> io::Result<Vec<CommunicationIntent>> {
+    async fn drain_intents(&self, run: &VoidBoxRunRef) -> io::Result<Vec<CommunicationIntent>> {
         let path = format!("/v1/runs/{}/intents", run.run_id);
-        let response = self.request(run, "GET", &path, "")?;
+        let response = self.request(run, "GET", &path, "").await?;
         if response.status == 404 {
             return Err(io::Error::new(
                 io::ErrorKind::NotFound,
