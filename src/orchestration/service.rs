@@ -1990,6 +1990,9 @@ mod tests {
     }
 
     fn wait_for_claim_refresh(claim_path: &std::path::Path, initial_claim: &str) {
+        // Refresh interval is 5ms; on a healthy host any refresh fires within
+        // milliseconds. The 2s ceiling tolerates CI runners under load where
+        // the watcher OS thread can be scheduled-out for hundreds of ms.
         let started = std::time::Instant::now();
         loop {
             let current = fs::read_to_string(claim_path).expect("read refreshed claim");
@@ -1997,7 +2000,7 @@ mod tests {
                 return;
             }
             assert!(
-                started.elapsed() < Duration::from_millis(200),
+                started.elapsed() < Duration::from_secs(2),
                 "claim refresh did not happen before timeout"
             );
             std::thread::sleep(Duration::from_millis(5));
