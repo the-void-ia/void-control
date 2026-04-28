@@ -34,7 +34,7 @@ rustyline = { version = "14", optional = true }
 # small and unconditional; the heavy server/client stack stays gated
 # behind `serde`.
 async-trait = "0.1"
-tokio = { version = "1", features = ["rt", "macros", "net", "signal", "time", "sync"] }
+tokio = { version = "1", features = ["rt", "macros", "net", "signal", "time", "sync", "io-util"] }
 futures = "0.3"
 
 # Async HTTP transport (gated). `hyper_util::client::legacy::Client`

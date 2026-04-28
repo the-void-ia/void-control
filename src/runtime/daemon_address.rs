@@ -361,6 +361,7 @@ pub(crate) fn write_owner_only_file(path: &Path, contents: &str) -> std::io::Res
 mod tests {
     use super::*;
     use std::sync::Mutex;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     // Env mutation is process-global; serialize tests that set/unset env vars.
     static ENV_LOCK: Mutex<()> = Mutex::new(());

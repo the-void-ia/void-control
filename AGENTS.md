@@ -21,6 +21,25 @@ belongs to `void-box`.
 When changing code here, preserve that boundary. Control-plane orchestration and
 runtime transport concerns should stay separate.
 
+## Async runtime
+
+`voidctl serve` runs on a single-threaded `current_thread` tokio runtime
+(`#[tokio::main(flavor = "current_thread")]` in `src/bin/voidctl.rs`). The
+bridge HTTP server (`axum`) and the worker tick (`process_pending_executions_once`)
+share the same runtime via a `tokio::task::LocalSet` so neither needs to be
+`Send`. `ExecutionRuntime` and `MessageDeliveryAdapter` are `?Send` async
+traits because the orchestration types they parameterize hold non-`Send`
+adapters (`Box<dyn ProviderLaunchAdapter>`, plus test mocks that use
+`Rc<RefCell<…>>`).
+
+Revisit the runtime flavor when:
+
+- the bridge gains SSE/WebSocket streaming endpoints (concurrent long-lived
+  connections), or
+- bridge throughput becomes a measurable bottleneck.
+
+Until then, `current_thread` is simpler to reason about and uses less memory.
+
 ## Repository layout
 
 - `spec/`: canonical specifications and design contracts

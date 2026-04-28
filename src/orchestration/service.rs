@@ -37,12 +37,14 @@ use serde::Serialize;
 /// transport can be `.await`ed without a `block_on` shim. Pure-compute
 /// helpers (`persisted_run_handle`, `inline_poll_*`, `delivery_run_ref`)
 /// stay sync — they don't do I/O.
-#[async_trait]
-pub trait ExecutionRuntime: Send {
-    async fn start_run(
-        &mut self,
-        request: StartRequest,
-    ) -> Result<StartResult, ContractError>;
+///
+/// `#[async_trait(?Send)]` because void-control runs on a `current_thread`
+/// tokio runtime: tasks live on a single OS thread, and adding `Send`
+/// bounds would force test mocks holding `Rc<RefCell<…>>` recorders to
+/// switch to `Arc<Mutex<…>>` for no behavioural reason.
+#[async_trait(?Send)]
+pub trait ExecutionRuntime {
+    async fn start_run(&mut self, request: StartRequest) -> Result<StartResult, ContractError>;
     async fn inspect_run(&self, handle: &str) -> Result<RuntimeInspection, ContractError>;
     async fn take_structured_output(&mut self, run_id: &str) -> StructuredOutputResult;
 
@@ -265,6 +267,12 @@ where
     /// fans out to the runtime; the surrounding claim/refresh/release plumbing
     /// stays synchronous filesystem work running on the same task.
     ///
+    /// The future returned by `operation` is a `LocalBoxFuture`: void-control
+    /// runs on a `current_thread` tokio runtime, so the bridge handlers, the
+    /// worker tick, and any service call all live on a single thread. A `Send`
+    /// bound here would force `ExecutionService` and the `ProviderLaunchAdapter`
+    /// trait object to be `Send`, neither of which they need to be.
+    ///
     /// The refresh watcher is a `std::thread`, not a tokio task: it does
     /// blocking filesystem `metadata`/`write` calls every
     /// `claim_refresh_interval_ms` and would otherwise need its own
@@ -280,8 +288,7 @@ where
         F: for<'a> FnOnce(
             &'a mut Self,
             String,
-        )
-            -> futures::future::BoxFuture<'a, io::Result<T>>,
+        ) -> futures::future::LocalBoxFuture<'a, io::Result<T>>,
     {
         let worker_id = Self::worker_id();
         if !self.store.claim_execution(execution_id, &worker_id)? {
@@ -553,10 +560,7 @@ where
     }
 
     #[cfg(feature = "serde")]
-    pub async fn dispatch_execution_once(
-        &mut self,
-        execution_id: &str,
-    ) -> io::Result<Execution> {
+    pub async fn dispatch_execution_once(&mut self, execution_id: &str) -> io::Result<Execution> {
         let id_owned = execution_id.to_string();
         self.with_claimed_execution(execution_id, |service, worker_id| {
             Box::pin(async move {
@@ -1170,7 +1174,11 @@ where
             return Ok(None);
         }
 
-        match self.runtime.take_structured_output(&inspection.run_id).await {
+        match self
+            .runtime
+            .take_structured_output(&inspection.run_id)
+            .await
+        {
             StructuredOutputResult::Found(mut output) => {
                 #[cfg(feature = "serde")]
                 let intents = self
@@ -1261,7 +1269,11 @@ where
         handle: &str,
         inspection: crate::contract::RuntimeInspection,
     ) -> io::Result<DispatchOutcome> {
-        match self.runtime.take_structured_output(&inspection.run_id).await {
+        match self
+            .runtime
+            .take_structured_output(&inspection.run_id)
+            .await
+        {
             StructuredOutputResult::Found(mut output) => {
                 #[cfg(feature = "serde")]
                 let intents = self
@@ -1299,7 +1311,9 @@ where
             }
             StructuredOutputResult::Missing => {
                 #[cfg(feature = "serde")]
-                let intents = self.collect_candidate_intents_best_effort(handle, &[]).await;
+                let intents = self
+                    .collect_candidate_intents_best_effort(handle, &[])
+                    .await;
                 let failed = inspection.state == crate::contract::RunState::Failed
                     || spec.policy.missing_output_policy == "mark_failed";
                 self.save_candidate_state(CandidateStateUpdate {
@@ -1342,7 +1356,9 @@ where
             StructuredOutputResult::Error(err) => match err.code {
                 crate::contract::ContractErrorCode::StructuredOutputMissing => {
                     #[cfg(feature = "serde")]
-                    let intents = self.collect_candidate_intents_best_effort(handle, &[]).await;
+                    let intents = self
+                        .collect_candidate_intents_best_effort(handle, &[])
+                        .await;
                     let failed = inspection.state == crate::contract::RunState::Failed
                         || spec.policy.missing_output_policy == "mark_failed";
                     self.save_candidate_state(CandidateStateUpdate {
@@ -1556,13 +1572,8 @@ where
                         .await?
                     }
                     CandidateStatus::Running => {
-                        self.resume_running_candidate(
-                            execution,
-                            spec,
-                            worker_id,
-                            &candidate_record,
-                        )
-                        .await?
+                        self.resume_running_candidate(execution, spec, worker_id, &candidate_record)
+                            .await?
                     }
                     CandidateStatus::Completed
                     | CandidateStatus::Failed
@@ -1901,58 +1912,81 @@ mod tests {
     use crate::runtime::MockRuntime;
     use std::fs;
     use std::path::PathBuf;
-    use std::sync::mpsc;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-    #[test]
-    fn claimed_execution_refresh_prevents_other_worker_from_stealing_stale_claim() {
-        let execution_id = "exec-claim-refresh";
-        let root = temp_store_dir("claim-refresh");
-        let claim_path = root.join(execution_id).join("claim.txt");
-        let store = FsExecutionStore::new(root);
-        store
-            .create_execution(&Execution::new(execution_id, "swarm", "goal"))
-            .expect("create execution");
+    #[tokio::test(flavor = "current_thread")]
+    async fn claimed_execution_refresh_prevents_other_worker_from_stealing_stale_claim() {
+        // The worker task is `?Send` (it constructs an `ExecutionService<R>`
+        // whose `Box<dyn ProviderLaunchAdapter>` has no `Send` bound), so
+        // `tokio::spawn` is wrong; we need `spawn_local` plus a `LocalSet`
+        // to drive both the worker and the racing assertion side on the
+        // same thread.
+        use tokio::sync::oneshot;
 
-        std::env::set_var("VOID_CONTROL_CLAIM_TTL_MS", "40");
-        std::env::set_var("VOID_CONTROL_CLAIM_REFRESH_MS", "5");
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async move {
+                let execution_id = "exec-claim-refresh";
+                let root = temp_store_dir("claim-refresh");
+                let claim_path = root.join(execution_id).join("claim.txt");
+                let store = FsExecutionStore::new(root);
+                store
+                    .create_execution(&Execution::new(execution_id, "swarm", "goal"))
+                    .expect("create execution");
 
-        let worker_store = store.clone();
-        let (started_tx, started_rx) = mpsc::channel();
-        let (release_tx, release_rx) = mpsc::channel();
-        let worker = std::thread::spawn(move || {
-            let mut service = ExecutionService::new(
-                GlobalConfig {
-                    max_concurrent_child_runs: 1,
-                },
-                MockRuntime::new(),
-                worker_store,
-            );
-            service
-                .with_claimed_execution(execution_id, |_service, _worker_id| {
-                    started_tx.send(()).expect("signal start");
-                    release_rx
-                        .recv_timeout(Duration::from_millis(500))
-                        .expect("wait for release signal");
-                    Ok(())
+                std::env::set_var("VOID_CONTROL_CLAIM_TTL_MS", "40");
+                std::env::set_var("VOID_CONTROL_CLAIM_REFRESH_MS", "5");
+
+                let worker_store = store.clone();
+                let (started_tx, started_rx) = oneshot::channel::<()>();
+                let (release_tx, release_rx) = oneshot::channel::<()>();
+                let worker = tokio::task::spawn_local(async move {
+                    let mut service = ExecutionService::new(
+                        GlobalConfig {
+                            max_concurrent_child_runs: 1,
+                        },
+                        MockRuntime::new(),
+                        worker_store,
+                    );
+                    service
+                        .with_claimed_execution(execution_id, move |_service, _worker_id| {
+                            Box::pin(async move {
+                                started_tx.send(()).expect("signal start");
+                                release_rx.await.expect("wait for release signal");
+                                Ok(())
+                            })
+                        })
+                        .await
+                        .expect("claimed operation should succeed");
+                });
+
+                started_rx.await.expect("wait for claim");
+                // The refresh watcher is a real OS thread, so the claim file
+                // updates without any tokio cooperation. We only need the
+                // current_thread executor to yield long enough for the watcher
+                // to write at least once, which `wait_for_claim_refresh`
+                // tolerates via its 200ms ceiling.
+                let claim_path_clone = claim_path.clone();
+                tokio::task::spawn_blocking(move || {
+                    let initial_claim =
+                        fs::read_to_string(&claim_path_clone).expect("read initial claim");
+                    wait_for_claim_refresh(&claim_path_clone, &initial_claim);
                 })
-                .expect("claimed operation should succeed");
-        });
+                .await
+                .expect("refresh observation");
 
-        started_rx.recv().expect("wait for claim");
-        let initial_claim = fs::read_to_string(&claim_path).expect("read initial claim");
-        wait_for_claim_refresh(&claim_path, &initial_claim);
+                let stolen = store
+                    .claim_execution(execution_id, "other-worker")
+                    .expect("claim should be denied while refreshed");
+                release_tx.send(()).expect("release worker");
 
-        let stolen = store
-            .claim_execution(execution_id, "other-worker")
-            .expect("claim should be denied while refreshed");
-        release_tx.send(()).expect("release worker");
+                assert!(!stolen, "other worker should not steal a refreshed claim");
 
-        assert!(!stolen, "other worker should not steal a refreshed claim");
-
-        worker.join().expect("worker thread should finish");
-        std::env::remove_var("VOID_CONTROL_CLAIM_TTL_MS");
-        std::env::remove_var("VOID_CONTROL_CLAIM_REFRESH_MS");
+                worker.await.expect("worker task should finish");
+                std::env::remove_var("VOID_CONTROL_CLAIM_TTL_MS");
+                std::env::remove_var("VOID_CONTROL_CLAIM_REFRESH_MS");
+            })
+            .await;
     }
 
     fn temp_store_dir(label: &str) -> PathBuf {

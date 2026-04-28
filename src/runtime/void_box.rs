@@ -499,7 +499,7 @@ impl VoidBoxRuntimeClient {
 /// rather than passed per-call. This keeps the per-call surface narrow and
 /// avoids the AF_UNIX impl having to ignore an argument it can't consume.
 #[async_trait]
-pub(crate) trait HttpTransport {
+pub(crate) trait HttpTransport: Send + Sync {
     async fn request(
         &self,
         method: &str,
@@ -624,9 +624,7 @@ fn build_request(
 
 async fn send_with_timeout<F, B>(fut: F, display_url: &str) -> Result<HttpResponse, ContractError>
 where
-    F: std::future::Future<
-        Output = Result<hyper::Response<B>, hyper_util::client::legacy::Error>,
-    >,
+    F: std::future::Future<Output = Result<hyper::Response<B>, hyper_util::client::legacy::Error>>,
     B: hyper::body::Body<Data = Bytes> + Unpin,
     B::Error: std::fmt::Display,
 {
@@ -1523,7 +1521,10 @@ mod tests {
             404,
             r#"{"error":"not found"}"#,
         )]);
-        let err = c.inspect("vb:run-404").await.expect_err("expected not found");
+        let err = c
+            .inspect("vb:run-404")
+            .await
+            .expect_err("expected not found");
         assert_eq!(err.code, ContractErrorCode::NotFound);
     }
 
@@ -1620,16 +1621,20 @@ mod tests {
 
     #[tokio::test]
     async fn unix_transport_emits_no_authorization_header() {
-        // Stand up an httpmock unix-socket server, route a request through
-        // hyperlocal, and assert the daemon never saw an Authorization header.
-        // This guards against the AF_UNIX-leaks-credentials regression even
-        // though daemon-side enforce_auth would short-circuit it.
-        use httpmock::prelude::*;
-
+        // Bind a one-shot unix listener, route a request through the
+        // hyper-util AF_UNIX transport, and assert the bytes hyper put on the
+        // wire don't contain `Authorization:`. httpmock 0.7 has no AF_UNIX
+        // server, and the production hyper-util writes the same HTTP/1.1
+        // dialect onto the socket regardless of executor, so a raw read +
+        // string-search captures everything we care about.
+        //
         // AF_UNIX paths are bounded by `SUN_LEN` (~104 bytes on macOS) so we
         // bind under `/tmp` directly with a short suffix rather than via
         // `env::temp_dir()`, which on macOS resolves to a long
         // `/var/folders/...` path.
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::UnixListener;
+
         let socket = std::path::PathBuf::from(format!(
             "/tmp/vc-na-{}-{}.sock",
             std::process::id(),
@@ -1640,21 +1645,33 @@ mod tests {
                 & 0xfff_ffff
         ));
         let _ = std::fs::remove_file(&socket);
+        let listener = UnixListener::bind(&socket).expect("bind");
 
-        let server = MockServer::connect_async(&socket).await;
-        let mock = server
-            .mock_async(|when, then| {
-                when.method(GET)
-                    .path("/v1/health")
-                    .matches(|req| {
-                        !req.headers
-                            .iter()
-                            .flatten()
-                            .any(|(name, _)| name.eq_ignore_ascii_case("authorization"))
-                    });
-                then.status(200).body("{}");
-            })
-            .await;
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+        let captured_clone = captured.clone();
+        let server_task = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            let mut bytes = Vec::new();
+            // Read until end-of-headers; that's enough to inspect the
+            // request shape. hyper-util sends the full request in one
+            // contiguous write for our `Full<Bytes>` body.
+            let mut buf = [0u8; 4096];
+            loop {
+                let n = stream.read(&mut buf).await.expect("read");
+                if n == 0 {
+                    break;
+                }
+                bytes.extend_from_slice(&buf[..n]);
+                if bytes.windows(4).any(|w| w == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            *captured_clone.lock().unwrap() = bytes;
+            let _ = stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+                .await;
+            let _ = stream.shutdown().await;
+        });
 
         let transport = super::UnixHttpTransport::new(socket.clone());
         let resp = transport
@@ -1662,7 +1679,13 @@ mod tests {
             .await
             .expect("unix request");
         assert_eq!(resp.status, 200);
-        mock.assert_async().await;
+        server_task.await.expect("server task");
+
+        let request = String::from_utf8_lossy(&captured.lock().unwrap()).into_owned();
+        assert!(
+            !request.to_ascii_lowercase().contains("authorization:"),
+            "AF_UNIX request must not carry an Authorization header; got:\n{request}"
+        );
         let _ = std::fs::remove_file(&socket);
     }
 
@@ -1680,7 +1703,8 @@ mod tests {
             })
             .await;
 
-        let transport = super::TcpHttpTransport::new(server.base_url(), Some("hunter2".to_string()));
+        let transport =
+            super::TcpHttpTransport::new(server.base_url(), Some("hunter2".to_string()));
         let resp = transport
             .request("GET", "/v1/health", "")
             .await

@@ -194,12 +194,9 @@ fn ensure_object(value: &mut Value) -> &mut Map<String, Value> {
     value.as_object_mut().expect("object value")
 }
 
-#[async_trait::async_trait]
+#[async_trait::async_trait(?Send)]
 impl ExecutionRuntime for MockRuntime {
-    async fn start_run(
-        &mut self,
-        request: StartRequest,
-    ) -> Result<StartResult, ContractError> {
+    async fn start_run(&mut self, request: StartRequest) -> Result<StartResult, ContractError> {
         // MockRuntime is in-process; the async wrapper is a no-op suspension
         // point so the trait shape matches the live client. No actual I/O.
         self.start(request)
@@ -223,12 +220,9 @@ impl ExecutionRuntime for MockRuntime {
 }
 
 #[cfg(feature = "serde")]
-#[async_trait::async_trait]
+#[async_trait::async_trait(?Send)]
 impl ExecutionRuntime for VoidBoxRuntimeClient {
-    async fn start_run(
-        &mut self,
-        request: StartRequest,
-    ) -> Result<StartResult, ContractError> {
+    async fn start_run(&mut self, request: StartRequest) -> Result<StartResult, ContractError> {
         self.start(request).await
     }
 

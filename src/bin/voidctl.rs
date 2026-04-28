@@ -1826,7 +1826,8 @@ Policy presets: fast | balanced | safe"
         match command {
             ExecutionCommand::Submit { spec, stdin } => {
                 let spec = load_execution_spec_input(spec.as_deref(), stdin)?;
-                match bridge_request(&bridge_base_url, "POST", "/v1/executions", Some(&spec)).await {
+                match bridge_request(&bridge_base_url, "POST", "/v1/executions", Some(&spec)).await
+                {
                     Ok(response) => {
                         if response.status >= 400 {
                             return Err(bridge_error_message(&response));
@@ -1844,7 +1845,9 @@ Policy presets: fast | balanced | safe"
                     "POST",
                     "/v1/executions/dry-run",
                     Some(&spec),
-                ).await {
+                )
+                .await
+                {
                     Ok(response) => {
                         if response.status >= 400 {
                             let valid = response
@@ -1911,7 +1914,8 @@ Policy presets: fast | balanced | safe"
                                 last_line = line;
                             }
                             let path = format!("/v1/executions/{execution_id}/events");
-                            let response = bridge_request(&bridge_base_url, "GET", &path, None).await?;
+                            let response =
+                                bridge_request(&bridge_base_url, "GET", &path, None).await?;
                             if response.status >= 400 {
                                 return Err(bridge_error_message(&response));
                             }
@@ -2348,7 +2352,9 @@ Policy presets: fast | balanced | safe"
         match command {
             TeamCommand::DryRun { spec, stdin } => {
                 let spec = load_execution_spec_input(spec.as_deref(), stdin)?;
-                match bridge_request(&bridge_base_url, "POST", "/v1/teams/dry-run", Some(&spec)).await {
+                match bridge_request(&bridge_base_url, "POST", "/v1/teams/dry-run", Some(&spec))
+                    .await
+                {
                     Ok(response) => {
                         if response.status >= 400 {
                             return Err(bridge_error_message(&response));
@@ -2693,7 +2699,9 @@ Policy presets: fast | balanced | safe"
                 "GET",
                 &format!("/v1/executions/{execution_id}"),
                 None,
-            ).await {
+            )
+            .await
+            {
                 Ok(response) => print_execution_summary(&response.json),
                 Err(err) => println!("error: {err}"),
             },
@@ -2702,7 +2710,9 @@ Policy presets: fast | balanced | safe"
                 "POST",
                 &format!("/v1/executions/{execution_id}/pause"),
                 None,
-            ).await {
+            )
+            .await
+            {
                 Ok(response) => println!(
                     "execution_id={} status={}",
                     response
@@ -2723,7 +2733,9 @@ Policy presets: fast | balanced | safe"
                 "POST",
                 &format!("/v1/executions/{execution_id}/resume"),
                 None,
-            ).await {
+            )
+            .await
+            {
                 Ok(response) => println!(
                     "execution_id={} status={}",
                     response
@@ -2744,7 +2756,9 @@ Policy presets: fast | balanced | safe"
                 "POST",
                 &format!("/v1/executions/{execution_id}/cancel"),
                 None,
-            ).await {
+            )
+            .await
+            {
                 Ok(response) => println!(
                     "execution_id={} status={}",
                     response
@@ -2779,7 +2793,9 @@ Policy presets: fast | balanced | safe"
                     "PATCH",
                     &format!("/v1/executions/{execution_id}/policy"),
                     Some(&body),
-                ).await {
+                )
+                .await
+                {
                     Ok(response) => println!(
                         "execution_id={} max_iterations={} max_concurrent_candidates={}",
                         response
@@ -2843,7 +2859,9 @@ Policy presets: fast | balanced | safe"
                     "GET",
                     &format!("/v1/templates/{template_id}"),
                     None,
-                ).await {
+                )
+                .await
+                {
                     Ok(response) => {
                         if response.status >= 400 {
                             println!("error: {}", bridge_error_message(&response));
@@ -3378,13 +3396,9 @@ mod tests {
         assert_eq!(execution_result_label_for_mode("swarm"), "best_candidate");
     }
 
-    #[test]
-    fn parses_host_port_without_explicit_port() {
-        assert_eq!(
-            parse_host_port("http://127.0.0.1").unwrap(),
-            ("127.0.0.1".to_string(), 80)
-        );
-    }
+    // The `parses_host_port_without_explicit_port` test was withdrawn when
+    // `parse_host_port` was removed; URL parsing now lives in hyper-util,
+    // and the bridge URL is fed straight to `hyper::Uri::parse`.
 
     #[test]
     fn bridge_error_message_prefers_message_field() {

@@ -28,8 +28,8 @@ pub struct VoidBoxRunRef {
 }
 
 #[cfg(feature = "serde")]
-#[async_trait]
-pub trait MessageDeliveryAdapter: Send + Sync {
+#[async_trait(?Send)]
+pub trait MessageDeliveryAdapter {
     fn capabilities(&self) -> Vec<DeliveryCapability>;
 
     async fn inject_at_launch(

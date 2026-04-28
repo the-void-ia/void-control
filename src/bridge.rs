@@ -418,10 +418,7 @@ fn build_router(shared: std::sync::Arc<BridgeState>) -> axum::Router {
         .route("/v1/batch-runs/{*rest}", get(route_batch_get))
         .route("/v1/yolo-runs/{*rest}", get(route_batch_get))
         .route("/v1/templates", get(route_template_list))
-        .route(
-            "/v1/templates/{template_id}",
-            get(route_template_get),
-        )
+        .route("/v1/templates/{template_id}", get(route_template_get))
         .route(
             "/v1/templates/{template_id}/dry-run",
             post(route_template_dry_run),
@@ -430,11 +427,11 @@ fn build_router(shared: std::sync::Arc<BridgeState>) -> axum::Router {
             "/v1/templates/{template_id}/execute",
             post(route_template_execute),
         )
-        .route("/v1/executions", post(route_execution_create).get(route_execution_list))
         .route(
-            "/v1/executions/{execution_id}",
-            get(route_execution_get),
+            "/v1/executions",
+            post(route_execution_create).get(route_execution_list),
         )
+        .route("/v1/executions/{execution_id}", get(route_execution_get))
         .route(
             "/v1/executions/{execution_id}/events",
             get(route_execution_events),
@@ -2152,8 +2149,7 @@ fn json_response<T: Serialize>(status: u16, body: &T) -> JsonHttpResponse {
 fn into_axum(response: JsonHttpResponse) -> axum::response::Response {
     use axum::http::{header, HeaderValue, StatusCode};
     use axum::response::IntoResponse;
-    let status =
-        StatusCode::from_u16(response.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let status = StatusCode::from_u16(response.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
     let mut resp = (status, response.body).into_response();
     resp.headers_mut().insert(
         header::CONTENT_TYPE,
@@ -2239,9 +2235,7 @@ async fn route_template_list() -> axum::response::Response {
 }
 
 #[cfg(feature = "serde")]
-async fn route_template_get(
-    uri: axum::extract::OriginalUri,
-) -> axum::response::Response {
+async fn route_template_get(uri: axum::extract::OriginalUri) -> axum::response::Response {
     let path = uri.0.path();
     into_axum(handle_template_get(path))
 }
