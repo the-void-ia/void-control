@@ -54,33 +54,42 @@ pub struct VoidBoxRuntimeClient {
 }
 
 impl VoidBoxRuntimeClient {
-    /// Construct a client.
+    /// Construct a client. Panics if construction fails (e.g. TCP daemon URL
+    /// with no resolvable bearer token). See [`Self::try_new`] for a fallible
+    /// variant suitable for library consumers and tests.
     ///
     /// The transport is selected once from `base_url`:
     /// - `unix:///abs/path` → AF_UNIX transport, no auth header.
     /// - `http://host:port` or bare `host:port` → TCP transport. A bearer
     ///   token must be resolvable from `VOIDBOX_DAEMON_TOKEN_FILE`,
     ///   `VOIDBOX_DAEMON_TOKEN`, or `$XDG_CONFIG_HOME/voidbox/daemon-token`;
-    ///   construction panics if none is configured (we fail at construction
+    ///   construction fails if none is configured (we fail at construction
     ///   so a misconfigured deployment doesn't dial and discover via 401).
     ///
     /// Empty `base_url` is treated as "use the default discovered AF_UNIX
     /// socket path", mirroring the daemon's own auto-discovery so a same-uid
     /// invocation needs no configuration.
     pub fn new(base_url: String, poll_interval_ms: u64) -> Self {
+        Self::try_new(base_url, poll_interval_ms).unwrap_or_else(|err| {
+            panic!("void-box runtime client construction failed: {err}");
+        })
+    }
+
+    /// Fallible constructor. Returns `Err` if the daemon URL is malformed or
+    /// if a TCP target lacks a resolvable bearer token. Same dispatch and
+    /// auto-discovery contract as [`Self::new`].
+    pub fn try_new(base_url: String, poll_interval_ms: u64) -> Result<Self, String> {
         let url = if base_url.trim().is_empty() {
             default_unix_url()
         } else {
             base_url
         };
-        let transport = build_transport(&url).unwrap_or_else(|err| {
-            panic!("void-box runtime client construction failed: {err}");
-        });
-        Self {
+        let transport = build_transport(&url)?;
+        Ok(Self {
             base_url: url,
             poll_interval_ms,
             transport: transport.into(),
-        }
+        })
     }
 
     #[cfg(test)]

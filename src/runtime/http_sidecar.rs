@@ -27,32 +27,46 @@ pub struct HttpSidecarAdapter {
 #[cfg(feature = "serde")]
 impl HttpSidecarAdapter {
     /// Construct a sidecar adapter that talks to the daemon at the
-    /// auto-discovered AF_UNIX socket. Uses the same scheme dispatch and
-    /// token resolution as [`crate::runtime::VoidBoxRuntimeClient::new`].
+    /// auto-discovered AF_UNIX socket. Panics on construction failure; see
+    /// [`Self::try_new`] for a fallible variant.
     pub fn new() -> Self {
         Self::with_daemon_url(default_unix_url())
     }
 
-    /// Construct a sidecar adapter pinned to an explicit daemon URL.
+    /// Fallible counterpart of [`Self::new`]. Returns `Err` if the resolved
+    /// AF_UNIX URL fails to build a transport (essentially never in practice
+    /// — AF_UNIX has no token requirement).
+    pub fn try_new() -> Result<Self, String> {
+        Self::try_with_daemon_url(default_unix_url())
+    }
+
+    /// Construct a sidecar adapter pinned to an explicit daemon URL. Panics
+    /// if construction fails (e.g. TCP without a resolvable token); see
+    /// [`Self::try_with_daemon_url`] for a fallible variant.
     ///
-    /// Same dispatch contract as `VoidBoxRuntimeClient::new`:
+    /// Same dispatch contract as [`crate::runtime::VoidBoxRuntimeClient::new`]:
     /// - `unix:///abs/path` → AF_UNIX, no auth header.
     /// - `http://host:port` (or bare `host:port`) → TCP with bearer token
     ///   resolved from `VOIDBOX_DAEMON_TOKEN_FILE`, `VOIDBOX_DAEMON_TOKEN`,
-    ///   or `$XDG_CONFIG_HOME/voidbox/daemon-token`. Construction panics if
-    ///   TCP is configured and no token resolves.
+    ///   or `$XDG_CONFIG_HOME/voidbox/daemon-token`.
     pub fn with_daemon_url(daemon_url: String) -> Self {
+        Self::try_with_daemon_url(daemon_url).unwrap_or_else(|err| {
+            panic!("HttpSidecarAdapter construction failed: {err}");
+        })
+    }
+
+    /// Fallible counterpart of [`Self::with_daemon_url`]. Returns `Err` for a
+    /// malformed URL or a TCP target that lacks a resolvable bearer token.
+    pub fn try_with_daemon_url(daemon_url: String) -> Result<Self, String> {
         let url = if daemon_url.trim().is_empty() {
             default_unix_url()
         } else {
             daemon_url
         };
-        let transport = build_transport(&url).unwrap_or_else(|err| {
-            panic!("HttpSidecarAdapter construction failed: {err}");
-        });
-        Self {
+        let transport = build_transport(&url)?;
+        Ok(Self {
             transport: transport.into(),
-        }
+        })
     }
 
     async fn request(
