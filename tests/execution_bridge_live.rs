@@ -205,15 +205,6 @@ async fn bridge_multiple_executions_complete_against_live_daemon() {
 #[tokio::test]
 #[ignore = "requires live void-box daemon"]
 async fn bridge_pause_resume_and_cancel_work_against_live_daemon() {
-    // The pause / cancel actors need to run concurrently with the worker tick;
-    // because ExecutionService and friends are `?Send`, they can't be moved
-    // through `tokio::spawn`, so we use `LocalSet::spawn_local` here.
-    tokio::task::LocalSet::new()
-        .run_until(bridge_pause_resume_and_cancel_inner())
-        .await;
-}
-
-async fn bridge_pause_resume_and_cancel_inner() {
     let root = temp_root("bridge-live-control");
     let spec_dir = root.join("specs");
     let execution_dir = root.join("executions");
@@ -238,7 +229,7 @@ async fn bridge_pause_resume_and_cancel_inner() {
     let pause_execution_dir = execution_dir.clone();
     let pause_spec_dir = spec_dir.clone();
     let pause_execution_id = execution_id.clone();
-    tokio::task::spawn_local(async move {
+    tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
         let _ = void_control::bridge::handle_bridge_request_with_dirs_for_test(
             "POST",
@@ -285,7 +276,7 @@ async fn bridge_pause_resume_and_cancel_inner() {
     let cancel_execution_dir = execution_dir.clone();
     let cancel_spec_dir = spec_dir.clone();
     let cancel_execution_id = execution_id.clone();
-    tokio::task::spawn_local(async move {
+    tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
         let _ = void_control::bridge::handle_bridge_request_with_dirs_for_test(
             "POST",
