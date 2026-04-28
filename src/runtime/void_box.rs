@@ -1,7 +1,14 @@
-use std::io::{Read, Write};
-use std::net::TcpStream;
-use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
+use std::time::Duration;
+
+use async_trait::async_trait;
+use bytes::Bytes;
+use http_body_util::{BodyExt, Full};
+use hyper::{Method, Request as HyperRequest};
+use hyper_util::client::legacy::connect::HttpConnector;
+use hyper_util::client::legacy::Client as HyperClient;
+use hyper_util::rt::TokioExecutor;
+use hyperlocal::{UnixConnector, Uri as HyperLocalUri};
 
 use crate::contract::{
     from_void_box_run_and_events_json, from_void_box_run_json, map_void_box_status, ContractError,
@@ -15,6 +22,21 @@ use crate::runtime::daemon_address::{
 };
 #[cfg(feature = "serde")]
 use crate::runtime::VoidBoxRunRef;
+
+/// Per-request HTTP timeout for the daemon transport. Applied uniformly to
+/// both TCP and AF_UNIX dispatch so callers see the same bound regardless of
+/// the configured socket scheme. Mirrors void-box's CLI backend.
+const HTTP_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Hyper legacy client over a TCP connector. The legacy client wraps a
+/// connection pool over `Connection: keep-alive`, matching what the daemon
+/// serves on the same transport.
+type TcpHyperClient = HyperClient<HttpConnector, Full<Bytes>>;
+
+/// Hyper legacy client over `hyperlocal::UnixConnector`. Same client shape as
+/// `TcpHyperClient` — only the connector differs, so dispatch can share one
+/// code path once the URI is built.
+type UnixHyperClient = HyperClient<UnixConnector, Full<Bytes>>;
 
 pub struct VoidBoxRuntimeClient {
     base_url: String,
@@ -77,7 +99,7 @@ impl VoidBoxRuntimeClient {
         })
     }
 
-    pub fn start(&self, request: StartRequest) -> Result<StartResult, ContractError> {
+    pub async fn start(&self, request: StartRequest) -> Result<StartResult, ContractError> {
         request
             .policy
             .validate()
@@ -92,7 +114,7 @@ impl VoidBoxRuntimeClient {
         })
         .to_string();
 
-        let response = self.http_post("/v1/runs", &payload)?;
+        let response = self.http_post("/v1/runs", &payload).await?;
         if response.status == 404 {
             return Err(ContractError::new(
                 ContractErrorCode::NotFound,
@@ -134,10 +156,10 @@ impl VoidBoxRuntimeClient {
         })
     }
 
-    pub fn stop(&self, request: StopRequest) -> Result<StopResult, ContractError> {
+    pub async fn stop(&self, request: StopRequest) -> Result<StopResult, ContractError> {
         let run_id = run_id_from_handle(&request.handle)?;
         let cancel_path = format!("/v1/runs/{run_id}/cancel");
-        let cancel_resp = self.http_post(&cancel_path, "{}")?;
+        let cancel_resp = self.http_post(&cancel_path, "{}").await?;
 
         if cancel_resp.status == 404 {
             return Err(ContractError::new(
@@ -154,7 +176,7 @@ impl VoidBoxRuntimeClient {
             ));
         }
 
-        let converted = self.fetch_converted_run(run_id)?;
+        let converted = self.fetch_converted_run(run_id).await?;
         let Some(terminal) = converted
             .events
             .iter()
@@ -180,10 +202,10 @@ impl VoidBoxRuntimeClient {
         })
     }
 
-    pub fn inspect(&self, handle: &str) -> Result<RuntimeInspection, ContractError> {
+    pub async fn inspect(&self, handle: &str) -> Result<RuntimeInspection, ContractError> {
         let run_id = run_id_from_handle(handle)?;
         let run_path = format!("/v1/runs/{run_id}");
-        let run_resp = self.http_get(&run_path)?;
+        let run_resp = self.http_get(&run_path).await?;
 
         if run_resp.status == 404 {
             return Err(ContractError::new(
@@ -204,13 +226,16 @@ impl VoidBoxRuntimeClient {
         Ok(converted.inspection)
     }
 
-    pub fn list_runs(&self, state: Option<&str>) -> Result<Vec<RuntimeInspection>, ContractError> {
+    pub async fn list_runs(
+        &self,
+        state: Option<&str>,
+    ) -> Result<Vec<RuntimeInspection>, ContractError> {
         let path = if let Some(filter) = state.filter(|s| !s.trim().is_empty()) {
             format!("/v1/runs?state={}", filter.trim())
         } else {
             "/v1/runs".to_string()
         };
-        let response = self.http_get(&path)?;
+        let response = self.http_get(&path).await?;
 
         if response.status >= 400 {
             return Err(ContractError::new(
@@ -298,24 +323,24 @@ impl VoidBoxRuntimeClient {
         Ok(inspections)
     }
 
-    pub fn subscribe_events(
+    pub async fn subscribe_events(
         &self,
         request: SubscribeEventsRequest,
     ) -> Result<Vec<EventEnvelope>, ContractError> {
         let run_id = run_id_from_handle(&request.handle)?;
-        let converted = self.fetch_converted_run(run_id)?;
+        let converted = self.fetch_converted_run(run_id).await?;
         Ok(filter_events_from_id(
             converted.events,
             request.from_event_id.as_deref(),
         ))
     }
 
-    pub fn fetch_structured_output(
+    pub async fn fetch_structured_output(
         &self,
         run_id: &str,
     ) -> Result<Option<CandidateOutput>, ContractError> {
         let run_path = format!("/v1/runs/{run_id}");
-        let run_resp = self.http_get(&run_path)?;
+        let run_resp = self.http_get(&run_path).await?;
         if run_resp.status == 404 {
             return Ok(None);
         }
@@ -329,7 +354,7 @@ impl VoidBoxRuntimeClient {
 
         if let Some(retrieval_path) = manifest_retrieval_path(&run_resp.body, None, "result.json")?
         {
-            let response = self.http_get(&retrieval_path)?;
+            let response = self.http_get(&retrieval_path).await?;
             return match parse_artifact_response(
                 &response,
                 ContractErrorCode::StructuredOutputMissing,
@@ -364,7 +389,7 @@ impl VoidBoxRuntimeClient {
         }
         for stage in stages {
             let path = format!("/v1/runs/{run_id}/stages/{stage}/output-file");
-            let response = self.http_get(&path)?;
+            let response = self.http_get(&path).await?;
             if response.status == 404 {
                 if let Some(err) = parse_api_error(&response.body) {
                     match err.code {
@@ -394,24 +419,25 @@ impl VoidBoxRuntimeClient {
         Ok(None)
     }
 
-    pub fn fetch_named_artifact(
+    pub async fn fetch_named_artifact(
         &self,
         run_id: &str,
         stage: &str,
         name: &str,
     ) -> Result<Option<String>, ContractError> {
         let path = self
-            .find_manifest_artifact_path(run_id, Some(stage), name)?
+            .find_manifest_artifact_path(run_id, Some(stage), name)
+            .await?
             .unwrap_or_else(|| format!("/v1/runs/{run_id}/stages/{stage}/artifacts/{name}"));
-        let response = self.http_get(&path)?;
+        let response = self.http_get(&path).await?;
         parse_artifact_response(&response, ContractErrorCode::ArtifactNotFound)
     }
 
-    fn fetch_converted_run(&self, run_id: &str) -> Result<ConvertedRunView, ContractError> {
+    async fn fetch_converted_run(&self, run_id: &str) -> Result<ConvertedRunView, ContractError> {
         let run_path = format!("/v1/runs/{run_id}");
         let events_path = format!("/v1/runs/{run_id}/events");
-        let run_resp = self.http_get(&run_path)?;
-        let events_resp = self.http_get(&events_path)?;
+        let run_resp = self.http_get(&run_path).await?;
+        let events_resp = self.http_get(&events_path).await?;
 
         if run_resp.status == 404 || events_resp.status == 404 {
             return Err(ContractError::new(
@@ -436,22 +462,22 @@ impl VoidBoxRuntimeClient {
         from_void_box_run_and_events_json(&run_resp.body, &events_resp.body)
     }
 
-    fn http_get(&self, path: &str) -> Result<HttpResponse, ContractError> {
-        self.transport.request("GET", path, "")
+    async fn http_get(&self, path: &str) -> Result<HttpResponse, ContractError> {
+        self.transport.request("GET", path, "").await
     }
 
-    fn http_post(&self, path: &str, body: &str) -> Result<HttpResponse, ContractError> {
-        self.transport.request("POST", path, body)
+    async fn http_post(&self, path: &str, body: &str) -> Result<HttpResponse, ContractError> {
+        self.transport.request("POST", path, body).await
     }
 
-    fn find_manifest_artifact_path(
+    async fn find_manifest_artifact_path(
         &self,
         run_id: &str,
         stage: Option<&str>,
         name: &str,
     ) -> Result<Option<String>, ContractError> {
         let run_path = format!("/v1/runs/{run_id}");
-        let run_resp = self.http_get(&run_path)?;
+        let run_resp = self.http_get(&run_path).await?;
         if run_resp.status == 404 {
             return Ok(None);
         }
@@ -472,8 +498,14 @@ impl VoidBoxRuntimeClient {
 /// `base_url` (TCP) and the socket path (AF_UNIX) are bound at construction
 /// rather than passed per-call. This keeps the per-call surface narrow and
 /// avoids the AF_UNIX impl having to ignore an argument it can't consume.
+#[async_trait]
 pub(crate) trait HttpTransport {
-    fn request(&self, method: &str, path: &str, body: &str) -> Result<HttpResponse, ContractError>;
+    async fn request(
+        &self,
+        method: &str,
+        path: &str,
+        body: &str,
+    ) -> Result<HttpResponse, ContractError>;
 }
 
 /// TCP transport with optional bearer-token injection.
@@ -486,107 +518,144 @@ pub(crate) trait HttpTransport {
 pub(crate) struct TcpHttpTransport {
     base_url: String,
     bearer_token: Option<String>,
+    client: TcpHyperClient,
 }
 
 impl TcpHttpTransport {
     pub(crate) fn new(base_url: String, bearer_token: Option<String>) -> Self {
+        let client = HyperClient::builder(TokioExecutor::new()).build(HttpConnector::new());
         Self {
-            base_url,
+            base_url: base_url.trim_end_matches('/').to_string(),
             bearer_token,
+            client,
         }
     }
 }
 
+#[async_trait]
 impl HttpTransport for TcpHttpTransport {
-    fn request(&self, method: &str, path: &str, body: &str) -> Result<HttpResponse, ContractError> {
-        let (host, port) = parse_host_port(&self.base_url)?;
-        let addr = format!("{host}:{port}");
-        let mut stream = TcpStream::connect(&addr).map_err(|e| {
+    async fn request(
+        &self,
+        method: &str,
+        path: &str,
+        body: &str,
+    ) -> Result<HttpResponse, ContractError> {
+        let url = format!("{}{}", self.base_url, path);
+        let uri: hyper::Uri = url.parse().map_err(|e| {
             ContractError::new(
-                ContractErrorCode::InternalError,
-                format!("connect to {addr} failed: {e}"),
-                true,
+                ContractErrorCode::InvalidSpec,
+                format!("invalid daemon URL {url:?}: {e}"),
+                false,
             )
         })?;
-
-        let auth_line = match self.bearer_token.as_deref() {
-            Some(token) => format!("Authorization: Bearer {token}\r\n"),
-            None => String::new(),
-        };
-        let request = format!(
-            "{method} {path} HTTP/1.1\r\nHost: {host}\r\nContent-Type: application/json\r\n{auth_line}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
-            body.len(),
-            body
-        );
-        stream.write_all(request.as_bytes()).map_err(|e| {
-            ContractError::new(
-                ContractErrorCode::InternalError,
-                format!("request write failed: {e}"),
-                true,
-            )
-        })?;
-
-        let mut response = String::new();
-        stream.read_to_string(&mut response).map_err(|e| {
-            ContractError::new(
-                ContractErrorCode::InternalError,
-                format!("response read failed: {e}"),
-                true,
-            )
-        })?;
-
-        parse_http_response(&response)
+        let body_bytes = Bytes::copy_from_slice(body.as_bytes());
+        let request = build_request(method, uri, body_bytes, self.bearer_token.as_deref())?;
+        let display_url = url;
+        send_with_timeout(self.client.request(request), &display_url).await
     }
 }
 
-/// AF_UNIX transport. Connects via [`std::os::unix::net::UnixStream`] and
-/// speaks the same hand-rolled HTTP/1.1 dialect as [`TcpHttpTransport`]. The
-/// `Host` header is set to `localhost` because there is no meaningful host
-/// authority for an AF_UNIX socket; daemon-side parsing tolerates any value.
+/// AF_UNIX transport. Speaks the same hyper legacy client as
+/// [`TcpHttpTransport`]; only the connector differs.
 ///
 /// Deliberately sends no `Authorization` header: the daemon authenticates
 /// AF_UNIX peers by uid via the kernel's `0o600` perms, and emitting a
 /// credential here would leak it to anywhere the request body is logged.
 pub(crate) struct UnixHttpTransport {
     socket_path: PathBuf,
+    client: UnixHyperClient,
 }
 
 impl UnixHttpTransport {
     pub(crate) fn new(socket_path: PathBuf) -> Self {
-        Self { socket_path }
+        let client = HyperClient::builder(TokioExecutor::new()).build(UnixConnector);
+        Self {
+            socket_path,
+            client,
+        }
     }
 }
 
+#[async_trait]
 impl HttpTransport for UnixHttpTransport {
-    fn request(&self, method: &str, path: &str, body: &str) -> Result<HttpResponse, ContractError> {
-        let mut stream = UnixStream::connect(&self.socket_path).map_err(|e| {
+    async fn request(
+        &self,
+        method: &str,
+        path: &str,
+        body: &str,
+    ) -> Result<HttpResponse, ContractError> {
+        let uri: hyper::Uri = HyperLocalUri::new(&self.socket_path, path).into();
+        let display_url = format!("unix://{}", self.socket_path.display());
+        let body_bytes = Bytes::copy_from_slice(body.as_bytes());
+        // No bearer token over AF_UNIX; see struct doc.
+        let request = build_request(method, uri, body_bytes, None)?;
+        send_with_timeout(self.client.request(request), &display_url).await
+    }
+}
+
+fn build_request(
+    method: &str,
+    uri: hyper::Uri,
+    body: Bytes,
+    bearer_token: Option<&str>,
+) -> Result<HyperRequest<Full<Bytes>>, ContractError> {
+    let parsed_method = Method::from_bytes(method.as_bytes()).map_err(|e| {
+        ContractError::new(
+            ContractErrorCode::InvalidSpec,
+            format!("unsupported HTTP method {method:?}: {e}"),
+            false,
+        )
+    })?;
+    let mut builder = HyperRequest::builder()
+        .method(parsed_method)
+        .uri(uri)
+        .header("content-type", "application/json");
+    if let Some(token) = bearer_token {
+        builder = builder.header("authorization", format!("Bearer {token}"));
+    }
+    builder.body(Full::new(body)).map_err(|e| {
+        ContractError::new(
+            ContractErrorCode::InternalError,
+            format!("build request: {e}"),
+            true,
+        )
+    })
+}
+
+async fn send_with_timeout<F, B>(fut: F, display_url: &str) -> Result<HttpResponse, ContractError>
+where
+    F: std::future::Future<
+        Output = Result<hyper::Response<B>, hyper_util::client::legacy::Error>,
+    >,
+    B: hyper::body::Body<Data = Bytes> + Unpin,
+    B::Error: std::fmt::Display,
+{
+    let send = async {
+        let resp = fut.await.map_err(|e| {
             ContractError::new(
                 ContractErrorCode::InternalError,
-                format!("connect to unix:{} failed: {e}", self.socket_path.display()),
+                format!("connect to {display_url} failed: {e}"),
                 true,
             )
         })?;
-        let request = format!(
-            "{method} {path} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            body.len(),
-            body
-        );
-        stream.write_all(request.as_bytes()).map_err(|e| {
-            ContractError::new(
-                ContractErrorCode::InternalError,
-                format!("request write failed: {e}"),
-                true,
-            )
-        })?;
-        let mut response = String::new();
-        stream.read_to_string(&mut response).map_err(|e| {
+        let status = resp.status().as_u16();
+        let collected = resp.into_body().collect().await.map_err(|e| {
             ContractError::new(
                 ContractErrorCode::InternalError,
                 format!("response read failed: {e}"),
                 true,
             )
         })?;
-        parse_http_response(&response)
+        let body = String::from_utf8_lossy(&collected.to_bytes()).into_owned();
+        Ok(HttpResponse { status, body })
+    };
+    match tokio::time::timeout(HTTP_TIMEOUT, send).await {
+        Ok(result) => result,
+        Err(_) => Err(ContractError::new(
+            ContractErrorCode::RetrievalTimeout,
+            format!("daemon request to {display_url} timed out"),
+            true,
+        )),
     }
 }
 
@@ -617,61 +686,6 @@ pub(crate) fn build_transport(
 pub(crate) struct HttpResponse {
     pub(crate) status: u16,
     pub(crate) body: String,
-}
-
-pub(crate) fn parse_http_response(raw: &str) -> Result<HttpResponse, ContractError> {
-    let (head, body) = raw.split_once("\r\n\r\n").ok_or_else(|| {
-        ContractError::new(
-            ContractErrorCode::InvalidSpec,
-            "invalid HTTP response format",
-            false,
-        )
-    })?;
-
-    let mut lines = head.lines();
-    let status_line = lines.next().unwrap_or_default();
-    let mut parts = status_line.split_whitespace();
-    let _http = parts.next();
-    let status = parts
-        .next()
-        .and_then(|s| s.parse::<u16>().ok())
-        .ok_or_else(|| {
-            ContractError::new(
-                ContractErrorCode::InvalidSpec,
-                "invalid HTTP status line",
-                false,
-            )
-        })?;
-
-    Ok(HttpResponse {
-        status,
-        body: body.to_string(),
-    })
-}
-
-pub(crate) fn parse_host_port(base_url: &str) -> Result<(String, u16), ContractError> {
-    let stripped = base_url.strip_prefix("http://").ok_or_else(|| {
-        ContractError::new(
-            ContractErrorCode::InvalidSpec,
-            "base_url must start with http://",
-            false,
-        )
-    })?;
-    let host_port = stripped.split('/').next().unwrap_or(stripped);
-    let (host, port) = match host_port.split_once(':') {
-        Some((host, port)) => {
-            let parsed = port.parse::<u16>().map_err(|_| {
-                ContractError::new(
-                    ContractErrorCode::InvalidSpec,
-                    format!("invalid port in base_url '{base_url}'"),
-                    false,
-                )
-            })?;
-            (host.to_string(), parsed)
-        }
-        None => (host_port.to_string(), 80),
-    };
-    Ok((host, port))
 }
 
 fn handle_from_run_id(run_id: &str) -> String {
@@ -912,6 +926,7 @@ mod tests {
         ContractErrorCode, EventEnvelope, EventType, ExecutionPolicy, RunState, StartRequest,
         StopRequest, SubscribeEventsRequest,
     };
+    use async_trait::async_trait;
     use std::collections::{BTreeMap, HashMap};
     use std::sync::{Arc, Mutex};
 
@@ -939,8 +954,9 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl HttpTransport for MockTransport {
-        fn request(
+        async fn request(
             &self,
             method: &str,
             path: &str,
@@ -972,8 +988,9 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl HttpTransport for CaptureTransport {
-        fn request(
+        async fn request(
             &self,
             method: &str,
             path: &str,
@@ -1005,8 +1022,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn fetches_structured_output_from_stage_output_file() {
+    #[tokio::test]
+    async fn fetches_structured_output_from_stage_output_file() {
         let client = client(vec![
             (
                 "GET",
@@ -1024,6 +1041,7 @@ mod tests {
 
         let output = client
             .fetch_structured_output("run-123")
+            .await
             .expect("fetch")
             .expect("output");
 
@@ -1033,19 +1051,20 @@ mod tests {
         assert_eq!(output.metrics.get("cost_usd"), Some(&0.018));
     }
 
-    #[test]
-    fn returns_none_when_structured_output_file_missing() {
+    #[tokio::test]
+    async fn returns_none_when_structured_output_file_missing() {
         let client = client(vec![]);
 
         let output = client
             .fetch_structured_output("run-missing")
+            .await
             .expect("fetch");
 
         assert!(output.is_none());
     }
 
-    #[test]
-    fn fetch_structured_output_prefers_manifested_result_json() {
+    #[tokio::test]
+    async fn fetch_structured_output_prefers_manifested_result_json() {
         let client = client(vec![
             (
                 "GET",
@@ -1073,14 +1092,15 @@ mod tests {
 
         let output = client
             .fetch_structured_output("run-123")
+            .await
             .expect("fetch")
             .expect("output");
 
         assert_eq!(output.metrics.get("latency_p99_ms"), Some(&77.0));
     }
 
-    #[test]
-    fn fetch_structured_output_uses_run_report_when_output_ready() {
+    #[tokio::test]
+    async fn fetch_structured_output_uses_run_report_when_output_ready() {
         let client = client(vec![(
             "GET",
             "/v1/runs/run-service",
@@ -1104,6 +1124,7 @@ mod tests {
 
         let output = client
             .fetch_structured_output("run-service")
+            .await
             .expect("fetch")
             .expect("output");
 
@@ -1113,8 +1134,8 @@ mod tests {
         assert_eq!(output.metrics.get("cpu_pct"), Some(&48.0));
     }
 
-    #[test]
-    fn fetch_structured_output_falls_back_when_report_output_is_guest_path() {
+    #[tokio::test]
+    async fn fetch_structured_output_falls_back_when_report_output_is_guest_path() {
         let client = client(vec![
             (
                 "GET",
@@ -1155,6 +1176,7 @@ mod tests {
 
         let output = client
             .fetch_structured_output("run-service-path")
+            .await
             .expect("fetch")
             .expect("output");
 
@@ -1164,8 +1186,9 @@ mod tests {
         assert_eq!(output.metrics.get("cpu_pct"), Some(&44.0));
     }
 
-    #[test]
-    fn fetch_structured_output_uses_report_stage_output_file_when_report_output_is_guest_path() {
+    #[tokio::test]
+    async fn fetch_structured_output_uses_report_stage_output_file_when_report_output_is_guest_path(
+    ) {
         let client = client(vec![
             (
                 "GET",
@@ -1213,6 +1236,7 @@ mod tests {
 
         let output = client
             .fetch_structured_output("run-service-stage")
+            .await
             .expect("fetch")
             .expect("output");
 
@@ -1222,8 +1246,8 @@ mod tests {
         assert_eq!(output.metrics.get("cpu_pct"), Some(&41.0));
     }
 
-    #[test]
-    fn fetch_structured_output_maps_missing_output_error() {
+    #[tokio::test]
+    async fn fetch_structured_output_maps_missing_output_error() {
         let client = client(vec![
             (
                 "GET",
@@ -1241,14 +1265,15 @@ mod tests {
 
         let err = client
             .fetch_structured_output("run-missing-output")
+            .await
             .expect_err("expected missing-output error");
 
         assert_eq!(err.code, ContractErrorCode::StructuredOutputMissing);
         assert!(!err.retryable);
     }
 
-    #[test]
-    fn fetch_structured_output_falls_back_to_output_stage_after_main_404() {
+    #[tokio::test]
+    async fn fetch_structured_output_falls_back_to_output_stage_after_main_404() {
         let client = client(vec![
             (
                 "GET",
@@ -1272,14 +1297,15 @@ mod tests {
 
         let output = client
             .fetch_structured_output("run-output-stage")
+            .await
             .expect("fetch")
             .expect("output");
 
         assert_eq!(output.metrics.get("latency_p99_ms"), Some(&66.0));
     }
 
-    #[test]
-    fn fetch_structured_output_maps_malformed_output_error() {
+    #[tokio::test]
+    async fn fetch_structured_output_maps_malformed_output_error() {
         let client = client(vec![
             (
                 "GET",
@@ -1297,13 +1323,14 @@ mod tests {
 
         let err = client
             .fetch_structured_output("run-malformed")
+            .await
             .expect_err("expected malformed-output error");
 
         assert_eq!(err.code, ContractErrorCode::StructuredOutputMalformed);
     }
 
-    #[test]
-    fn fetch_named_artifact_uses_manifest_retrieval_path() {
+    #[tokio::test]
+    async fn fetch_named_artifact_uses_manifest_retrieval_path() {
         let client = client(vec![
             (
                 "GET",
@@ -1331,14 +1358,15 @@ mod tests {
 
         let artifact = client
             .fetch_named_artifact("run-123", "main", "report.md")
+            .await
             .expect("fetch")
             .expect("artifact");
 
         assert!(artifact.contains("artifact body"));
     }
 
-    #[test]
-    fn start_returns_handle_and_running_state() {
+    #[tokio::test]
+    async fn start_returns_handle_and_running_state() {
         let c = client(vec![("POST", "/v1/runs", 200, r#"{"run_id":"run-123"}"#)]);
         let started = c
             .start(StartRequest {
@@ -1347,6 +1375,7 @@ mod tests {
                 launch_context: None,
                 policy: policy(),
             })
+            .await
             .expect("start");
         assert_eq!(started.handle, "vb:run-123");
         assert_eq!(started.attempt_id, 1);
@@ -1354,8 +1383,8 @@ mod tests {
         assert_eq!(c.poll_interval_ms(), 250);
     }
 
-    #[test]
-    fn start_serializes_launch_context_into_input_payload() {
+    #[tokio::test]
+    async fn start_serializes_launch_context_into_input_payload() {
         let transport = CaptureTransport::new(HttpResponse {
             status: 200,
             body: r#"{"run_id":"run-123"}"#.to_string(),
@@ -1392,6 +1421,7 @@ mod tests {
                 launch_context: Some(snapshot.to_string()),
                 policy: policy(),
             })
+            .await
             .expect("start");
 
         assert_eq!(started.handle, "vb:run-123");
@@ -1412,21 +1442,21 @@ mod tests {
         );
     }
 
-    #[test]
-    fn inspect_maps_daemon_run_state() {
+    #[tokio::test]
+    async fn inspect_maps_daemon_run_state() {
         let c = client(vec![(
             "GET",
             "/v1/runs/run-123",
             200,
             include_str!("../../fixtures/voidbox_run_success.json"),
         )]);
-        let inspection = c.inspect("vb:run-123").expect("inspect");
+        let inspection = c.inspect("vb:run-123").await.expect("inspect");
         assert_eq!(inspection.run_id, "run-2000");
         assert_eq!(inspection.state, RunState::Succeeded);
     }
 
-    #[test]
-    fn subscribe_events_applies_resume_filter() {
+    #[tokio::test]
+    async fn subscribe_events_applies_resume_filter() {
         let c = client(vec![
             (
                 "GET",
@@ -1446,13 +1476,14 @@ mod tests {
                 handle: "vb:run-123".to_string(),
                 from_event_id: Some("evt_run-2000_1".to_string()),
             })
+            .await
             .expect("subscribe");
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event_type, EventType::RunCompleted);
     }
 
-    #[test]
-    fn stop_returns_terminal_event() {
+    #[tokio::test]
+    async fn stop_returns_terminal_event() {
         let c = client(vec![
             (
                 "POST",
@@ -1478,20 +1509,21 @@ mod tests {
                 handle: "vb:run-123".to_string(),
                 reason: "user".to_string(),
             })
+            .await
             .expect("stop");
         assert_eq!(stop.state, RunState::Succeeded);
         assert_eq!(stop.terminal_event_id, "evt_run-2000_2");
     }
 
-    #[test]
-    fn inspect_404_maps_to_not_found() {
+    #[tokio::test]
+    async fn inspect_404_maps_to_not_found() {
         let c = client(vec![(
             "GET",
             "/v1/runs/run-404",
             404,
             r#"{"error":"not found"}"#,
         )]);
-        let err = c.inspect("vb:run-404").expect_err("expected not found");
+        let err = c.inspect("vb:run-404").await.expect_err("expected not found");
         assert_eq!(err.code, ContractErrorCode::NotFound);
     }
 
@@ -1540,8 +1572,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn dispatch_unix_url_selects_unix_transport() {
+    #[tokio::test]
+    async fn dispatch_unix_url_selects_unix_transport() {
         // Build directly so we don't actually dial a socket; just verify the
         // builder accepts the URL and returns a transport.
         let transport = super::build_transport("unix:///tmp/voidbox-disp-test.sock")
@@ -1551,6 +1583,7 @@ mod tests {
         // error rather than a parse error (proves it's the unix path that ran).
         let err = transport
             .request("GET", "/v1/health", "")
+            .await
             .expect_err("connect should fail against missing socket");
         assert!(err.message.contains("unix:") || err.message.contains("connect"));
     }
@@ -1585,62 +1618,18 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Read until the request is fully observed (`\r\n\r\n` terminator plus
-    /// any Content-Length body), write a minimal response, and close. Closing
-    /// is what unblocks the client's `read_to_string`; we cannot wait for the
-    /// client to close first because the client is blocked on read.
-    fn handle_one_request<R: std::io::Read + std::io::Write>(stream: &mut R) -> Vec<u8> {
-        let mut captured = Vec::new();
-        let mut buf = [0u8; 4096];
-        loop {
-            // Look for end-of-headers.
-            if let Some(idx) = find_subsequence(&captured, b"\r\n\r\n") {
-                let body_start = idx + 4;
-                let content_length = parse_content_length(&captured[..idx]).unwrap_or(0);
-                if captured.len() - body_start >= content_length {
-                    break;
-                }
-            }
-            let n = stream.read(&mut buf).expect("read");
-            if n == 0 {
-                break;
-            }
-            captured.extend_from_slice(&buf[..n]);
-        }
-        let _ = stream
-            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}");
-        captured
-    }
+    #[tokio::test]
+    async fn unix_transport_emits_no_authorization_header() {
+        // Stand up an httpmock unix-socket server, route a request through
+        // hyperlocal, and assert the daemon never saw an Authorization header.
+        // This guards against the AF_UNIX-leaks-credentials regression even
+        // though daemon-side enforce_auth would short-circuit it.
+        use httpmock::prelude::*;
 
-    fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-        haystack.windows(needle.len()).position(|w| w == needle)
-    }
-
-    fn parse_content_length(headers: &[u8]) -> Option<usize> {
-        let s = std::str::from_utf8(headers).ok()?;
-        for line in s.split("\r\n") {
-            if let Some((k, v)) = line.split_once(':') {
-                if k.trim().eq_ignore_ascii_case("content-length") {
-                    return v.trim().parse().ok();
-                }
-            }
-        }
-        None
-    }
-
-    #[test]
-    fn unix_transport_emits_no_authorization_header() {
-        // Capture the bytes UnixHttpTransport writes onto the wire by pointing
-        // it at a one-shot local listener; this guards against the
-        // AF_UNIX-leaks-credentials regression even though daemon-side
-        // enforce_auth would short-circuit it.
-        //
         // AF_UNIX paths are bounded by `SUN_LEN` (~104 bytes on macOS) so we
         // bind under `/tmp` directly with a short suffix rather than via
         // `env::temp_dir()`, which on macOS resolves to a long
         // `/var/folders/...` path.
-        use std::os::unix::net::UnixListener;
-
         let socket = std::path::PathBuf::from(format!(
             "/tmp/vc-na-{}-{}.sock",
             std::process::id(),
@@ -1651,56 +1640,84 @@ mod tests {
                 & 0xfff_ffff
         ));
         let _ = std::fs::remove_file(&socket);
-        let listener = UnixListener::bind(&socket).expect("bind");
 
-        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
-        let captured_clone = captured.clone();
-        let handle = std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("accept");
-            let bytes = handle_one_request(&mut stream);
-            *captured_clone.lock().unwrap() = bytes;
-        });
+        let server = MockServer::connect_async(&socket).await;
+        let mock = server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path("/v1/health")
+                    .matches(|req| {
+                        !req.headers
+                            .iter()
+                            .flatten()
+                            .any(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+                    });
+                then.status(200).body("{}");
+            })
+            .await;
 
         let transport = super::UnixHttpTransport::new(socket.clone());
-        let _ = transport.request("GET", "/v1/health", "");
-        handle.join().expect("listener thread");
-
-        let bytes = captured.lock().unwrap().clone();
-        let request = String::from_utf8_lossy(&bytes);
-        assert!(
-            !request.to_ascii_lowercase().contains("authorization:"),
-            "AF_UNIX request must not carry an Authorization header; got: {request}"
-        );
+        let resp = transport
+            .request("GET", "/v1/health", "")
+            .await
+            .expect("unix request");
+        assert_eq!(resp.status, 200);
+        mock.assert_async().await;
         let _ = std::fs::remove_file(&socket);
     }
 
-    #[test]
-    fn tcp_transport_emits_authorization_header_when_token_present() {
-        use std::net::TcpListener;
+    #[tokio::test]
+    async fn tcp_transport_emits_authorization_header_when_token_present() {
+        use httpmock::prelude::*;
 
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
-        let port = listener.local_addr().unwrap().port();
+        let server = MockServer::start_async().await;
+        let mock = server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path("/v1/health")
+                    .header("authorization", "Bearer hunter2");
+                then.status(200).body("{}");
+            })
+            .await;
 
-        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
-        let captured_clone = captured.clone();
-        let handle = std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("accept");
-            let bytes = handle_one_request(&mut stream);
-            *captured_clone.lock().unwrap() = bytes;
-        });
+        let transport = super::TcpHttpTransport::new(server.base_url(), Some("hunter2".to_string()));
+        let resp = transport
+            .request("GET", "/v1/health", "")
+            .await
+            .expect("tcp request");
+        assert_eq!(resp.status, 200);
+        mock.assert_async().await;
+    }
 
-        let transport = super::TcpHttpTransport::new(
-            format!("http://127.0.0.1:{port}"),
-            Some("hunter2".to_string()),
-        );
-        let _ = transport.request("GET", "/v1/health", "");
-        handle.join().expect("listener thread");
+    #[tokio::test]
+    async fn tcp_transport_routes_through_httpmock_end_to_end() {
+        // End-to-end check that the new hyper-util TCP transport dispatches
+        // correctly against a regular HTTP server. This test also covers
+        // AC#7-new (an httpmock test exercises the async TCP path).
+        use httpmock::prelude::*;
 
-        let bytes = captured.lock().unwrap().clone();
-        let request = String::from_utf8_lossy(&bytes);
-        assert!(
-            request.contains("Authorization: Bearer hunter2"),
-            "TCP request with token should carry bearer header; got: {request}"
-        );
+        let server = MockServer::start_async().await;
+        let mock = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/v1/runs")
+                    .header("content-type", "application/json")
+                    .json_body(serde_json::json!({"file":"fixtures/sample.vbrun","input":null}));
+                then.status(200).body(r#"{"run_id":"run-async-1"}"#);
+            })
+            .await;
+
+        let c = VoidBoxRuntimeClient::new(server.base_url(), 250);
+        let started = c
+            .start(StartRequest {
+                run_id: "controller-run-1".to_string(),
+                workflow_spec: "fixtures/sample.vbrun".to_string(),
+                launch_context: None,
+                policy: policy(),
+            })
+            .await
+            .expect("start");
+        assert_eq!(started.handle, "vb:run-async-1");
+        mock.assert_async().await;
     }
 }
