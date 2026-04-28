@@ -202,7 +202,9 @@ async fn bridge_multiple_executions_complete_against_live_daemon() {
     assert!(second_done, "second execution did not complete");
 }
 
-#[tokio::test]
+// Promoted to `multi_thread`: spawns pause / cancel actor tasks that race
+// the worker tick; multi_thread parity matches the production bridge.
+#[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires live void-box daemon"]
 async fn bridge_pause_resume_and_cancel_work_against_live_daemon() {
     let root = temp_root("bridge-live-control");

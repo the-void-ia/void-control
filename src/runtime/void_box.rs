@@ -1619,7 +1619,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    #[tokio::test]
+    // Promoted to `multi_thread`: spawns a listener task that runs in
+    // parallel with the client request; multi_thread parity matches how
+    // production hyper-util will dispatch.
+    #[tokio::test(flavor = "multi_thread")]
     async fn unix_transport_emits_no_authorization_header() {
         // Bind a one-shot unix listener, route a request through the
         // hyper-util AF_UNIX transport, and assert the bytes hyper put on the
