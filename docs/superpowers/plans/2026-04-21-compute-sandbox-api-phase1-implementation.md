@@ -142,6 +142,7 @@ Purpose:
 Files:
 - external dependency work in `/home/diego/github/agent-infra/void-box`
 - optional follow-up note in `docs/`
+- `docs/superpowers/specs/2026-04-27-void-box-compute-daemon-prerequisites.md`
 
 Steps:
 - [ ] **Step 1: write the daemon prerequisite list**

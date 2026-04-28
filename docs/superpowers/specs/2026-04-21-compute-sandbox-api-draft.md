@@ -66,6 +66,10 @@ What is not exposed today as daemon routes:
 - `GET /v1/snapshots`
 - `POST /v1/snapshots/{id}/replicate`
 
+The concrete daemon contract expected by this branch is captured in:
+
+- `docs/superpowers/specs/2026-04-27-void-box-compute-daemon-prerequisites.md`
+
 So this design must be implemented in phases:
 
 1. align the control-plane object model and API shape in `void-control`
