@@ -38,10 +38,11 @@ use serde::Serialize;
 /// helpers (`persisted_run_handle`, `inline_poll_*`, `delivery_run_ref`)
 /// stay sync — they don't do I/O.
 ///
-/// Default `#[async_trait]` (Send-bounded futures) is the standard idiom
-/// and lets us flip to `rt-multi-thread` later by changing the `flavor`
-/// macro arg in `voidctl::main`. Sticking with `?Send` would force a
-/// trait-bound refactor across orchestration if the flavor ever changes.
+/// Default `#[async_trait]` (Send-bounded futures) keeps the trait
+/// portable across both `rt-multi-thread` and `current_thread` runtimes:
+/// implementations and trait objects are `Send + Sync`, so handler
+/// futures can be moved across worker threads without a trait-bound
+/// refactor if the runtime flavor changes.
 #[async_trait]
 pub trait ExecutionRuntime: Send + Sync {
     async fn start_run(&mut self, request: StartRequest) -> Result<StartResult, ContractError>;
