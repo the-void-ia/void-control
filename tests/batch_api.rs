@@ -188,8 +188,8 @@ fn temp_root(label: &str) -> std::path::PathBuf {
     std::env::temp_dir().join(format!("void-control-batch-{label}-{nanos}"))
 }
 
-#[test]
-fn batch_bridge_dry_run_returns_compiled_preview() {
+#[tokio::test]
+async fn batch_bridge_dry_run_returns_compiled_preview() {
     let body = serde_json::json!({
         "api_version": "v1",
         "kind": "batch",
@@ -213,6 +213,7 @@ fn batch_bridge_dry_run_returns_compiled_preview() {
         "/v1/batch/dry-run",
         Some(&body),
     )
+    .await
     .expect("response");
 
     assert_eq!(response.status, 200);
@@ -228,8 +229,8 @@ fn batch_bridge_dry_run_returns_compiled_preview() {
     );
 }
 
-#[test]
-fn batch_bridge_run_creates_normal_execution() {
+#[tokio::test]
+async fn batch_bridge_run_creates_normal_execution() {
     let root = temp_root("run");
     let spec_dir = root.join("specs");
     let execution_dir = root.join("executions");
@@ -253,6 +254,7 @@ fn batch_bridge_run_creates_normal_execution() {
         &spec_dir,
         &execution_dir,
     )
+    .await
     .expect("response");
 
     assert_eq!(response.status, 200);
@@ -275,6 +277,7 @@ fn batch_bridge_run_creates_normal_execution() {
         &spec_dir,
         &execution_dir,
     )
+    .await
     .expect("inspect");
 
     assert_eq!(inspect.status, 200);
@@ -283,8 +286,8 @@ fn batch_bridge_run_creates_normal_execution() {
     assert_eq!(inspect.json["execution"]["execution_id"], execution_id);
 }
 
-#[test]
-fn yolo_bridge_alias_runs_as_batch() {
+#[tokio::test]
+async fn yolo_bridge_alias_runs_as_batch() {
     let root = temp_root("yolo");
     let spec_dir = root.join("specs");
     let execution_dir = root.join("executions");
@@ -307,6 +310,7 @@ fn yolo_bridge_alias_runs_as_batch() {
         &spec_dir,
         &execution_dir,
     )
+    .await
     .expect("response");
 
     assert_eq!(response.status, 200);

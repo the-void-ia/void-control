@@ -15,27 +15,28 @@ use void_control::orchestration::{
 };
 use void_control::runtime::MockRuntime;
 
-#[test]
-fn swarm_strategy_runs_end_to_end() {
-    let (execution, _, _) = run_mode_to_completion("swarm", temp_store_dir("swarm-acceptance"));
-
-    assert_eq!(execution.status, ExecutionStatus::Completed);
-    assert!(execution.result_best_candidate_id.is_some());
-}
-
-#[test]
-fn supervision_strategy_runs_end_to_end() {
+#[tokio::test]
+async fn swarm_strategy_runs_end_to_end() {
     let (execution, _, _) =
-        run_mode_to_completion("supervision", temp_store_dir("supervision-acceptance"));
+        run_mode_to_completion("swarm", temp_store_dir("swarm-acceptance")).await;
 
     assert_eq!(execution.status, ExecutionStatus::Completed);
     assert!(execution.result_best_candidate_id.is_some());
 }
 
-#[test]
-fn supervision_strategy_emits_review_and_finalization_events() {
+#[tokio::test]
+async fn supervision_strategy_runs_end_to_end() {
+    let (execution, _, _) =
+        run_mode_to_completion("supervision", temp_store_dir("supervision-acceptance")).await;
+
+    assert_eq!(execution.status, ExecutionStatus::Completed);
+    assert!(execution.result_best_candidate_id.is_some());
+}
+
+#[tokio::test]
+async fn supervision_strategy_emits_review_and_finalization_events() {
     let (execution, _, snapshot) =
-        run_mode_to_completion("supervision", temp_store_dir("supervision-events"));
+        run_mode_to_completion("supervision", temp_store_dir("supervision-events")).await;
 
     assert_eq!(execution.status, ExecutionStatus::Completed);
     assert_event_counts(
@@ -61,10 +62,10 @@ fn supervision_strategy_emits_review_and_finalization_events() {
     );
 }
 
-#[test]
-fn supervision_strategy_persists_approved_review_state() {
+#[tokio::test]
+async fn supervision_strategy_persists_approved_review_state() {
     let (execution, store, _) =
-        run_mode_to_completion("supervision", temp_store_dir("supervision-candidates"));
+        run_mode_to_completion("supervision", temp_store_dir("supervision-candidates")).await;
     let candidates = store
         .load_candidates(&execution.execution_id)
         .expect("load candidates");
@@ -78,11 +79,11 @@ fn supervision_strategy_persists_approved_review_state() {
         .all(|candidate| candidate.review_status == Some(WorkerReviewStatus::Approved)));
 }
 
-#[test]
-fn supported_strategies_emit_expected_completion_events() {
+#[tokio::test]
+async fn supported_strategies_emit_expected_completion_events() {
     let mode = "swarm";
     let label = format!("{mode}-events");
-    let (execution, _, snapshot) = run_mode_to_completion(mode, temp_store_dir(&label));
+    let (execution, _, snapshot) = run_mode_to_completion(mode, temp_store_dir(&label)).await;
 
     assert_eq!(execution.status, ExecutionStatus::Completed, "{mode}");
     assert_event_counts(
@@ -104,11 +105,11 @@ fn supported_strategies_emit_expected_completion_events() {
     );
 }
 
-#[test]
-fn supported_strategies_persist_terminal_candidate_records() {
+#[tokio::test]
+async fn supported_strategies_persist_terminal_candidate_records() {
     let mode = "swarm";
     let label = format!("{mode}-candidates");
-    let (execution, store, snapshot) = run_mode_to_completion(mode, temp_store_dir(&label));
+    let (execution, store, snapshot) = run_mode_to_completion(mode, temp_store_dir(&label)).await;
     let candidates = store
         .load_candidates(&execution.execution_id)
         .expect("load candidates");
@@ -140,11 +141,11 @@ fn supported_strategies_persist_terminal_candidate_records() {
     );
 }
 
-#[test]
-fn supported_strategies_emit_failed_terminal_events_on_all_failure() {
+#[tokio::test]
+async fn supported_strategies_emit_failed_terminal_events_on_all_failure() {
     let mode = "swarm";
     let label = format!("{mode}-failed");
-    let (execution, _, snapshot) = run_mode_with_all_failures(mode, temp_store_dir(&label));
+    let (execution, _, snapshot) = run_mode_with_all_failures(mode, temp_store_dir(&label)).await;
 
     assert_eq!(execution.status, ExecutionStatus::Failed, "{mode}");
     assert_event_counts(
@@ -167,8 +168,8 @@ fn supported_strategies_emit_failed_terminal_events_on_all_failure() {
 }
 
 #[cfg(feature = "serde")]
-#[test]
-fn swarm_strategy_routes_intents_into_next_iteration_message_box_and_events() {
+#[tokio::test]
+async fn swarm_strategy_routes_intents_into_next_iteration_message_box_and_events() {
     let store_dir = temp_store_dir("swarm-message-box");
     let mut runtime = MockRuntime::new();
     runtime.seed_success(
@@ -222,6 +223,7 @@ fn swarm_strategy_routes_intents_into_next_iteration_message_box_and_events() {
     );
     let execution = service
         .run_to_completion(strategy_spec("swarm"))
+        .await
         .expect("run execution");
 
     let store = FsExecutionStore::new(store_dir);
@@ -273,8 +275,8 @@ fn swarm_strategy_routes_intents_into_next_iteration_message_box_and_events() {
 }
 
 #[cfg(feature = "serde")]
-#[test]
-fn legacy_leader_directed_uses_persisted_planner_proposals() {
+#[tokio::test]
+async fn legacy_leader_directed_uses_persisted_planner_proposals() {
     let store_dir = temp_store_dir("leader-directed-legacy-acceptance");
     let store = FsExecutionStore::new(store_dir.clone());
     let spec = legacy_leader_directed_strategy_spec();
@@ -330,6 +332,7 @@ fn legacy_leader_directed_uses_persisted_planner_proposals() {
     );
     let execution = service
         .process_execution("exec-legacy-leader")
+        .await
         .expect("process execution");
 
     let candidates = FsExecutionStore::new(store_dir.clone())
@@ -360,7 +363,7 @@ fn legacy_leader_directed_uses_persisted_planner_proposals() {
     );
 }
 
-fn run_mode_to_completion(
+async fn run_mode_to_completion(
     mode: &str,
     store_dir: std::path::PathBuf,
 ) -> (
@@ -412,6 +415,7 @@ fn run_mode_to_completion(
     );
     let execution = service
         .run_to_completion(strategy_spec(mode))
+        .await
         .expect("run execution");
 
     let store = FsExecutionStore::new(store_dir);
@@ -421,7 +425,7 @@ fn run_mode_to_completion(
     (execution, store, snapshot)
 }
 
-fn run_mode_with_all_failures(
+async fn run_mode_with_all_failures(
     mode: &str,
     store_dir: std::path::PathBuf,
 ) -> (
@@ -443,6 +447,7 @@ fn run_mode_with_all_failures(
     );
     let execution = service
         .run_to_completion(failing_strategy_spec(mode))
+        .await
         .expect("run execution");
 
     let store = FsExecutionStore::new(store_dir);

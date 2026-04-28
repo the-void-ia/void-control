@@ -13,8 +13,8 @@ use void_control::orchestration::{
 };
 use void_control::runtime::MockRuntime;
 
-#[test]
-fn submitted_pending_execution_can_be_processed_to_completion() {
+#[tokio::test]
+async fn submitted_pending_execution_can_be_processed_to_completion() {
     let root = temp_store_dir("worker");
     let store = FsExecutionStore::new(root);
     let spec = spec(1);
@@ -45,7 +45,10 @@ fn submitted_pending_execution_can_be_processed_to_completion() {
         runtime,
         store.clone(),
     );
-    let processed = service.process_execution("exec-worker").expect("process");
+    let processed = service
+        .process_execution("exec-worker")
+        .await
+        .expect("process");
 
     assert_eq!(processed.status, ExecutionStatus::Completed);
     assert_eq!(
@@ -57,22 +60,22 @@ fn submitted_pending_execution_can_be_processed_to_completion() {
     assert_eq!(snapshot.execution.status, ExecutionStatus::Completed);
 }
 
-#[test]
-fn bridge_worker_helper_processes_pending_executions() {
+#[tokio::test]
+async fn bridge_worker_helper_processes_pending_executions() {
     let root = temp_store_dir("bridge-worker");
     let store = FsExecutionStore::new(root.clone());
     let spec = spec(1);
     ExecutionService::<MockRuntime>::submit_execution(&store, "exec-bridge-worker", &spec)
         .expect("submit");
 
-    tick_bridge_worker_until_terminal(root.clone(), "exec-bridge-worker");
+    tick_bridge_worker_until_terminal(root.clone(), "exec-bridge-worker").await;
 
     let snapshot = store.load_execution("exec-bridge-worker").expect("reload");
     assert_eq!(snapshot.execution.status, ExecutionStatus::Completed);
 }
 
-#[test]
-fn bridge_worker_resumes_running_candidate_even_without_queued_candidates() {
+#[tokio::test]
+async fn bridge_worker_resumes_running_candidate_even_without_queued_candidates() {
     let root = temp_store_dir("bridge-worker-running-only");
     let store = FsExecutionStore::new(root.clone());
     let spec = single_candidate_spec();
@@ -99,6 +102,7 @@ fn bridge_worker_resumes_running_candidate_even_without_queued_candidates() {
         ),
         root.clone(),
     )
+    .await
     .expect("first bridge tick");
 
     let first = store
@@ -123,6 +127,7 @@ fn bridge_worker_resumes_running_candidate_even_without_queued_candidates() {
         ),
         root,
     )
+    .await
     .expect("second bridge tick");
 
     let second = store
@@ -132,8 +137,8 @@ fn bridge_worker_resumes_running_candidate_even_without_queued_candidates() {
     assert_eq!(second.execution.status, ExecutionStatus::Completed);
 }
 
-#[test]
-fn bridge_worker_collects_output_from_running_service_candidate() {
+#[tokio::test]
+async fn bridge_worker_collects_output_from_running_service_candidate() {
     let root = temp_store_dir("bridge-worker-running-output-ready");
     let store = FsExecutionStore::new(root.clone());
     let spec = single_candidate_spec();
@@ -154,6 +159,7 @@ fn bridge_worker_collects_output_from_running_service_candidate() {
         )),
         root.clone(),
     )
+    .await
     .expect("first bridge tick");
 
     let first = store
@@ -163,8 +169,8 @@ fn bridge_worker_collects_output_from_running_service_candidate() {
     assert_eq!(first.execution.status, ExecutionStatus::Completed);
 }
 
-#[test]
-fn bridge_worker_keeps_running_service_candidate_when_output_not_ready_yet() {
+#[tokio::test]
+async fn bridge_worker_keeps_running_service_candidate_when_output_not_ready_yet() {
     let root = temp_store_dir("bridge-worker-running-output-missing");
     let store = FsExecutionStore::new(root.clone());
     let spec = single_candidate_spec();
@@ -182,6 +188,7 @@ fn bridge_worker_keeps_running_service_candidate_when_output_not_ready_yet() {
         RunningOutputMissingRuntime,
         root,
     )
+    .await
     .expect("bridge tick");
 
     let snapshot = store
@@ -203,8 +210,8 @@ fn bridge_worker_keeps_running_service_candidate_when_output_not_ready_yet() {
     );
 }
 
-#[test]
-fn bridge_worker_keeps_running_service_candidate_when_output_path_is_not_found_yet() {
+#[tokio::test]
+async fn bridge_worker_keeps_running_service_candidate_when_output_path_is_not_found_yet() {
     let root = temp_store_dir("bridge-worker-running-output-not-found");
     let store = FsExecutionStore::new(root.clone());
     let spec = single_candidate_spec();
@@ -222,6 +229,7 @@ fn bridge_worker_keeps_running_service_candidate_when_output_path_is_not_found_y
         RunningOutputNotFoundRuntime,
         root,
     )
+    .await
     .expect("bridge tick");
 
     let snapshot = store
@@ -232,8 +240,8 @@ fn bridge_worker_keeps_running_service_candidate_when_output_path_is_not_found_y
     assert_eq!(snapshot.candidates[0].status, CandidateStatus::Running);
 }
 
-#[test]
-fn bridge_worker_dispatches_multiple_candidates_up_to_execution_concurrency() {
+#[tokio::test]
+async fn bridge_worker_dispatches_multiple_candidates_up_to_execution_concurrency() {
     let root = temp_store_dir("bridge-worker-parallel");
     let store = FsExecutionStore::new(root.clone());
     let spec = spec_with_candidate_count(1, 4, 4);
@@ -247,6 +255,7 @@ fn bridge_worker_dispatches_multiple_candidates_up_to_execution_concurrency() {
         StepwiseRuntime::new(1),
         root,
     )
+    .await
     .expect("bridge tick");
 
     let snapshot = store
@@ -273,8 +282,8 @@ fn bridge_worker_dispatches_multiple_candidates_up_to_execution_concurrency() {
     );
 }
 
-#[test]
-fn planning_execution_persists_queued_candidates_without_dispatching() {
+#[tokio::test]
+async fn planning_execution_persists_queued_candidates_without_dispatching() {
     let root = temp_store_dir("worker-plan-only");
     let store = FsExecutionStore::new(root);
     let spec = spec(1);
@@ -288,7 +297,10 @@ fn planning_execution_persists_queued_candidates_without_dispatching() {
         MockRuntime::new(),
         store.clone(),
     );
-    let execution = service.plan_execution("exec-plan-only").expect("plan");
+    let execution = service
+        .plan_execution("exec-plan-only")
+        .await
+        .expect("plan");
 
     assert_eq!(execution.status, ExecutionStatus::Running);
     let snapshot = store.load_execution("exec-plan-only").expect("reload");
@@ -316,8 +328,8 @@ fn planning_execution_persists_queued_candidates_without_dispatching() {
     );
 }
 
-#[test]
-fn processing_reuses_preplanned_candidates_without_duplication() {
+#[tokio::test]
+async fn processing_reuses_preplanned_candidates_without_duplication() {
     let root = temp_store_dir("worker-plan-then-process");
     let store = FsExecutionStore::new(root);
     let spec = spec(1);
@@ -333,6 +345,7 @@ fn processing_reuses_preplanned_candidates_without_duplication() {
     );
     planner
         .plan_execution("exec-plan-then-process")
+        .await
         .expect("plan");
 
     let mut runtime = MockRuntime::new();
@@ -359,6 +372,7 @@ fn processing_reuses_preplanned_candidates_without_duplication() {
     );
     let execution = worker
         .process_execution("exec-plan-then-process")
+        .await
         .expect("process");
 
     assert_eq!(execution.status, ExecutionStatus::Completed);
@@ -382,8 +396,8 @@ fn processing_reuses_preplanned_candidates_without_duplication() {
     );
 }
 
-#[test]
-fn dispatch_execution_once_runs_only_one_queued_candidate() {
+#[tokio::test]
+async fn dispatch_execution_once_runs_only_one_queued_candidate() {
     let root = temp_store_dir("worker-dispatch-once");
     let store = FsExecutionStore::new(root);
     let spec = spec(1);
@@ -397,7 +411,10 @@ fn dispatch_execution_once_runs_only_one_queued_candidate() {
         MockRuntime::new(),
         store.clone(),
     );
-    planner.plan_execution("exec-dispatch-once").expect("plan");
+    planner
+        .plan_execution("exec-dispatch-once")
+        .await
+        .expect("plan");
 
     let mut runtime = MockRuntime::new();
     runtime.seed_success(
@@ -423,6 +440,7 @@ fn dispatch_execution_once_runs_only_one_queued_candidate() {
     );
     let execution = worker
         .dispatch_execution_once("exec-dispatch-once")
+        .await
         .expect("dispatch once");
 
     assert_eq!(execution.status, ExecutionStatus::Running);
@@ -455,8 +473,8 @@ fn dispatch_execution_once_runs_only_one_queued_candidate() {
     );
 }
 
-#[test]
-fn dispatch_execution_once_persists_running_candidate_for_nonterminal_run() {
+#[tokio::test]
+async fn dispatch_execution_once_persists_running_candidate_for_nonterminal_run() {
     let root = temp_store_dir("worker-dispatch-running");
     let store = FsExecutionStore::new(root);
     let spec = spec(1);
@@ -472,6 +490,7 @@ fn dispatch_execution_once_persists_running_candidate_for_nonterminal_run() {
     );
     planner
         .plan_execution("exec-dispatch-running")
+        .await
         .expect("plan");
 
     let output = output(
@@ -488,6 +507,7 @@ fn dispatch_execution_once_persists_running_candidate_for_nonterminal_run() {
     );
     let execution = worker
         .dispatch_execution_once("exec-dispatch-running")
+        .await
         .expect("dispatch once");
 
     assert_eq!(execution.status, ExecutionStatus::Running);
@@ -525,8 +545,8 @@ fn dispatch_execution_once_persists_running_candidate_for_nonterminal_run() {
     );
 }
 
-#[test]
-fn dispatch_execution_once_reconciles_persisted_running_candidate_on_later_tick() {
+#[tokio::test]
+async fn dispatch_execution_once_reconciles_persisted_running_candidate_on_later_tick() {
     let root = temp_store_dir("worker-dispatch-reconcile");
     let store = FsExecutionStore::new(root);
     let spec = spec(1);
@@ -542,6 +562,7 @@ fn dispatch_execution_once_reconciles_persisted_running_candidate_on_later_tick(
     );
     planner
         .plan_execution("exec-dispatch-reconcile")
+        .await
         .expect("plan");
 
     let output = output(
@@ -558,9 +579,11 @@ fn dispatch_execution_once_reconciles_persisted_running_candidate_on_later_tick(
     );
     worker
         .dispatch_execution_once("exec-dispatch-reconcile")
+        .await
         .expect("first dispatch");
     let second = worker
         .dispatch_execution_once("exec-dispatch-reconcile")
+        .await
         .expect("second dispatch");
 
     assert_eq!(second.status, ExecutionStatus::Running);
@@ -594,8 +617,8 @@ fn dispatch_execution_once_reconciles_persisted_running_candidate_on_later_tick(
     );
 }
 
-#[test]
-fn dispatch_execution_once_prefers_structured_output_over_failed_terminal_state() {
+#[tokio::test]
+async fn dispatch_execution_once_prefers_structured_output_over_failed_terminal_state() {
     let root = temp_store_dir("worker-dispatch-terminal-failed-with-output");
     let store = FsExecutionStore::new(root);
     let spec = spec(1);
@@ -615,6 +638,7 @@ fn dispatch_execution_once_prefers_structured_output_over_failed_terminal_state(
     );
     planner
         .plan_execution("exec-dispatch-terminal-failed-with-output")
+        .await
         .expect("plan");
 
     let output = output(
@@ -634,6 +658,7 @@ fn dispatch_execution_once_prefers_structured_output_over_failed_terminal_state(
     );
     let execution = worker
         .dispatch_execution_once("exec-dispatch-terminal-failed-with-output")
+        .await
         .expect("dispatch once");
 
     assert_eq!(execution.status, ExecutionStatus::Running);
@@ -659,8 +684,8 @@ fn dispatch_execution_once_prefers_structured_output_over_failed_terminal_state(
     );
 }
 
-#[test]
-fn process_execution_skips_already_claimed_execution() {
+#[tokio::test]
+async fn process_execution_skips_already_claimed_execution() {
     let root = temp_store_dir("worker-claimed");
     let store = FsExecutionStore::new(root);
     let spec = spec(1);
@@ -679,6 +704,7 @@ fn process_execution_skips_already_claimed_execution() {
     );
     let err = service
         .process_execution("exec-claimed")
+        .await
         .expect_err("claimed execution should not process");
     assert_eq!(err.kind(), std::io::ErrorKind::WouldBlock);
 
@@ -690,8 +716,8 @@ fn process_execution_skips_already_claimed_execution() {
     );
 }
 
-#[test]
-fn stale_claim_is_recovered_and_processing_can_proceed() {
+#[tokio::test]
+async fn stale_claim_is_recovered_and_processing_can_proceed() {
     let root = temp_store_dir("worker-stale-claim");
     let store = FsExecutionStore::new(root.clone());
     let spec = spec(1);
@@ -726,6 +752,7 @@ fn stale_claim_is_recovered_and_processing_can_proceed() {
     );
     let processed = service
         .process_execution("exec-stale-claim")
+        .await
         .expect("process");
     assert_eq!(processed.status, ExecutionStatus::Completed);
     assert_eq!(store.load_claim("exec-stale-claim").expect("claim"), None);
@@ -817,8 +844,8 @@ fn candidate_records_round_trip_through_store() {
     );
 }
 
-#[test]
-fn process_execution_persists_terminal_candidate_records() {
+#[tokio::test]
+async fn process_execution_persists_terminal_candidate_records() {
     let root = temp_store_dir("worker-candidate-lifecycle");
     let store = FsExecutionStore::new(root);
     let spec = spec(1);
@@ -850,6 +877,7 @@ fn process_execution_persists_terminal_candidate_records() {
     );
     service
         .process_execution("exec-candidate-lifecycle")
+        .await
         .expect("process");
 
     let snapshot = store
@@ -894,8 +922,8 @@ fn process_execution_persists_terminal_candidate_records() {
     );
 }
 
-#[test]
-fn process_execution_persists_mixed_candidate_terminal_states() {
+#[tokio::test]
+async fn process_execution_persists_mixed_candidate_terminal_states() {
     let root = temp_store_dir("worker-candidate-mixed");
     let store = FsExecutionStore::new(root);
     let spec = spec(1);
@@ -921,6 +949,7 @@ fn process_execution_persists_mixed_candidate_terminal_states() {
     );
     let execution = service
         .process_execution("exec-candidate-mixed")
+        .await
         .expect("process");
 
     assert_eq!(execution.status, ExecutionStatus::Completed);
@@ -937,8 +966,8 @@ fn process_execution_persists_mixed_candidate_terminal_states() {
     assert_eq!(snapshot.candidates[1].metrics.get("cost_usd"), Some(&0.02));
 }
 
-#[test]
-fn process_execution_releases_claim_after_completion() {
+#[tokio::test]
+async fn process_execution_releases_claim_after_completion() {
     let root = temp_store_dir("worker-release");
     let store = FsExecutionStore::new(root);
     let spec = spec(1);
@@ -968,7 +997,10 @@ fn process_execution_releases_claim_after_completion() {
         runtime,
         store.clone(),
     );
-    let processed = service.process_execution("exec-release").expect("process");
+    let processed = service
+        .process_execution("exec-release")
+        .await
+        .expect("process");
     assert_eq!(processed.status, ExecutionStatus::Completed);
     assert_eq!(store.load_claim("exec-release").expect("claim"), None);
 
@@ -984,8 +1016,8 @@ fn process_execution_releases_claim_after_completion() {
     );
 }
 
-#[test]
-fn process_execution_persists_lifecycle_events() {
+#[tokio::test]
+async fn process_execution_persists_lifecycle_events() {
     let root = temp_store_dir("worker-events");
     let store = FsExecutionStore::new(root);
     let spec = spec(1);
@@ -1015,7 +1047,10 @@ fn process_execution_persists_lifecycle_events() {
         runtime,
         store.clone(),
     );
-    service.process_execution("exec-events").expect("process");
+    service
+        .process_execution("exec-events")
+        .await
+        .expect("process");
 
     let snapshot = store.load_execution("exec-events").expect("reload");
     let event_types: Vec<_> = snapshot
@@ -1038,8 +1073,8 @@ fn process_execution_persists_lifecycle_events() {
     );
 }
 
-#[test]
-fn pause_interrupts_active_processing_and_persists_paused_status() {
+#[tokio::test]
+async fn pause_interrupts_active_processing_and_persists_paused_status() {
     let root = temp_store_dir("worker-pause-active");
     let store = FsExecutionStore::new(root);
     let spec = spec(1);
@@ -1065,6 +1100,7 @@ fn pause_interrupts_active_processing_and_persists_paused_status() {
     );
     let err = service
         .process_execution("exec-pause-active")
+        .await
         .expect_err("pause should interrupt processing");
     assert_eq!(err.kind(), std::io::ErrorKind::WouldBlock);
 
@@ -1075,8 +1111,8 @@ fn pause_interrupts_active_processing_and_persists_paused_status() {
     }));
 }
 
-#[test]
-fn cancel_interrupts_active_processing_and_returns_canceled_execution() {
+#[tokio::test]
+async fn cancel_interrupts_active_processing_and_returns_canceled_execution() {
     let root = temp_store_dir("worker-cancel-active");
     let store = FsExecutionStore::new(root);
     let spec = spec(1);
@@ -1102,6 +1138,7 @@ fn cancel_interrupts_active_processing_and_returns_canceled_execution() {
     );
     let execution = service
         .process_execution("exec-cancel-active")
+        .await
         .expect("cancel should return terminal execution");
     assert_eq!(execution.status, ExecutionStatus::Canceled);
 
@@ -1112,8 +1149,8 @@ fn cancel_interrupts_active_processing_and_returns_canceled_execution() {
     }));
 }
 
-#[test]
-fn resumed_execution_can_be_processed_by_worker_loop() {
+#[tokio::test]
+async fn resumed_execution_can_be_processed_by_worker_loop() {
     let root = temp_store_dir("worker-resume");
     let store = FsExecutionStore::new(root.clone());
     let spec = spec(1);
@@ -1130,7 +1167,7 @@ fn resumed_execution_can_be_processed_by_worker_loop() {
     )
     .expect("resume");
 
-    tick_bridge_worker_until_terminal(root, "exec-resume");
+    tick_bridge_worker_until_terminal(root, "exec-resume").await;
 
     let snapshot = store.load_execution("exec-resume").expect("reload");
     assert_eq!(snapshot.execution.status, ExecutionStatus::Completed);
@@ -1139,8 +1176,8 @@ fn resumed_execution_can_be_processed_by_worker_loop() {
     }));
 }
 
-#[test]
-fn paused_execution_does_not_block_other_queued_work_in_bridge_scheduler() {
+#[tokio::test]
+async fn paused_execution_does_not_block_other_queued_work_in_bridge_scheduler() {
     let root = temp_store_dir("worker-paused-fairness");
     let store = FsExecutionStore::new(root.clone());
     let spec = spec(1);
@@ -1157,9 +1194,13 @@ fn paused_execution_does_not_block_other_queued_work_in_bridge_scheduler() {
         MockRuntime::new(),
         store.clone(),
     );
-    planner.plan_execution("exec-paused").expect("plan paused");
+    planner
+        .plan_execution("exec-paused")
+        .await
+        .expect("plan paused");
     planner
         .plan_execution("exec-running")
+        .await
         .expect("plan running");
 
     let mut paused = store
@@ -1192,6 +1233,7 @@ fn paused_execution_does_not_block_other_queued_work_in_bridge_scheduler() {
         runtime,
         root.clone(),
     )
+    .await
     .expect("process pending");
 
     let paused_snapshot = store.load_execution("exec-paused").expect("reload paused");
@@ -1214,8 +1256,8 @@ fn paused_execution_does_not_block_other_queued_work_in_bridge_scheduler() {
         .any(|candidate| candidate.status == CandidateStatus::Completed));
 }
 
-#[test]
-fn bridge_scheduler_dispatches_earliest_queued_execution_first() {
+#[tokio::test]
+async fn bridge_scheduler_dispatches_earliest_queued_execution_first() {
     let root = temp_store_dir("worker-bridge-fifo");
     let store = FsExecutionStore::new(root.clone());
     let spec = spec(1);
@@ -1232,8 +1274,14 @@ fn bridge_scheduler_dispatches_earliest_queued_execution_first() {
         MockRuntime::new(),
         store.clone(),
     );
-    planner.plan_execution("exec-early").expect("plan early");
-    planner.plan_execution("exec-late").expect("plan late");
+    planner
+        .plan_execution("exec-early")
+        .await
+        .expect("plan early");
+    planner
+        .plan_execution("exec-late")
+        .await
+        .expect("plan late");
 
     let mut runtime = MockRuntime::new();
     runtime.seed_success(
@@ -1272,6 +1320,7 @@ fn bridge_scheduler_dispatches_earliest_queued_execution_first() {
         runtime,
         root.clone(),
     )
+    .await
     .expect("process pending");
 
     let early = store.load_execution("exec-early").expect("reload early");
@@ -1470,7 +1519,7 @@ fn temp_store_dir(label: &str) -> std::path::PathBuf {
     dir
 }
 
-fn tick_bridge_worker_until_terminal(root: std::path::PathBuf, execution_id: &str) {
+async fn tick_bridge_worker_until_terminal(root: std::path::PathBuf, execution_id: &str) {
     let store = FsExecutionStore::new(root.clone());
     for _ in 0..6 {
         let mut runtime = MockRuntime::new();
@@ -1495,6 +1544,7 @@ fn tick_bridge_worker_until_terminal(root: std::path::PathBuf, execution_id: &st
             runtime,
             root.clone(),
         )
+        .await
         .expect("process pending");
         let snapshot = store.load_execution(execution_id).expect("reload");
         if matches!(
@@ -1563,8 +1613,9 @@ impl StepwiseRuntime {
     }
 }
 
+#[async_trait::async_trait(?Send)]
 impl void_control::orchestration::service::ExecutionRuntime for StepwiseRuntime {
-    fn start_run(&mut self, request: StartRequest) -> Result<StartResult, ContractError> {
+    async fn start_run(&mut self, request: StartRequest) -> Result<StartResult, ContractError> {
         Ok(StartResult {
             handle: format!("step:{}", request.run_id),
             attempt_id: 1,
@@ -1572,7 +1623,7 @@ impl void_control::orchestration::service::ExecutionRuntime for StepwiseRuntime 
         })
     }
 
-    fn inspect_run(&self, handle: &str) -> Result<RuntimeInspection, ContractError> {
+    async fn inspect_run(&self, handle: &str) -> Result<RuntimeInspection, ContractError> {
         let run_id = handle.strip_prefix("step:").ok_or_else(|| {
             ContractError::new(
                 ContractErrorCode::NotFound,
@@ -1601,7 +1652,7 @@ impl void_control::orchestration::service::ExecutionRuntime for StepwiseRuntime 
         })
     }
 
-    fn take_structured_output(
+    async fn take_structured_output(
         &mut self,
         run_id: &str,
     ) -> void_control::orchestration::service::StructuredOutputResult {
@@ -1625,8 +1676,9 @@ impl void_control::orchestration::service::ExecutionRuntime for StepwiseRuntime 
     }
 }
 
+#[async_trait::async_trait(?Send)]
 impl void_control::orchestration::service::ExecutionRuntime for TerminalFailedRuntime {
-    fn start_run(&mut self, request: StartRequest) -> Result<StartResult, ContractError> {
+    async fn start_run(&mut self, request: StartRequest) -> Result<StartResult, ContractError> {
         Ok(StartResult {
             handle: format!("tf:{}", request.run_id),
             attempt_id: 1,
@@ -1634,7 +1686,7 @@ impl void_control::orchestration::service::ExecutionRuntime for TerminalFailedRu
         })
     }
 
-    fn inspect_run(&self, handle: &str) -> Result<RuntimeInspection, ContractError> {
+    async fn inspect_run(&self, handle: &str) -> Result<RuntimeInspection, ContractError> {
         let run_id = handle.strip_prefix("tf:").ok_or_else(|| {
             ContractError::new(
                 ContractErrorCode::NotFound,
@@ -1655,7 +1707,7 @@ impl void_control::orchestration::service::ExecutionRuntime for TerminalFailedRu
         })
     }
 
-    fn take_structured_output(
+    async fn take_structured_output(
         &mut self,
         _run_id: &str,
     ) -> void_control::orchestration::service::StructuredOutputResult {
@@ -1666,8 +1718,9 @@ impl void_control::orchestration::service::ExecutionRuntime for TerminalFailedRu
     }
 }
 
+#[async_trait::async_trait(?Send)]
 impl void_control::orchestration::service::ExecutionRuntime for RunningOutputReadyRuntime {
-    fn start_run(&mut self, request: StartRequest) -> Result<StartResult, ContractError> {
+    async fn start_run(&mut self, request: StartRequest) -> Result<StartResult, ContractError> {
         Ok(StartResult {
             handle: format!("ready:{}", request.run_id),
             attempt_id: 1,
@@ -1675,7 +1728,7 @@ impl void_control::orchestration::service::ExecutionRuntime for RunningOutputRea
         })
     }
 
-    fn inspect_run(&self, handle: &str) -> Result<RuntimeInspection, ContractError> {
+    async fn inspect_run(&self, handle: &str) -> Result<RuntimeInspection, ContractError> {
         let run_id = handle.strip_prefix("ready:").ok_or_else(|| {
             ContractError::new(
                 ContractErrorCode::NotFound,
@@ -1696,7 +1749,7 @@ impl void_control::orchestration::service::ExecutionRuntime for RunningOutputRea
         })
     }
 
-    fn take_structured_output(
+    async fn take_structured_output(
         &mut self,
         _run_id: &str,
     ) -> void_control::orchestration::service::StructuredOutputResult {
@@ -1719,8 +1772,9 @@ impl void_control::orchestration::service::ExecutionRuntime for RunningOutputRea
     }
 }
 
+#[async_trait::async_trait(?Send)]
 impl void_control::orchestration::service::ExecutionRuntime for RunningOutputMissingRuntime {
-    fn start_run(&mut self, request: StartRequest) -> Result<StartResult, ContractError> {
+    async fn start_run(&mut self, request: StartRequest) -> Result<StartResult, ContractError> {
         Ok(StartResult {
             handle: format!("missing:{}", request.run_id),
             attempt_id: 1,
@@ -1728,7 +1782,7 @@ impl void_control::orchestration::service::ExecutionRuntime for RunningOutputMis
         })
     }
 
-    fn inspect_run(&self, handle: &str) -> Result<RuntimeInspection, ContractError> {
+    async fn inspect_run(&self, handle: &str) -> Result<RuntimeInspection, ContractError> {
         let run_id = handle.strip_prefix("missing:").ok_or_else(|| {
             ContractError::new(
                 ContractErrorCode::NotFound,
@@ -1749,7 +1803,7 @@ impl void_control::orchestration::service::ExecutionRuntime for RunningOutputMis
         })
     }
 
-    fn take_structured_output(
+    async fn take_structured_output(
         &mut self,
         _run_id: &str,
     ) -> void_control::orchestration::service::StructuredOutputResult {
@@ -1773,8 +1827,9 @@ impl void_control::orchestration::service::ExecutionRuntime for RunningOutputMis
     }
 }
 
+#[async_trait::async_trait(?Send)]
 impl void_control::orchestration::service::ExecutionRuntime for RunningOutputNotFoundRuntime {
-    fn start_run(&mut self, request: StartRequest) -> Result<StartResult, ContractError> {
+    async fn start_run(&mut self, request: StartRequest) -> Result<StartResult, ContractError> {
         Ok(StartResult {
             handle: format!("notfound:{}", request.run_id),
             attempt_id: 1,
@@ -1782,7 +1837,7 @@ impl void_control::orchestration::service::ExecutionRuntime for RunningOutputNot
         })
     }
 
-    fn inspect_run(&self, handle: &str) -> Result<RuntimeInspection, ContractError> {
+    async fn inspect_run(&self, handle: &str) -> Result<RuntimeInspection, ContractError> {
         let run_id = handle.strip_prefix("notfound:").ok_or_else(|| {
             ContractError::new(
                 ContractErrorCode::NotFound,
@@ -1803,7 +1858,7 @@ impl void_control::orchestration::service::ExecutionRuntime for RunningOutputNot
         })
     }
 
-    fn take_structured_output(
+    async fn take_structured_output(
         &mut self,
         _run_id: &str,
     ) -> void_control::orchestration::service::StructuredOutputResult {

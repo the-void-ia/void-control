@@ -13,8 +13,8 @@ use void_control::orchestration::{
 };
 use void_control::runtime::MockRuntime;
 
-#[test]
-fn swarm_incident_mitigation_explores_distinct_hypotheses_and_finds_best_family() {
+#[tokio::test]
+async fn swarm_incident_mitigation_explores_distinct_hypotheses_and_finds_best_family() {
     let store_dir = temp_store_dir("swarm-incident");
     let mut runtime = MockRuntime::new();
     runtime.seed_success(
@@ -76,6 +76,7 @@ fn swarm_incident_mitigation_explores_distinct_hypotheses_and_finds_best_family(
     );
     let execution = service
         .run_to_completion(swarm_incident_message_box_spec())
+        .await
         .expect("run execution");
 
     let store = FsExecutionStore::new(store_dir);
@@ -156,8 +157,8 @@ fn swarm_incident_mitigation_explores_distinct_hypotheses_and_finds_best_family(
     );
 }
 
-#[test]
-fn swarm_prompt_optimization_finds_best_style_cluster() {
+#[tokio::test]
+async fn swarm_prompt_optimization_finds_best_style_cluster() {
     let store_dir = temp_store_dir("swarm-prompt");
     let mut runtime = MockRuntime::new();
     runtime.seed_success(
@@ -203,6 +204,7 @@ fn swarm_prompt_optimization_finds_best_style_cluster() {
     );
     let execution = service
         .run_to_completion(swarm_prompt_spec())
+        .await
         .expect("run execution");
 
     let snapshot = FsExecutionStore::new(store_dir)

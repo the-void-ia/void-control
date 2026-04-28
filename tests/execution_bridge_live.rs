@@ -28,9 +28,9 @@ fn resolve_daemon_base_url() -> String {
     default_unix_url()
 }
 
-#[test]
+#[tokio::test]
 #[ignore = "requires live void-box daemon"]
-fn bridge_submission_and_worker_loop_complete_execution_against_live_daemon() {
+async fn bridge_submission_and_worker_loop_complete_execution_against_live_daemon() {
     let root = temp_root("bridge-live");
     let spec_dir = root.join("specs");
     let execution_dir = root.join("executions");
@@ -44,6 +44,7 @@ fn bridge_submission_and_worker_loop_complete_execution_against_live_daemon() {
         &spec_dir,
         &execution_dir,
     )
+    .await
     .expect("create execution");
     assert_eq!(created.status, 200);
 
@@ -64,6 +65,7 @@ fn bridge_submission_and_worker_loop_complete_execution_against_live_daemon() {
             VoidBoxRuntimeClient::new(base_url.clone(), 250),
             execution_dir.clone(),
         )
+        .await
         .expect("process pending");
 
         let fetched = void_control::bridge::handle_bridge_request_with_dirs_for_test(
@@ -73,6 +75,7 @@ fn bridge_submission_and_worker_loop_complete_execution_against_live_daemon() {
             &spec_dir,
             &execution_dir,
         )
+        .await
         .expect("get execution");
 
         let status = fetched.json["execution"]["status"]
@@ -94,6 +97,7 @@ fn bridge_submission_and_worker_loop_complete_execution_against_live_daemon() {
                 &spec_dir,
                 &execution_dir,
             )
+            .await
             .expect("get execution events");
             assert_eq!(events.status, 200);
             let items = events.json["events"].as_array().expect("events array");
@@ -114,9 +118,9 @@ fn bridge_submission_and_worker_loop_complete_execution_against_live_daemon() {
     }
 }
 
-#[test]
+#[tokio::test]
 #[ignore = "requires live void-box daemon"]
-fn bridge_multiple_executions_complete_against_live_daemon() {
+async fn bridge_multiple_executions_complete_against_live_daemon() {
     let root = temp_root("bridge-live-multi");
     let spec_dir = root.join("specs");
     let execution_dir = root.join("executions");
@@ -131,6 +135,7 @@ fn bridge_multiple_executions_complete_against_live_daemon() {
         &spec_dir,
         &execution_dir,
     )
+    .await
     .expect("create first execution");
     let second = void_control::bridge::handle_bridge_request_with_dirs_for_test(
         "POST",
@@ -139,6 +144,7 @@ fn bridge_multiple_executions_complete_against_live_daemon() {
         &spec_dir,
         &execution_dir,
     )
+    .await
     .expect("create second execution");
 
     let first_id = first.json["execution_id"]
@@ -160,6 +166,7 @@ fn bridge_multiple_executions_complete_against_live_daemon() {
             VoidBoxRuntimeClient::new(base_url.clone(), 250),
             execution_dir.clone(),
         )
+        .await
         .expect("process pending");
 
         for (execution_id, done) in [(&first_id, &mut first_done), (&second_id, &mut second_done)] {
@@ -173,6 +180,7 @@ fn bridge_multiple_executions_complete_against_live_daemon() {
                 &spec_dir,
                 &execution_dir,
             )
+            .await
             .expect("get execution");
             let status = fetched.json["execution"]["status"]
                 .as_str()
@@ -194,9 +202,18 @@ fn bridge_multiple_executions_complete_against_live_daemon() {
     assert!(second_done, "second execution did not complete");
 }
 
-#[test]
+#[tokio::test]
 #[ignore = "requires live void-box daemon"]
-fn bridge_pause_resume_and_cancel_work_against_live_daemon() {
+async fn bridge_pause_resume_and_cancel_work_against_live_daemon() {
+    // The pause / cancel actors need to run concurrently with the worker tick;
+    // because ExecutionService and friends are `?Send`, they can't be moved
+    // through `tokio::spawn`, so we use `LocalSet::spawn_local` here.
+    tokio::task::LocalSet::new()
+        .run_until(bridge_pause_resume_and_cancel_inner())
+        .await;
+}
+
+async fn bridge_pause_resume_and_cancel_inner() {
     let root = temp_root("bridge-live-control");
     let spec_dir = root.join("specs");
     let execution_dir = root.join("executions");
@@ -211,6 +228,7 @@ fn bridge_pause_resume_and_cancel_work_against_live_daemon() {
         &spec_dir,
         &execution_dir,
     )
+    .await
     .expect("create execution");
     let execution_id = created.json["execution_id"]
         .as_str()
@@ -220,15 +238,16 @@ fn bridge_pause_resume_and_cancel_work_against_live_daemon() {
     let pause_execution_dir = execution_dir.clone();
     let pause_spec_dir = spec_dir.clone();
     let pause_execution_id = execution_id.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(250));
+    tokio::task::spawn_local(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
         let _ = void_control::bridge::handle_bridge_request_with_dirs_for_test(
             "POST",
             &format!("/v1/executions/{pause_execution_id}/pause"),
             None,
             &pause_spec_dir,
             &pause_execution_dir,
-        );
+        )
+        .await;
     });
 
     void_control::bridge::process_pending_executions_once_for_test(
@@ -238,6 +257,7 @@ fn bridge_pause_resume_and_cancel_work_against_live_daemon() {
         VoidBoxRuntimeClient::new(base_url.clone(), 250),
         execution_dir.clone(),
     )
+    .await
     .expect("pause processing pass");
 
     let paused = void_control::bridge::handle_bridge_request_with_dirs_for_test(
@@ -247,6 +267,7 @@ fn bridge_pause_resume_and_cancel_work_against_live_daemon() {
         &spec_dir,
         &execution_dir,
     )
+    .await
     .expect("get paused execution");
     assert_eq!(paused.json["execution"]["status"], "Paused");
 
@@ -257,21 +278,23 @@ fn bridge_pause_resume_and_cancel_work_against_live_daemon() {
         &spec_dir,
         &execution_dir,
     )
+    .await
     .expect("resume");
     assert_eq!(resumed.json["status"], "Running");
 
     let cancel_execution_dir = execution_dir.clone();
     let cancel_spec_dir = spec_dir.clone();
     let cancel_execution_id = execution_id.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(250));
+    tokio::task::spawn_local(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
         let _ = void_control::bridge::handle_bridge_request_with_dirs_for_test(
             "POST",
             &format!("/v1/executions/{cancel_execution_id}/cancel"),
             None,
             &cancel_spec_dir,
             &cancel_execution_dir,
-        );
+        )
+        .await;
     });
 
     let mut canceled = None;
@@ -283,6 +306,7 @@ fn bridge_pause_resume_and_cancel_work_against_live_daemon() {
             VoidBoxRuntimeClient::new(base_url.clone(), 250),
             execution_dir.clone(),
         )
+        .await
         .expect("cancel processing pass");
 
         let fetched = void_control::bridge::handle_bridge_request_with_dirs_for_test(
@@ -292,6 +316,7 @@ fn bridge_pause_resume_and_cancel_work_against_live_daemon() {
             &spec_dir,
             &execution_dir,
         )
+        .await
         .expect("get canceled execution");
         if fetched.json["execution"]["status"] == "Canceled" {
             canceled = Some(fetched);
@@ -309,6 +334,7 @@ fn bridge_pause_resume_and_cancel_work_against_live_daemon() {
         &spec_dir,
         &execution_dir,
     )
+    .await
     .expect("get events");
     let items = events.json["events"].as_array().expect("events array");
     assert!(items
@@ -322,9 +348,9 @@ fn bridge_pause_resume_and_cancel_work_against_live_daemon() {
         .any(|event| event["event_type"] == "ExecutionCanceled"));
 }
 
-#[test]
+#[tokio::test]
 #[ignore = "requires live void-box daemon with production initramfs and ANTHROPIC_API_KEY"]
-fn bridge_transform_swarm_one_iteration_acceptance_against_live_daemon() {
+async fn bridge_transform_swarm_one_iteration_acceptance_against_live_daemon() {
     let root = temp_root("bridge-live-transform-one-iteration");
     let spec_dir = root.join("specs");
     let execution_dir = root.join("executions");
@@ -339,6 +365,7 @@ fn bridge_transform_swarm_one_iteration_acceptance_against_live_daemon() {
         &spec_dir,
         &execution_dir,
     )
+    .await
     .expect("create execution");
     assert_eq!(created.status, 200);
 
@@ -356,6 +383,7 @@ fn bridge_transform_swarm_one_iteration_acceptance_against_live_daemon() {
             VoidBoxRuntimeClient::new(base_url.clone(), 250),
             execution_dir.clone(),
         )
+        .await
         .expect("process pending");
 
         let fetched = void_control::bridge::handle_bridge_request_with_dirs_for_test(
@@ -365,6 +393,7 @@ fn bridge_transform_swarm_one_iteration_acceptance_against_live_daemon() {
             &spec_dir,
             &execution_dir,
         )
+        .await
         .expect("get execution");
 
         let status = fetched.json["execution"]["status"]
@@ -395,6 +424,7 @@ fn bridge_transform_swarm_one_iteration_acceptance_against_live_daemon() {
         &spec_dir,
         &execution_dir,
     )
+    .await
     .expect("get execution events");
     assert_eq!(events.status, 200);
     let items = events.json["events"].as_array().expect("events array");

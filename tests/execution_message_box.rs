@@ -279,8 +279,8 @@ fn fs_store_rejects_unsafe_inbox_snapshot_paths() {
     );
 }
 
-#[test]
-fn fs_store_ignores_truncated_ndjson_tail_when_loading_intents() {
+#[tokio::test]
+async fn fs_store_ignores_truncated_ndjson_tail_when_loading_intents() {
     let root = temp_store_root("message-box-ndjson");
     let store = FsExecutionStore::new(root.clone());
 
@@ -318,8 +318,8 @@ fn fs_store_ignores_truncated_ndjson_tail_when_loading_intents() {
     assert_eq!(loaded, vec![intent]);
 }
 
-#[test]
-fn service_launches_through_adapter_and_injects_inbox_content() {
+#[tokio::test]
+async fn service_launches_through_adapter_and_injects_inbox_content() {
     let runtime_requests = Rc::new(RefCell::new(Vec::new()));
     let adapter_calls = Rc::new(RefCell::new(Vec::<(String, InboxSnapshot)>::new()));
 
@@ -368,6 +368,7 @@ fn service_launches_through_adapter_and_injects_inbox_content() {
 
     let _ = service
         .dispatch_execution_once("exec-message-box")
+        .await
         .expect("dispatch once");
 
     assert_eq!(adapter_calls.borrow().len(), 1);
@@ -383,8 +384,8 @@ fn service_launches_through_adapter_and_injects_inbox_content() {
     assert_eq!(decoded, snapshot);
 }
 
-#[test]
-fn service_persists_routes_and_delivers_message_box_artifacts_across_iterations() {
+#[tokio::test]
+async fn service_persists_routes_and_delivers_message_box_artifacts_across_iterations() {
     let root = temp_store_root("message-box-routing");
     let store = FsExecutionStore::new(root.clone());
     let mut runtime = MockRuntime::new();
@@ -454,6 +455,7 @@ fn service_persists_routes_and_delivers_message_box_artifacts_across_iterations(
     );
     let execution = service
         .run_to_completion(two_iteration_swarm_spec())
+        .await
         .expect("run execution");
 
     let store = FsExecutionStore::new(root);
@@ -517,8 +519,9 @@ impl RecordingRuntime {
     }
 }
 
+#[async_trait::async_trait(?Send)]
 impl ExecutionRuntime for RecordingRuntime {
-    fn start_run(&mut self, request: StartRequest) -> Result<StartResult, ContractError> {
+    async fn start_run(&mut self, request: StartRequest) -> Result<StartResult, ContractError> {
         self.starts.borrow_mut().push(request.clone());
         Ok(StartResult {
             handle: format!("run-handle:{}", request.run_id),
@@ -527,7 +530,7 @@ impl ExecutionRuntime for RecordingRuntime {
         })
     }
 
-    fn inspect_run(&self, handle: &str) -> Result<RuntimeInspection, ContractError> {
+    async fn inspect_run(&self, handle: &str) -> Result<RuntimeInspection, ContractError> {
         Ok(RuntimeInspection {
             run_id: handle
                 .strip_prefix("run-handle:")
@@ -544,7 +547,7 @@ impl ExecutionRuntime for RecordingRuntime {
         })
     }
 
-    fn take_structured_output(&mut self, _run_id: &str) -> StructuredOutputResult {
+    async fn take_structured_output(&mut self, _run_id: &str) -> StructuredOutputResult {
         StructuredOutputResult::Missing
     }
 }
