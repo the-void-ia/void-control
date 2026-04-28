@@ -513,9 +513,10 @@ async fn route_runs_passthrough(
     }
 }
 
-/// Fallback handler for unknown routes. Mirrors the JSON shape the prior
-/// hand-rolled dispatcher returned for unmatched paths so clients that
-/// parsed the `code` / `message` / `retryable` fields keep working.
+/// Fallback handler for unknown routes. Returns a JSON body with the
+/// `code` / `message` / `retryable` fields the rest of the bridge uses for
+/// error responses, so clients see a uniform error shape across matched
+/// and unmatched routes.
 #[cfg(feature = "serde")]
 async fn route_not_found(
     method: axum::http::Method,
@@ -2234,14 +2235,13 @@ fn into_axum(response: JsonHttpResponse) -> axum::response::Response {
 //
 // Every handler is a thin shim over the matching `handle_*` function: take
 // axum extractors, rebuild the `(method, path, body)` shape the dispatch
-// helpers want, and `into_axum` the result. JSON shapes and status codes
-// stay wire-format-compatible with what the test suite asserts on.
+// helpers want, and `into_axum` the result.
 //
 // Path-prefix routes (`/v1/team-runs/...`, `/v1/batch-runs/...`,
-// `/v1/yolo-runs/...`) still receive the full request path so the existing
-// handle_*_get parsers can `.strip_prefix()` it. The `axum::extract::Path`
-// extractor would force a different parsing shape; using `OriginalUri`
-// preserves the existing contract.
+// `/v1/yolo-runs/...`) hand the full request path to the `handle_*_get`
+// parsers, which `.strip_prefix()` it themselves. `OriginalUri` preserves
+// that contract; `axum::extract::Path` would force the parsers into a
+// different shape.
 
 #[cfg(feature = "serde")]
 async fn route_health() -> axum::response::Response {
