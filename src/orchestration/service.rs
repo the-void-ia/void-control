@@ -43,7 +43,7 @@ use serde::Serialize;
 /// macro arg in `voidctl::main`. Sticking with `?Send` would force a
 /// trait-bound refactor across orchestration if the flavor ever changes.
 #[async_trait]
-pub trait ExecutionRuntime: Send {
+pub trait ExecutionRuntime: Send + Sync {
     async fn start_run(&mut self, request: StartRequest) -> Result<StartResult, ContractError>;
     async fn inspect_run(&self, handle: &str) -> Result<RuntimeInspection, ContractError>;
     async fn take_structured_output(&mut self, run_id: &str) -> StructuredOutputResult;
@@ -260,7 +260,7 @@ pub struct DryRunResult {
 
 impl<R> ExecutionService<R>
 where
-    R: ExecutionRuntime + Sync,
+    R: ExecutionRuntime,
 {
     /// Acquire the persistent claim for `execution_id`, run `operation`, and
     /// release it in all branches. The closure is async because it ultimately
