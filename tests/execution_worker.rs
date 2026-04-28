@@ -1,7 +1,7 @@
 #![cfg(feature = "serde")]
 
-use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::sync::Mutex;
 
 use void_control::contract::{
     ContractError, ContractErrorCode, RunState, RuntimeInspection, StartRequest, StartResult,
@@ -1559,7 +1559,7 @@ async fn tick_bridge_worker_until_terminal(root: std::path::PathBuf, execution_i
 
 struct StepwiseRuntime {
     terminal_after_inspects: usize,
-    inspect_counts: RefCell<BTreeMap<String, usize>>,
+    inspect_counts: Mutex<BTreeMap<String, usize>>,
     outputs: BTreeMap<String, CandidateOutput>,
 }
 
@@ -1593,7 +1593,7 @@ impl StepwiseRuntime {
     fn new(terminal_after_inspects: usize) -> Self {
         Self {
             terminal_after_inspects,
-            inspect_counts: RefCell::new(BTreeMap::new()),
+            inspect_counts: Mutex::new(BTreeMap::new()),
             outputs: BTreeMap::new(),
         }
     }
@@ -1604,7 +1604,7 @@ impl StepwiseRuntime {
     ) -> Self {
         Self {
             terminal_after_inspects,
-            inspect_counts: RefCell::new(BTreeMap::new()),
+            inspect_counts: Mutex::new(BTreeMap::new()),
             outputs: outputs
                 .into_iter()
                 .map(|(run_id, output)| (run_id.to_string(), output))
@@ -1613,7 +1613,7 @@ impl StepwiseRuntime {
     }
 }
 
-#[async_trait::async_trait(?Send)]
+#[async_trait::async_trait]
 impl void_control::orchestration::service::ExecutionRuntime for StepwiseRuntime {
     async fn start_run(&mut self, request: StartRequest) -> Result<StartResult, ContractError> {
         Ok(StartResult {
@@ -1631,7 +1631,7 @@ impl void_control::orchestration::service::ExecutionRuntime for StepwiseRuntime 
                 false,
             )
         })?;
-        let mut counts = self.inspect_counts.borrow_mut();
+        let mut counts = self.inspect_counts.lock().expect("inspect_counts poisoned");
         let count = counts.entry(run_id.to_string()).or_insert(0);
         *count += 1;
         let terminal = *count > self.terminal_after_inspects;
@@ -1676,7 +1676,7 @@ impl void_control::orchestration::service::ExecutionRuntime for StepwiseRuntime 
     }
 }
 
-#[async_trait::async_trait(?Send)]
+#[async_trait::async_trait]
 impl void_control::orchestration::service::ExecutionRuntime for TerminalFailedRuntime {
     async fn start_run(&mut self, request: StartRequest) -> Result<StartResult, ContractError> {
         Ok(StartResult {
@@ -1718,7 +1718,7 @@ impl void_control::orchestration::service::ExecutionRuntime for TerminalFailedRu
     }
 }
 
-#[async_trait::async_trait(?Send)]
+#[async_trait::async_trait]
 impl void_control::orchestration::service::ExecutionRuntime for RunningOutputReadyRuntime {
     async fn start_run(&mut self, request: StartRequest) -> Result<StartResult, ContractError> {
         Ok(StartResult {
@@ -1772,7 +1772,7 @@ impl void_control::orchestration::service::ExecutionRuntime for RunningOutputRea
     }
 }
 
-#[async_trait::async_trait(?Send)]
+#[async_trait::async_trait]
 impl void_control::orchestration::service::ExecutionRuntime for RunningOutputMissingRuntime {
     async fn start_run(&mut self, request: StartRequest) -> Result<StartResult, ContractError> {
         Ok(StartResult {
@@ -1827,7 +1827,7 @@ impl void_control::orchestration::service::ExecutionRuntime for RunningOutputMis
     }
 }
 
-#[async_trait::async_trait(?Send)]
+#[async_trait::async_trait]
 impl void_control::orchestration::service::ExecutionRuntime for RunningOutputNotFoundRuntime {
     async fn start_run(&mut self, request: StartRequest) -> Result<StartResult, ContractError> {
         Ok(StartResult {

@@ -1,11 +1,10 @@
 #![cfg(feature = "serde")]
 
-use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use void_control::contract::{
@@ -320,8 +319,8 @@ async fn fs_store_ignores_truncated_ndjson_tail_when_loading_intents() {
 
 #[tokio::test]
 async fn service_launches_through_adapter_and_injects_inbox_content() {
-    let runtime_requests = Rc::new(RefCell::new(Vec::new()));
-    let adapter_calls = Rc::new(RefCell::new(Vec::<(String, InboxSnapshot)>::new()));
+    let runtime_requests: Arc<Mutex<Vec<StartRequest>>> = Arc::new(Mutex::new(Vec::new()));
+    let adapter_calls: Arc<Mutex<Vec<(String, InboxSnapshot)>>> = Arc::new(Mutex::new(Vec::new()));
 
     let runtime = RecordingRuntime::new(runtime_requests.clone());
     let adapter = RecordingLaunchAdapter::new(adapter_calls.clone());
@@ -371,11 +370,13 @@ async fn service_launches_through_adapter_and_injects_inbox_content() {
         .await
         .expect("dispatch once");
 
-    assert_eq!(adapter_calls.borrow().len(), 1);
-    assert_eq!(adapter_calls.borrow()[0].0, "candidate-1");
-    assert_eq!(adapter_calls.borrow()[0].1, snapshot);
+    let calls = adapter_calls.lock().expect("adapter_calls poisoned");
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].0, "candidate-1");
+    assert_eq!(calls[0].1, snapshot);
+    drop(calls);
 
-    let requests = runtime_requests.borrow();
+    let requests = runtime_requests.lock().expect("runtime_requests poisoned");
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].workflow_spec, spec.workflow.template);
     let launch_context = requests[0].launch_context.as_ref().expect("launch context");
@@ -510,19 +511,22 @@ async fn service_persists_routes_and_delivers_message_box_artifacts_across_itera
 }
 
 struct RecordingRuntime {
-    starts: Rc<RefCell<Vec<StartRequest>>>,
+    starts: Arc<Mutex<Vec<StartRequest>>>,
 }
 
 impl RecordingRuntime {
-    fn new(starts: Rc<RefCell<Vec<StartRequest>>>) -> Self {
+    fn new(starts: Arc<Mutex<Vec<StartRequest>>>) -> Self {
         Self { starts }
     }
 }
 
-#[async_trait::async_trait(?Send)]
+#[async_trait::async_trait]
 impl ExecutionRuntime for RecordingRuntime {
     async fn start_run(&mut self, request: StartRequest) -> Result<StartResult, ContractError> {
-        self.starts.borrow_mut().push(request.clone());
+        self.starts
+            .lock()
+            .expect("starts poisoned")
+            .push(request.clone());
         Ok(StartResult {
             handle: format!("run-handle:{}", request.run_id),
             attempt_id: 1,
@@ -553,11 +557,11 @@ impl ExecutionRuntime for RecordingRuntime {
 }
 
 struct RecordingLaunchAdapter {
-    calls: Rc<RefCell<Vec<(String, InboxSnapshot)>>>,
+    calls: Arc<Mutex<Vec<(String, InboxSnapshot)>>>,
 }
 
 impl RecordingLaunchAdapter {
-    fn new(calls: Rc<RefCell<Vec<(String, InboxSnapshot)>>>) -> Self {
+    fn new(calls: Arc<Mutex<Vec<(String, InboxSnapshot)>>>) -> Self {
         Self { calls }
     }
 }
@@ -570,7 +574,8 @@ impl ProviderLaunchAdapter for RecordingLaunchAdapter {
         inbox: &InboxSnapshot,
     ) -> Result<StartRequest, void_control::contract::ContractError> {
         self.calls
-            .borrow_mut()
+            .lock()
+            .expect("calls poisoned")
             .push((candidate.candidate_id.clone(), inbox.clone()));
         LaunchInjectionAdapter.prepare_launch_request(request, candidate, inbox)
     }

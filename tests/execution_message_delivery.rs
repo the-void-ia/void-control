@@ -1,12 +1,10 @@
 #![cfg(feature = "serde")]
 
-use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::PathBuf;
-use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -114,7 +112,7 @@ fn http_sidecar_adapter_generates_generic_messaging_skill_content() {
 
 #[tokio::test]
 async fn service_with_delivery_adapter_injects_snapshot_and_persists_drained_intents() {
-    let starts = Rc::new(RefCell::new(Vec::new()));
+    let starts: Arc<Mutex<Vec<StartRequest>>> = Arc::new(Mutex::new(Vec::new()));
     let injected = Arc::new(Mutex::new(Vec::new()));
     let drained = Arc::new(Mutex::new(Vec::new()));
     drained.lock().expect("lock drained").push(vec![
@@ -179,7 +177,7 @@ async fn service_with_delivery_adapter_injects_snapshot_and_persists_drained_int
         .await
         .expect("dispatch once");
 
-    let requests = starts.borrow();
+    let requests = starts.lock().expect("starts poisoned");
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].launch_context, None);
 
@@ -245,7 +243,7 @@ async fn service_with_delivery_adapter_requires_runtime_run_refs() {
 
 #[tokio::test]
 async fn sidecar_leader_and_broadcast_intents_route_differently_across_iterations() {
-    let starts = Rc::new(RefCell::new(Vec::new()));
+    let starts: Arc<Mutex<Vec<StartRequest>>> = Arc::new(Mutex::new(Vec::new()));
     let injected = Arc::new(Mutex::new(Vec::new()));
     let drained = Arc::new(Mutex::new(BTreeMap::from([(
         "exec-run-candidate-1".to_string(),
@@ -353,7 +351,7 @@ async fn sidecar_leader_and_broadcast_intents_route_differently_across_iteration
 
 #[tokio::test]
 async fn candidate_completes_when_sidecar_intent_drain_fails_after_terminal_output() {
-    let starts = Rc::new(RefCell::new(Vec::new()));
+    let starts: Arc<Mutex<Vec<StartRequest>>> = Arc::new(Mutex::new(Vec::new()));
     let runtime = RecordingDeliveryRuntime::new(
         starts,
         CandidateOutput::new("candidate-1", true, BTreeMap::new()).with_intents(vec![intent(
@@ -408,34 +406,37 @@ async fn candidate_completes_when_sidecar_intent_drain_fails_after_terminal_outp
 }
 
 struct RecordingDeliveryRuntime {
-    starts: Rc<RefCell<Vec<StartRequest>>>,
+    starts: Arc<Mutex<Vec<StartRequest>>>,
     output: CandidateOutput,
 }
 
 impl RecordingDeliveryRuntime {
-    fn new(starts: Rc<RefCell<Vec<StartRequest>>>, output: CandidateOutput) -> Self {
+    fn new(starts: Arc<Mutex<Vec<StartRequest>>>, output: CandidateOutput) -> Self {
         Self { starts, output }
     }
 }
 
 struct SeededDeliveryRuntime {
-    starts: Rc<RefCell<Vec<StartRequest>>>,
+    starts: Arc<Mutex<Vec<StartRequest>>>,
     outputs: BTreeMap<String, CandidateOutput>,
 }
 
 impl SeededDeliveryRuntime {
     fn new(
-        starts: Rc<RefCell<Vec<StartRequest>>>,
+        starts: Arc<Mutex<Vec<StartRequest>>>,
         outputs: BTreeMap<String, CandidateOutput>,
     ) -> Self {
         Self { starts, outputs }
     }
 }
 
-#[async_trait::async_trait(?Send)]
+#[async_trait::async_trait]
 impl ExecutionRuntime for RecordingDeliveryRuntime {
     async fn start_run(&mut self, request: StartRequest) -> Result<StartResult, ContractError> {
-        self.starts.borrow_mut().push(request.clone());
+        self.starts
+            .lock()
+            .expect("starts poisoned")
+            .push(request.clone());
         Ok(StartResult {
             handle: format!("vb:{}", request.run_id),
             attempt_id: 1,
@@ -469,10 +470,13 @@ impl ExecutionRuntime for RecordingDeliveryRuntime {
     }
 }
 
-#[async_trait::async_trait(?Send)]
+#[async_trait::async_trait]
 impl ExecutionRuntime for SeededDeliveryRuntime {
     async fn start_run(&mut self, request: StartRequest) -> Result<StartResult, ContractError> {
-        self.starts.borrow_mut().push(request.clone());
+        self.starts
+            .lock()
+            .expect("starts poisoned")
+            .push(request.clone());
         Ok(StartResult {
             handle: format!("vb:{}", request.run_id),
             attempt_id: 1,
@@ -513,7 +517,7 @@ impl ExecutionRuntime for SeededDeliveryRuntime {
 
 struct NoRunRefRuntime;
 
-#[async_trait::async_trait(?Send)]
+#[async_trait::async_trait]
 impl ExecutionRuntime for NoRunRefRuntime {
     async fn start_run(&mut self, request: StartRequest) -> Result<StartResult, ContractError> {
         Ok(StartResult {
@@ -556,7 +560,7 @@ impl RecordingDeliveryAdapter {
     }
 }
 
-#[async_trait::async_trait(?Send)]
+#[async_trait::async_trait]
 impl MessageDeliveryAdapter for RecordingDeliveryAdapter {
     fn capabilities(&self) -> Vec<DeliveryCapability> {
         vec![DeliveryCapability::LaunchInjection]
@@ -606,7 +610,7 @@ impl MappingDeliveryAdapter {
     }
 }
 
-#[async_trait::async_trait(?Send)]
+#[async_trait::async_trait]
 impl MessageDeliveryAdapter for MappingDeliveryAdapter {
     fn capabilities(&self) -> Vec<DeliveryCapability> {
         vec![DeliveryCapability::LaunchInjection]
@@ -644,7 +648,7 @@ impl MessageDeliveryAdapter for MappingDeliveryAdapter {
 
 struct FailingDrainDeliveryAdapter;
 
-#[async_trait::async_trait(?Send)]
+#[async_trait::async_trait]
 impl MessageDeliveryAdapter for FailingDrainDeliveryAdapter {
     fn capabilities(&self) -> Vec<DeliveryCapability> {
         vec![DeliveryCapability::LaunchInjection]
