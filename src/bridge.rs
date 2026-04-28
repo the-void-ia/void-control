@@ -279,23 +279,21 @@ pub async fn handle_bridge_request_with_dirs_for_test(
 
 /// Listen for the bridge HTTP service.
 ///
-/// Spawns the worker tick on a `tokio::task::spawn_local` on the same
-/// `current_thread` runtime as the axum server, then serves traffic until
-/// SIGINT/SIGTERM triggers the graceful-shutdown handler. The signal hook
-/// here matches axum's idiomatic `with_graceful_shutdown` example: in-flight
-/// requests drain before the listener closes.
+/// Spawns the worker tick as a `tokio::spawn` task and runs the axum server
+/// alongside it; both share whatever tokio runtime `voidctl::main` set up
+/// (currently `current_thread`). The signal hook matches axum's idiomatic
+/// `with_graceful_shutdown` example: in-flight requests drain before the
+/// listener closes.
 ///
-/// `spawn_local` (vs. `spawn`) is what lets the orchestration code stay
-/// `!Send` — `ExecutionService<VoidBoxRuntimeClient>` carries a
-/// `Box<dyn ProviderLaunchAdapter>` which has no `Send` bound, and adding one
-/// would force the trait through the whole orchestration crate. Since the
-/// runtime is `current_thread`, every task lives on a single OS thread and
-/// `Send` is moot.
+/// `tokio::spawn` requires `Send` futures — which is fine because every
+/// trait we use here (`ExecutionRuntime`, `MessageDeliveryAdapter`,
+/// `ProviderLaunchAdapter`, `HttpTransport`) is bounded `Send + Sync`.
+/// That keeps this function flavor-agnostic: flipping `voidctl::main` to
+/// `rt-multi-thread` later requires no changes here.
 #[cfg(feature = "serde")]
 pub async fn run_bridge() -> Result<(), String> {
     use std::sync::Arc;
     use tokio::net::TcpListener;
-    use tokio::task::LocalSet;
 
     let config = BridgeConfig::from_env();
 
@@ -315,13 +313,10 @@ pub async fn run_bridge() -> Result<(), String> {
         client: VoidBoxRuntimeClient::new(config.base_url.clone(), 250),
     });
 
-    let local_set = LocalSet::new();
-
     // Worker tick: re-create the runtime client per pass so the connection
-    // pool can recycle if the daemon restarts. The tick itself stays in the
-    // same single-thread runtime as the HTTP server.
+    // pool can recycle if the daemon restarts.
     let worker_config = config.clone();
-    local_set.spawn_local(async move {
+    tokio::spawn(async move {
         loop {
             let runtime = VoidBoxRuntimeClient::new(worker_config.base_url.clone(), 250);
             if let Err(err) = process_pending_executions_once(
@@ -349,14 +344,10 @@ pub async fn run_bridge() -> Result<(), String> {
         listen_addr, base_url_for_log
     );
 
-    local_set
-        .run_until(async {
-            axum::serve(listener, app)
-                .with_graceful_shutdown(shutdown_signal())
-                .await
-                .map_err(|e| format!("bridge serve failed: {e}"))
-        })
-        .await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+        .map_err(|e| format!("bridge serve failed: {e}"))?;
     Ok(())
 }
 
@@ -1674,7 +1665,7 @@ fn handle_execution_policy_patch(
 }
 
 #[cfg(feature = "serde")]
-async fn process_pending_executions_once<R: ExecutionRuntime>(
+async fn process_pending_executions_once<R: ExecutionRuntime + Sync>(
     global: GlobalConfig,
     runtime: R,
     execution_dir: PathBuf,
@@ -1797,7 +1788,7 @@ async fn process_pending_executions_once<R: ExecutionRuntime>(
 }
 
 #[cfg(feature = "serde")]
-pub async fn process_pending_executions_once_for_test<R: ExecutionRuntime>(
+pub async fn process_pending_executions_once_for_test<R: ExecutionRuntime + Sync>(
     global: GlobalConfig,
     runtime: R,
     execution_dir: PathBuf,
