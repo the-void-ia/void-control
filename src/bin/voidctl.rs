@@ -1954,7 +1954,7 @@ Policy presets: fast | balanced | safe"
                         }
                         Err(err) => return Err(err),
                     }
-                    std::thread::sleep(Duration::from_millis(1000));
+                    tokio::time::sleep(Duration::from_millis(1000)).await;
                 }
                 return Ok(());
             }

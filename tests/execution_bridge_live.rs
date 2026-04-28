@@ -114,7 +114,7 @@ async fn bridge_submission_and_worker_loop_complete_execution_against_live_daemo
         }
 
         assert!(attempts < 20, "execution did not reach terminal state");
-        std::thread::sleep(std::time::Duration::from_millis(250));
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
     }
 }
 
@@ -195,7 +195,7 @@ async fn bridge_multiple_executions_complete_against_live_daemon() {
         if first_done && second_done {
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(150));
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
     }
 
     assert!(first_done, "first execution did not complete");
@@ -315,7 +315,7 @@ async fn bridge_pause_resume_and_cancel_work_against_live_daemon() {
             canceled = Some(fetched);
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
     let canceled = canceled.expect("execution should reach canceled state");
     assert_eq!(canceled.json["execution"]["status"], "Canceled");
@@ -397,7 +397,7 @@ async fn bridge_transform_swarm_one_iteration_acceptance_against_live_daemon() {
             break;
         }
 
-        std::thread::sleep(std::time::Duration::from_millis(500));
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }
 
     let terminal = terminal.expect("execution should reach terminal state");

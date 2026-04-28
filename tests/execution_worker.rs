@@ -1082,8 +1082,8 @@ async fn pause_interrupts_active_processing_and_persists_paused_status() {
         .expect("submit");
 
     let pause_store = store.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(150));
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
         let _ = ExecutionService::<MockRuntime>::update_execution_status(
             &pause_store,
             "exec-pause-active",
@@ -1120,8 +1120,8 @@ async fn cancel_interrupts_active_processing_and_returns_canceled_execution() {
         .expect("submit");
 
     let cancel_store = store.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(150));
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
         let _ = ExecutionService::<MockRuntime>::update_execution_status(
             &cancel_store,
             "exec-cancel-active",
