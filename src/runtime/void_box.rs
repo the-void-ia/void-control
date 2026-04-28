@@ -28,14 +28,14 @@ use crate::runtime::VoidBoxRunRef;
 /// the configured socket scheme. Mirrors void-box's CLI backend.
 const HTTP_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// Hyper legacy client over a TCP connector. The legacy client wraps a
-/// connection pool over `Connection: keep-alive`, matching what the daemon
-/// serves on the same transport.
+/// Pooled hyper-util client over a TCP connector. Wraps a connection pool
+/// over `Connection: keep-alive`, matching what the daemon serves on the
+/// same transport.
 type TcpHyperClient = HyperClient<HttpConnector, Full<Bytes>>;
 
-/// Hyper legacy client over `hyperlocal::UnixConnector`. Same client shape as
-/// `TcpHyperClient` — only the connector differs, so dispatch can share one
-/// code path once the URI is built.
+/// Pooled hyper-util client over `hyperlocal::UnixConnector`. Same client
+/// shape as `TcpHyperClient` — only the connector differs, so dispatch can
+/// share one code path once the URI is built.
 type UnixHyperClient = HyperClient<UnixConnector, Full<Bytes>>;
 
 /// Shared HTTP client for the void-box daemon.
@@ -564,7 +564,7 @@ impl HttpTransport for TcpHttpTransport {
     }
 }
 
-/// AF_UNIX transport. Speaks the same hyper legacy client as
+/// AF_UNIX transport. Wraps the same hyper-util pooled client as
 /// [`TcpHttpTransport`]; only the connector differs.
 ///
 /// Deliberately sends no `Authorization` header: the daemon authenticates
