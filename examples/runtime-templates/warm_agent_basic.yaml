@@ -1,0 +1,37 @@
+api_version: v1
+kind: agent
+name: warm_agent_basic
+
+sandbox:
+  mode: auto
+  memory_mb: 2048
+  vcpus: 2
+  network: true
+
+llm:
+  provider: claude
+
+agent:
+  mode: service
+  skills:
+    - "agent:claude-code"
+  messaging:
+    enabled: false
+  output_file: /workspace/output.json
+  prompt: |
+    You are a reusable long-running service agent.
+
+    Do these steps exactly:
+
+    1. Read the task request from the provided prompt and complete it.
+    2. Write JSON to `/workspace/output.json` with exactly this schema:
+       {
+         "status": "success",
+         "summary": "one-line result summary",
+         "metrics": {
+           "success": 1.0
+         },
+         "artifacts": []
+       }
+    3. After writing the output file, remain alive for additional follow-up work.
+    4. Do not delete `/workspace/output.json`.

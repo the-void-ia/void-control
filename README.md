@@ -111,6 +111,7 @@ What to look for:
 
 - `spec/`: Runtime and orchestration contracts.
 - `src/`: Rust orchestration client/runtime normalization logic.
+- `templates/`: File-backed template-first API definitions for single-agent and warm-agent execution.
 - `tests/`: Contract and compatibility tests.
 - `web/void-control-ux/`: React operator dashboard (graph + inspector).
 
@@ -211,6 +212,168 @@ This is also the canonical first-release orchestration workflow:
 - inspect the execution graph, inspector, and event stream
 - follow candidate metrics and `leader` / `broadcast` collaboration events
 
+### Template-first bridge API
+
+Phase 1 also exposes file-backed templates through the bridge:
+
+```bash
+curl -sS http://127.0.0.1:43210/v1/templates
+
+curl -sS http://127.0.0.1:43210/v1/templates/single-agent-basic
+
+curl -sS -X POST http://127.0.0.1:43210/v1/templates/single-agent-basic/dry-run \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "inputs": {
+      "goal": "Summarize this repo",
+      "prompt": "Read the repo and summarize risks",
+      "provider": "claude"
+    }
+  }'
+
+curl -sS -X POST http://127.0.0.1:43210/v1/templates/warm-agent-basic/execute \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "inputs": {
+      "goal": "Keep a warm agent ready",
+      "prompt": "Stay alive for follow-up repo work."
+    }
+  }'
+```
+
+These template endpoints compile into normal `ExecutionSpec` objects and then
+reuse the existing dry-run and execution creation flow. Phase 1 ships two
+starter templates:
+
+- `single-agent-basic`
+- `warm-agent-basic`
+
+Terminal access is also available through `voidctl`:
+
+```bash
+voidctl template list
+voidctl template get single-agent-basic
+voidctl template dry-run single-agent-basic template-inputs.json
+voidctl template execute warm-agent-basic template-inputs.json
+```
+
+`template-inputs.json` must be a JSON request body in the same shape the bridge
+accepts, for example:
+
+```json
+{
+  "inputs": {
+    "goal": "Summarize this repo",
+    "prompt": "Read the repo and summarize risks",
+    "provider": "claude"
+  }
+}
+```
+
+Inside the interactive `voidctl` console, the same surface is available as:
+
+```text
+/template list
+/template get single-agent-basic
+/template dry-run single-agent-basic template-inputs.json
+/template execute warm-agent-basic template-inputs.json
+```
+
+### Batch / yolo
+
+`batch` is the canonical high-level surface for remote background work that
+fans out one worker template across multiple prompts. `yolo` is an accepted
+alias for the same API and CLI path.
+
+Bridge routes:
+
+```bash
+curl -sS -X POST http://127.0.0.1:43210/v1/batch/dry-run \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "api_version": "v1",
+    "kind": "batch",
+    "worker": {
+      "template": "examples/runtime-templates/warm_agent_basic.yaml",
+      "provider": "claude"
+    },
+    "mode": {
+      "parallelism": 2
+    },
+    "jobs": [
+      { "prompt": "Fix failing auth tests" },
+      { "prompt": "Improve retry logging" },
+      { "prompt": "Review DB migration safety" }
+    ]
+  }'
+
+curl -sS -X POST http://127.0.0.1:43210/v1/yolo/run \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "api_version": "v1",
+    "kind": "yolo",
+    "worker": {
+      "template": "examples/runtime-templates/warm_agent_basic.yaml"
+    },
+    "jobs": [
+      { "prompt": "Review migration safety" }
+    ]
+  }'
+```
+
+CLI:
+
+```bash
+voidctl batch dry-run examples/batch/background_repo_work.yaml
+voidctl batch run examples/batch/background_repo_work.yaml
+cat examples/batch/background_repo_work.yaml | voidctl yolo run --stdin
+```
+
+Interactive console:
+
+```text
+/batch dry-run examples/batch/background_repo_work.yaml
+/batch run examples/batch/background_repo_work.yaml
+/yolo run examples/batch/background_repo_work.yaml
+```
+
+### Team
+
+`team` is the phase-1 high-level multi-agent authoring surface. Users define
+`agents`, `tasks`, and a `process`, and `void-control` compiles that into the
+existing orchestration engine.
+
+Current phase-1 limitation:
+- `depends_on` is not supported yet
+- `sequential` preserves task ordering, but does not thread task outputs between agents
+
+HTTP:
+
+```bash
+curl -sS -X POST http://127.0.0.1:43210/v1/teams/dry-run \
+  -H 'Content-Type: text/yaml' \
+  --data-binary @examples/team/rust_article_team.yaml
+
+curl -sS -X POST http://127.0.0.1:43210/v1/teams/run \
+  -H 'Content-Type: text/yaml' \
+  --data-binary @examples/team/rust_article_team.yaml
+```
+
+CLI:
+
+```bash
+voidctl team dry-run examples/team/rust_article_team.yaml
+voidctl team run examples/team/rust_article_team.yaml
+cat examples/team/rust_article_team.yaml | voidctl team run --stdin
+```
+
+Interactive console:
+
+```text
+/team dry-run examples/team/rust_article_team.yaml
+/team run examples/team/rust_article_team.yaml
+```
+
 ### 7) Run the supervision example
 
 Use the checked-in supervision example to exercise the flat
@@ -294,6 +457,37 @@ voidctl execution inspect <execution-id>
 voidctl execution events <execution-id>
 voidctl execution result <execution-id>
 voidctl execution runtime <execution-id>
+```
+
+Template-backed agent runs use the `voidctl template ...` surface and expect a
+JSON request body on disk or stdin:
+
+```json
+{
+  "inputs": {
+    "goal": "Summarize this repo",
+    "prompt": "Read the repo and summarize risks",
+    "provider": "claude"
+  }
+}
+```
+
+Dry-run and execute a checked-in template:
+
+```bash
+voidctl template list
+voidctl template get single-agent-basic
+voidctl template dry-run single-agent-basic template-inputs.json
+voidctl template execute warm-agent-basic template-inputs.json
+```
+
+The interactive `voidctl` console exposes the same path:
+
+```text
+/template list
+/template get single-agent-basic
+/template dry-run single-agent-basic template-inputs.json
+/template execute warm-agent-basic template-inputs.json
 ```
 
 Example execution:

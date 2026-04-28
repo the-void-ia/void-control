@@ -1,0 +1,22 @@
+api_version: v1
+kind: batch
+
+metadata:
+  name: repo-background-work
+
+worker:
+  template: examples/runtime-templates/warm_agent_basic.yaml
+  provider: claude
+
+mode:
+  parallelism: 3
+  background: true
+  interaction: none
+
+jobs:
+  - name: auth
+    prompt: Fix failing auth tests
+  - name: logging
+    prompt: Improve retry logging
+  - name: migrations
+    prompt: Review DB migration safety

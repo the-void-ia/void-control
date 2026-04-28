@@ -1,0 +1,26 @@
+api_version: v1
+kind: team
+
+metadata:
+  name: rust-article-team
+
+agents:
+  - name: researcher
+    role: Researcher
+    goal: Find information about Rust performance
+
+  - name: writer
+    role: Writer
+    goal: Write a concise article draft
+
+tasks:
+  - name: research
+    description: Gather evidence about Rust performance tradeoffs
+    agent: researcher
+
+  - name: write
+    description: Write the article draft after the research pass completes
+    agent: writer
+
+process:
+  type: sequential

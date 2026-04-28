@@ -28,10 +28,12 @@ runtime transport concerns should stay separate.
 - `src/runtime/`: runtime adapter implementations (`MockRuntime`, `VoidBoxRuntimeClient`)
 - `src/orchestration/`: planning, persistence, scheduling, reduction, strategies
 - `src/bridge.rs`: HTTP bridge for launch, dry-run, execution inspection, and policy patching
+- `src/templates/`: file-backed template schema, loading, and compilation into `ExecutionSpec`
 - `src/bin/voidctl.rs`: CLI entrypoint and bridge server
 - `tests/`: orchestration, bridge, runtime, and compatibility coverage
 - `web/void-control-ux/`: React/Vite operator dashboard
 - `docs/`: architecture notes, release process, and internal plans/specs
+- `templates/`: checked-in template-first API definitions
 
 ## Module map
 
@@ -62,6 +64,9 @@ runtime transport concerns should stay separate.
   - restart/reload of persisted active work
 - `src/bridge.rs`
   - serde-gated HTTP routes for UI/bridge workflows
+  - execution routes plus template-first bridge routes
+- `src/templates/`
+  - phase-1 control template schema, checked-in loader, and compile logic
 
 ### Web UI
 
@@ -177,9 +182,59 @@ Important:
   - `execution events <execution-id>`
   - `execution result <execution-id>`
   - `execution runtime <execution-id> [candidate-id]`
+  - `template list`
+  - `template get <template-id>`
+  - `template dry-run <template-id> [<inputs-json-path> | --stdin]`
+  - `template execute <template-id> [<inputs-json-path> | --stdin]`
+  - `batch dry-run <spec-path>`
+  - `batch dry-run --stdin`
+  - `batch run <spec-path>`
+  - `batch run --stdin`
+  - `yolo dry-run <spec-path>`
+  - `yolo dry-run --stdin`
+  - `yolo run <spec-path>`
+  - `yolo run --stdin`
+  - `team dry-run <spec-path>`
+  - `team dry-run --stdin`
+  - `team run <spec-path>`
+  - `team run --stdin`
+- interactive `voidctl` console also exposes:
+  - `/template list`
+  - `/template get <template-id>`
+  - `/template dry-run <template-id> <inputs-json-path>`
+  - `/template execute <template-id> <inputs-json-path>`
+  - `/batch dry-run <spec-path>`
+  - `/batch run <spec-path>`
+  - `/yolo dry-run <spec-path>`
+  - `/yolo run <spec-path>`
+  - `/team dry-run <spec-path>`
+  - `/team run <spec-path>`
+- `batch` is the canonical high-level remote background execution surface
+- `yolo` is an accepted alias for `batch`
+- `team` is the phase-1 high-level multi-agent authoring surface
+- current phase-1 `team` limitations:
+  - `depends_on` is not supported yet
+  - `sequential` preserves ordering only; task outputs are not threaded between agents
 - use `voidctl execution ...` for terminal operator workflows; use the bridge
   HTTP API or UI when you need direct API-driven inspection or browser workflows
 - quote URLs that contain `?` when using `curl` from `zsh`
+- template-first bridge endpoints:
+  - `GET /v1/templates`
+  - `GET /v1/templates/{id}`
+  - `POST /v1/templates/{id}/dry-run`
+  - `POST /v1/templates/{id}/execute`
+- batch bridge endpoints:
+  - `POST /v1/batch/dry-run`
+  - `POST /v1/batch/run`
+  - `GET /v1/batch-runs/{id}`
+- accepted aliases:
+  - `POST /v1/yolo/dry-run`
+  - `POST /v1/yolo/run`
+  - `GET /v1/yolo-runs/{id}`
+- team bridge endpoints:
+  - `POST /v1/teams/dry-run`
+  - `POST /v1/teams/run`
+  - `GET /v1/team-runs/{id}`
 
 ## Runtime compatibility commands
 

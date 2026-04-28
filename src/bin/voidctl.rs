@@ -43,11 +43,55 @@ enum ExecutionCommand {
 
 #[cfg(feature = "serde")]
 #[derive(Debug, Clone, PartialEq, Eq)]
+enum TemplateCommand {
+    List,
+    Get {
+        template_id: String,
+    },
+    DryRun {
+        template_id: String,
+        inputs: Option<String>,
+        stdin: bool,
+    },
+    Execute {
+        template_id: String,
+        inputs: Option<String>,
+        stdin: bool,
+    },
+}
+
+#[cfg(feature = "serde")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum BatchCommand {
+    DryRun {
+        spec: Option<String>,
+        stdin: bool,
+        alias: String,
+    },
+    Run {
+        spec: Option<String>,
+        stdin: bool,
+        alias: String,
+    },
+}
+
+#[cfg(feature = "serde")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TeamCommand {
+    DryRun { spec: Option<String>, stdin: bool },
+    Run { spec: Option<String>, stdin: bool },
+}
+
+#[cfg(feature = "serde")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum CliCommand {
     Serve,
     Help,
     Interactive,
     Execution(ExecutionCommand),
+    Template(TemplateCommand),
+    Batch(BatchCommand),
+    Team(TeamCommand),
 }
 
 #[cfg(feature = "serde")]
@@ -71,6 +115,21 @@ fn execution_subcommand_candidates() -> &'static [&'static str] {
     &[
         "submit", "dry-run", "watch", "inspect", "events", "result", "runtime",
     ]
+}
+
+#[cfg(feature = "serde")]
+fn template_subcommand_candidates() -> &'static [&'static str] {
+    &["list", "get", "dry-run", "execute"]
+}
+
+#[cfg(feature = "serde")]
+fn batch_subcommand_candidates() -> &'static [&'static str] {
+    &["dry-run", "run"]
+}
+
+#[cfg(feature = "serde")]
+fn team_subcommand_candidates() -> &'static [&'static str] {
+    &["dry-run", "run"]
 }
 
 #[cfg(feature = "serde")]
@@ -190,8 +249,113 @@ where
                 )),
             }
         }
+        "template" => {
+            let action = iter.next().ok_or_else(|| {
+                "usage: voidctl template <list|get|dry-run|execute> [args]".to_string()
+            })?;
+            match action {
+                "list" => {
+                    expect_no_more_args(&mut iter, "usage: voidctl template list")?;
+                    Ok(CliCommand::Template(TemplateCommand::List))
+                }
+                "get" => {
+                    let template_id = iter
+                        .next()
+                        .ok_or_else(|| "usage: voidctl template get <template_id>".to_string())?
+                        .to_string();
+                    expect_no_more_args(&mut iter, "usage: voidctl template get <template_id>")?;
+                    Ok(CliCommand::Template(TemplateCommand::Get { template_id }))
+                }
+                "dry-run" => {
+                    let template_id = iter
+                        .next()
+                        .ok_or_else(|| {
+                            "usage: voidctl template dry-run <template_id> [<inputs-json-path> | --stdin]"
+                                .to_string()
+                        })?
+                        .to_string();
+                    parse_template_input_file_or_stdin(&mut iter, "dry-run").map(
+                        |(inputs, stdin)| {
+                            CliCommand::Template(TemplateCommand::DryRun {
+                                template_id,
+                                inputs,
+                                stdin,
+                            })
+                        },
+                    )
+                }
+                "execute" => {
+                    let template_id = iter
+                        .next()
+                        .ok_or_else(|| {
+                            "usage: voidctl template execute <template_id> [<inputs-json-path> | --stdin]"
+                                .to_string()
+                        })?
+                        .to_string();
+                    parse_template_input_file_or_stdin(&mut iter, "execute").map(
+                        |(inputs, stdin)| {
+                            CliCommand::Template(TemplateCommand::Execute {
+                                template_id,
+                                inputs,
+                                stdin,
+                            })
+                        },
+                    )
+                }
+                other => Err(format!(
+                    "unknown template subcommand '{other}'. supported: {}",
+                    template_subcommand_candidates().join(", ")
+                )),
+            }
+        }
+        "batch" | "yolo" => {
+            let alias = head;
+            let action = iter.next().ok_or_else(|| {
+                format!("usage: voidctl {alias} <dry-run|run> [<spec-path> | --stdin]")
+            })?;
+            match action {
+                "dry-run" => {
+                    parse_execution_file_or_stdin(&mut iter, "dry-run").map(|(spec, stdin)| {
+                        CliCommand::Batch(BatchCommand::DryRun {
+                            spec,
+                            stdin,
+                            alias: alias.to_string(),
+                        })
+                    })
+                }
+                "run" => parse_execution_file_or_stdin(&mut iter, "run").map(|(spec, stdin)| {
+                    CliCommand::Batch(BatchCommand::Run {
+                        spec,
+                        stdin,
+                        alias: alias.to_string(),
+                    })
+                }),
+                other => Err(format!(
+                    "unknown {alias} subcommand '{other}'. supported: {}",
+                    batch_subcommand_candidates().join(", ")
+                )),
+            }
+        }
+        "team" => {
+            let action = iter.next().ok_or_else(|| {
+                "usage: voidctl team <dry-run|run> [<spec-path> | --stdin]".to_string()
+            })?;
+            match action {
+                "dry-run" => {
+                    parse_execution_file_or_stdin(&mut iter, "dry-run").map(|(spec, stdin)| {
+                        CliCommand::Team(TeamCommand::DryRun { spec, stdin })
+                    })
+                }
+                "run" => parse_execution_file_or_stdin(&mut iter, "run")
+                    .map(|(spec, stdin)| CliCommand::Team(TeamCommand::Run { spec, stdin })),
+                other => Err(format!(
+                    "unknown team subcommand '{other}'. supported: {}",
+                    team_subcommand_candidates().join(", ")
+                )),
+            }
+        }
         other => Err(format!(
-            "unknown command '{other}'. supported: serve, help, execution"
+            "unknown command '{other}'. supported: serve, help, execution, template, batch, yolo, team"
         )),
     }
 }
@@ -239,6 +403,46 @@ where
 }
 
 #[cfg(feature = "serde")]
+fn parse_template_input_file_or_stdin<'a, I>(
+    iter: &mut I,
+    action: &str,
+) -> Result<(Option<String>, bool), String>
+where
+    I: Iterator<Item = &'a str>,
+{
+    let mut inputs = None;
+    let mut stdin = false;
+    for token in iter.by_ref() {
+        match token {
+            "--stdin" => {
+                if stdin || inputs.is_some() {
+                    return Err(format!(
+                        "usage: voidctl template {action} <template_id> [<inputs-json-path> | --stdin]"
+                    ));
+                }
+                stdin = true;
+            }
+            other => {
+                if stdin {
+                    return Err(format!("unexpected extra argument '{other}'"));
+                }
+                if inputs.is_none() {
+                    inputs = Some(other.to_string());
+                } else {
+                    return Err(format!("unexpected extra argument '{other}'"));
+                }
+            }
+        }
+    }
+    if !stdin && inputs.is_none() {
+        return Err(format!(
+            "usage: voidctl template {action} <template_id> [<inputs-json-path> | --stdin]"
+        ));
+    }
+    Ok((inputs, stdin))
+}
+
+#[cfg(feature = "serde")]
 fn expect_no_more_args<I>(iter: &mut I, usage: &str) -> Result<(), String>
 where
     I: Iterator,
@@ -264,7 +468,23 @@ fn top_level_help_text() -> &'static str {
   voidctl execution inspect <execution-id>
   voidctl execution events <execution-id>
   voidctl execution result <execution-id>
-  voidctl execution runtime <execution-id> [candidate-id]"
+  voidctl execution runtime <execution-id> [candidate-id]
+  voidctl template list
+  voidctl template get <template-id>
+  voidctl template dry-run <template-id> [<inputs-json-path> | --stdin]
+  voidctl template execute <template-id> [<inputs-json-path> | --stdin]
+  voidctl batch dry-run <spec-path>
+  voidctl batch dry-run --stdin
+  voidctl batch run <spec-path>
+  voidctl batch run --stdin
+  voidctl yolo dry-run <spec-path>
+  voidctl yolo dry-run --stdin
+  voidctl yolo run <spec-path>
+  voidctl yolo run --stdin
+  voidctl team dry-run <spec-path>
+  voidctl team dry-run --stdin
+  voidctl team run <spec-path>
+  voidctl team run --stdin"
 }
 
 #[cfg(feature = "serde")]
@@ -348,6 +568,32 @@ fn load_execution_spec_input(spec: Option<&str>, stdin: bool) -> Result<String, 
         return Err("spec path is required unless --stdin is used".to_string());
     };
     load_execution_spec_file(spec)
+}
+
+#[cfg(feature = "serde")]
+fn load_json_input_file(path: &str) -> Result<String, String> {
+    std::fs::read_to_string(path).map_err(|e| format!("read template inputs failed: {e}"))
+}
+
+#[cfg(feature = "serde")]
+fn load_json_input(inputs: Option<&str>, stdin: bool) -> Result<String, String> {
+    use std::io::Read;
+
+    if stdin {
+        let mut body = String::new();
+        std::io::stdin()
+            .read_to_string(&mut body)
+            .map_err(|e| format!("read stdin failed: {e}"))?;
+        if body.trim().is_empty() {
+            return Err("stdin template input is empty".to_string());
+        }
+        return Ok(body);
+    }
+
+    let Some(inputs) = inputs else {
+        return Err("template input path is required unless --stdin is used".to_string());
+    };
+    load_json_input_file(inputs)
 }
 
 #[cfg(feature = "serde")]
@@ -468,6 +714,124 @@ fn print_execution_summary(detail: &serde_json::Value) {
             .get("last_event")
             .and_then(|value| value.as_str())
             .unwrap_or("-")
+    );
+}
+
+#[cfg(feature = "serde")]
+fn print_template_compilation_summary(detail: &serde_json::Value) {
+    let template = detail
+        .get("template")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let compiled = detail
+        .get("compiled")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    println!(
+        "template_id={} execution_kind={} goal={} workflow_template={} mode={} variation_source={} candidates_per_iteration={}",
+        template
+            .get("id")
+            .and_then(|value| value.as_str())
+            .unwrap_or("-"),
+        template
+            .get("execution_kind")
+            .and_then(|value| value.as_str())
+            .unwrap_or("-"),
+        compiled
+            .get("goal")
+            .and_then(|value| value.as_str())
+            .unwrap_or("-"),
+        compiled
+            .get("workflow_template")
+            .and_then(|value| value.as_str())
+            .unwrap_or("-"),
+        compiled
+            .get("mode")
+            .and_then(|value| value.as_str())
+            .unwrap_or("-"),
+        compiled
+            .get("variation_source")
+            .and_then(|value| value.as_str())
+            .unwrap_or("-"),
+        compiled
+            .get("candidates_per_iteration")
+            .and_then(|value| value.as_u64())
+            .unwrap_or(0),
+    );
+    let overrides = compiled
+        .get("overrides")
+        .and_then(|value| value.as_object())
+        .cloned()
+        .unwrap_or_default();
+    for (key, value) in overrides {
+        if let Some(value) = value.as_str() {
+            println!("{key}={value}");
+        } else {
+            println!("{key}={value}");
+        }
+    }
+}
+
+#[cfg(feature = "serde")]
+fn print_batch_compilation_summary(detail: &serde_json::Value) {
+    println!(
+        "kind={} compiled_primitive={} workflow_template={} mode={} variation_source={} candidates_per_iteration={}",
+        detail
+            .get("kind")
+            .and_then(|value| value.as_str())
+            .unwrap_or("-"),
+        detail
+            .get("compiled_primitive")
+            .and_then(|value| value.as_str())
+            .unwrap_or("-"),
+        detail
+            .get("compiled")
+            .and_then(|value| value.get("workflow_template"))
+            .and_then(|value| value.as_str())
+            .unwrap_or("-"),
+        detail
+            .get("compiled")
+            .and_then(|value| value.get("mode"))
+            .and_then(|value| value.as_str())
+            .unwrap_or("-"),
+        detail
+            .get("compiled")
+            .and_then(|value| value.get("variation_source"))
+            .and_then(|value| value.as_str())
+            .unwrap_or("-"),
+        detail
+            .get("compiled")
+            .and_then(|value| value.get("candidates_per_iteration"))
+            .and_then(|value| value.as_u64())
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "-".to_string()),
+    );
+}
+
+#[cfg(feature = "serde")]
+fn print_batch_run_summary(detail: &serde_json::Value) {
+    println!(
+        "kind={} run_id={} compiled_primitive={} status={} goal={}",
+        detail
+            .get("kind")
+            .and_then(|value| value.as_str())
+            .unwrap_or("-"),
+        detail
+            .get("run_id")
+            .and_then(|value| value.as_str())
+            .unwrap_or("-"),
+        detail
+            .get("compiled_primitive")
+            .and_then(|value| value.as_str())
+            .unwrap_or("-"),
+        detail
+            .get("status")
+            .and_then(|value| value.as_str())
+            .unwrap_or("unknown"),
+        detail
+            .get("goal")
+            .and_then(|value| value.as_str())
+            .unwrap_or("-"),
     );
 }
 
@@ -603,6 +967,9 @@ fn run() -> Result<(), String> {
             return Ok(());
         }
         CliCommand::Execution(_) => {}
+        CliCommand::Template(_) => {}
+        CliCommand::Batch(_) => {}
+        CliCommand::Team(_) => {}
         CliCommand::Interactive => {}
     }
 
@@ -646,6 +1013,10 @@ fn run() -> Result<(), String> {
                 "/watch",
                 "/resume",
                 "/execution",
+                "/template",
+                "/batch",
+                "/yolo",
+                "/team",
                 "/help",
                 "/exit",
             ];
@@ -683,6 +1054,9 @@ fn run() -> Result<(), String> {
                 "/execution" => options.extend([
                     "create", "dry-run", "list", "status", "pause", "resume", "cancel", "patch",
                 ]),
+                "/template" => options.extend(["list", "get", "dry-run", "execute"]),
+                "/batch" | "/yolo" => options.extend(["dry-run", "run"]),
+                "/team" => options.extend(["dry-run", "run"]),
                 "/events" => options.push("--from"),
                 "/logs" => options.push("--follow"),
                 "/cancel" => options.push("--reason"),
@@ -762,6 +1136,32 @@ fn run() -> Result<(), String> {
             execution_id: String,
             max_iterations: Option<u32>,
             max_concurrent_candidates: Option<u32>,
+        },
+        TemplateList,
+        TemplateGet {
+            template_id: String,
+        },
+        TemplateDryRun {
+            template_id: String,
+            inputs: String,
+        },
+        TemplateExecute {
+            template_id: String,
+            inputs: String,
+        },
+        BatchDryRun {
+            spec: String,
+            alias: String,
+        },
+        BatchRun {
+            spec: String,
+            alias: String,
+        },
+        TeamDryRun {
+            spec: String,
+        },
+        TeamRun {
+            spec: String,
         },
         Help,
         Exit,
@@ -1071,6 +1471,92 @@ fn run() -> Result<(), String> {
                     other => Err(format!("unknown /execution action '{other}'")),
                 }
             }
+            "/template" => {
+                let action = tokens.next().ok_or_else(|| {
+                    "usage: /template <list|get|dry-run|execute> [args]".to_string()
+                })?;
+                match action {
+                    "list" => Ok(Command::TemplateList),
+                    "get" => Ok(Command::TemplateGet {
+                        template_id: tokens
+                            .next()
+                            .ok_or_else(|| "usage: /template get <template_id>".to_string())?
+                            .to_string(),
+                    }),
+                    "dry-run" => Ok(Command::TemplateDryRun {
+                        template_id: tokens
+                            .next()
+                            .ok_or_else(|| {
+                                "usage: /template dry-run <template_id> <inputs_file>".to_string()
+                            })?
+                            .to_string(),
+                        inputs: tokens
+                            .next()
+                            .ok_or_else(|| {
+                                "usage: /template dry-run <template_id> <inputs_file>".to_string()
+                            })?
+                            .to_string(),
+                    }),
+                    "execute" => Ok(Command::TemplateExecute {
+                        template_id: tokens
+                            .next()
+                            .ok_or_else(|| {
+                                "usage: /template execute <template_id> <inputs_file>".to_string()
+                            })?
+                            .to_string(),
+                        inputs: tokens
+                            .next()
+                            .ok_or_else(|| {
+                                "usage: /template execute <template_id> <inputs_file>".to_string()
+                            })?
+                            .to_string(),
+                    }),
+                    other => Err(format!("unknown /template action '{other}'")),
+                }
+            }
+            "/batch" | "/yolo" => {
+                let alias = head.trim_start_matches('/').to_string();
+                let action = tokens
+                    .next()
+                    .ok_or_else(|| format!("usage: /{alias} <dry-run|run> <spec_file>"))?;
+                match action {
+                    "dry-run" => Ok(Command::BatchDryRun {
+                        spec: tokens
+                            .next()
+                            .ok_or_else(|| format!("usage: /{alias} dry-run <spec_file>"))?
+                            .to_string(),
+                        alias,
+                    }),
+                    "run" => Ok(Command::BatchRun {
+                        spec: tokens
+                            .next()
+                            .ok_or_else(|| format!("usage: /{alias} run <spec_file>"))?
+                            .to_string(),
+                        alias,
+                    }),
+                    other => Err(format!("unknown /{alias} action '{other}'")),
+                }
+            }
+            "/team" => {
+                let action = tokens
+                    .next()
+                    .ok_or_else(|| "usage: /team <dry-run|run> <spec_file>".to_string())?;
+                match action {
+                    "dry-run" => Ok(Command::TeamDryRun {
+                        spec: tokens
+                            .next()
+                            .ok_or_else(|| "usage: /team dry-run <spec_file>".to_string())?
+                            .to_string(),
+                    }),
+                    "run" => Ok(Command::TeamRun {
+                        spec: tokens
+                            .next()
+                            .ok_or_else(|| "usage: /team run <spec_file>".to_string())?
+                            .to_string(),
+                    }),
+                    other => Err(format!("unknown /team action '{other}'")),
+                }
+            }
             "/help" => Ok(Command::Help),
             "/exit" | "/quit" => Ok(Command::Exit),
             other => Err(format!("unknown command '{other}'")),
@@ -1095,6 +1581,16 @@ fn run() -> Result<(), String> {
   /execution resume <execution_id>
   /execution cancel <execution_id>
   /execution patch <execution_id> [--max-iterations N] [--max-concurrent-candidates N]
+  /template list
+  /template get <template_id>
+  /template dry-run <template_id> <inputs_json_file>
+  /template execute <template_id> <inputs_json_file>
+  /batch dry-run <spec_file>
+  /batch run <spec_file>
+  /yolo dry-run <spec_file>
+  /yolo run <spec_file>
+  /team dry-run <spec_file>
+  /team run <spec_file>
   /help
   /exit
 
@@ -1588,6 +2084,308 @@ Policy presets: fast | balanced | safe"
         }
     }
 
+    if let CliCommand::Template(command) = parsed_cli {
+        match command {
+            TemplateCommand::List => {
+                match bridge_request(&bridge_base_url, "GET", "/v1/templates", None) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            return Err(bridge_error_message(&response));
+                        }
+                        let templates = response
+                            .json
+                            .get("templates")
+                            .and_then(|value| value.as_array())
+                            .cloned()
+                            .unwrap_or_default();
+                        if templates.is_empty() {
+                            println!("no templates");
+                        } else {
+                            for template in templates {
+                                println!(
+                                    "template_id={} execution_kind={} name={} description={}",
+                                    template
+                                        .get("id")
+                                        .and_then(|value| value.as_str())
+                                        .unwrap_or("-"),
+                                    template
+                                        .get("execution_kind")
+                                        .and_then(|value| value.as_str())
+                                        .unwrap_or("-"),
+                                    template
+                                        .get("name")
+                                        .and_then(|value| value.as_str())
+                                        .unwrap_or("-"),
+                                    template
+                                        .get("description")
+                                        .and_then(|value| value.as_str())
+                                        .unwrap_or("-"),
+                                );
+                            }
+                        }
+                    }
+                    Err(err) => return Err(err),
+                }
+                return Ok(());
+            }
+            TemplateCommand::Get { template_id } => {
+                let path = format!("/v1/templates/{template_id}");
+                match bridge_request(&bridge_base_url, "GET", &path, None) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            return Err(bridge_error_message(&response));
+                        }
+                        let template = response
+                            .json
+                            .get("template")
+                            .cloned()
+                            .unwrap_or(serde_json::Value::Null);
+                        let workflow_template = response
+                            .json
+                            .get("defaults")
+                            .and_then(|value| value.get("workflow_template"))
+                            .and_then(|value| value.as_str())
+                            .unwrap_or("-");
+                        println!(
+                            "template_id={} execution_kind={} name={} workflow_template={}",
+                            template
+                                .get("id")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                            template
+                                .get("execution_kind")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                            template
+                                .get("name")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                            workflow_template
+                        );
+                        let inputs = response
+                            .json
+                            .get("inputs")
+                            .and_then(|value| value.as_object())
+                            .cloned()
+                            .unwrap_or_default();
+                        for (name, field) in inputs {
+                            println!(
+                                "input={} type={} required={} description={}",
+                                name,
+                                field
+                                    .get("type")
+                                    .and_then(|value| value.as_str())
+                                    .unwrap_or("-"),
+                                field
+                                    .get("required")
+                                    .and_then(|value| value.as_bool())
+                                    .map(|value| value.to_string())
+                                    .unwrap_or_else(|| "-".to_string()),
+                                field
+                                    .get("description")
+                                    .and_then(|value| value.as_str())
+                                    .unwrap_or("-"),
+                            );
+                        }
+                    }
+                    Err(err) => return Err(err),
+                }
+                return Ok(());
+            }
+            TemplateCommand::DryRun {
+                template_id,
+                inputs,
+                stdin,
+            } => {
+                let body = load_json_input(inputs.as_deref(), stdin)?;
+                let path = format!("/v1/templates/{template_id}/dry-run");
+                match bridge_request(&bridge_base_url, "POST", &path, Some(&body)) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            return Err(bridge_error_message(&response));
+                        }
+                        print_template_compilation_summary(&response.json);
+                    }
+                    Err(err) => return Err(err),
+                }
+                return Ok(());
+            }
+            TemplateCommand::Execute {
+                template_id,
+                inputs,
+                stdin,
+            } => {
+                let body = load_json_input(inputs.as_deref(), stdin)?;
+                let path = format!("/v1/templates/{template_id}/execute");
+                match bridge_request(&bridge_base_url, "POST", &path, Some(&body)) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            return Err(bridge_error_message(&response));
+                        }
+                        println!(
+                            "execution_id={} template_id={} execution_kind={} status={} goal={}",
+                            response
+                                .json
+                                .get("execution_id")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                            response
+                                .json
+                                .get("template")
+                                .and_then(|value| value.get("id"))
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                            response
+                                .json
+                                .get("template")
+                                .and_then(|value| value.get("execution_kind"))
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                            response
+                                .json
+                                .get("status")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("unknown"),
+                            response
+                                .json
+                                .get("goal")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                        );
+                    }
+                    Err(err) => return Err(err),
+                }
+                return Ok(());
+            }
+        }
+    }
+
+    if let CliCommand::Batch(command) = parsed_cli {
+        match command {
+            BatchCommand::DryRun { spec, stdin, alias } => {
+                let spec = load_execution_spec_input(spec.as_deref(), stdin)?;
+                let path = if alias == "yolo" {
+                    "/v1/yolo/dry-run"
+                } else {
+                    "/v1/batch/dry-run"
+                };
+                match bridge_request(&bridge_base_url, "POST", path, Some(&spec)) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            return Err(bridge_error_message(&response));
+                        }
+                        print_batch_compilation_summary(&response.json);
+                    }
+                    Err(err) => return Err(err),
+                }
+                return Ok(());
+            }
+            BatchCommand::Run { spec, stdin, alias } => {
+                let spec = load_execution_spec_input(spec.as_deref(), stdin)?;
+                let path = if alias == "yolo" {
+                    "/v1/yolo/run"
+                } else {
+                    "/v1/batch/run"
+                };
+                match bridge_request(&bridge_base_url, "POST", path, Some(&spec)) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            return Err(bridge_error_message(&response));
+                        }
+                        println!(
+                            "kind={} run_id={} compiled_primitive={} status={} goal={}",
+                            response
+                                .json
+                                .get("kind")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                            response
+                                .json
+                                .get("run_id")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                            response
+                                .json
+                                .get("compiled_primitive")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                            response
+                                .json
+                                .get("status")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("unknown"),
+                            response
+                                .json
+                                .get("goal")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                        );
+                    }
+                    Err(err) => return Err(err),
+                }
+                return Ok(());
+            }
+        }
+    }
+
+    if let CliCommand::Team(command) = parsed_cli {
+        match command {
+            TeamCommand::DryRun { spec, stdin } => {
+                let spec = load_execution_spec_input(spec.as_deref(), stdin)?;
+                match bridge_request(&bridge_base_url, "POST", "/v1/teams/dry-run", Some(&spec)) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            return Err(bridge_error_message(&response));
+                        }
+                        print_batch_compilation_summary(&response.json);
+                    }
+                    Err(err) => return Err(err),
+                }
+                return Ok(());
+            }
+            TeamCommand::Run { spec, stdin } => {
+                let spec = load_execution_spec_input(spec.as_deref(), stdin)?;
+                match bridge_request(&bridge_base_url, "POST", "/v1/teams/run", Some(&spec)) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            return Err(bridge_error_message(&response));
+                        }
+                        println!(
+                            "kind={} execution_id={} compiled_primitive={} status={} goal={}",
+                            response
+                                .json
+                                .get("kind")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                            response
+                                .json
+                                .get("execution_id")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                            response
+                                .json
+                                .get("compiled_primitive")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                            response
+                                .json
+                                .get("status")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("unknown"),
+                            response
+                                .json
+                                .get("goal")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                        );
+                    }
+                    Err(err) => return Err(err),
+                }
+                return Ok(());
+            }
+        }
+    }
+
     let client = VoidBoxRuntimeClient::new(base_url.clone(), 250);
     let session_file = session_path();
     let mut session = load_session(&session_file);
@@ -1964,6 +2762,256 @@ Policy presets: fast | balanced | safe"
                     Err(err) => println!("error: {err}"),
                 }
             }
+            Command::TemplateList => {
+                match bridge_request(&bridge_base_url, "GET", "/v1/templates", None) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            println!("error: {}", bridge_error_message(&response));
+                            continue;
+                        }
+                        let templates = response
+                            .json
+                            .get("templates")
+                            .and_then(|v| v.as_array())
+                            .cloned()
+                            .unwrap_or_default();
+                        if templates.is_empty() {
+                            println!("no templates");
+                        } else {
+                            for template in templates {
+                                println!(
+                                    "template_id={} execution_kind={} name={} description={}",
+                                    template.get("id").and_then(|v| v.as_str()).unwrap_or("-"),
+                                    template
+                                        .get("execution_kind")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("-"),
+                                    template.get("name").and_then(|v| v.as_str()).unwrap_or("-"),
+                                    template
+                                        .get("description")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("-"),
+                                );
+                            }
+                        }
+                    }
+                    Err(err) => println!("error: {err}"),
+                }
+            }
+            Command::TemplateGet { template_id } => {
+                match bridge_request(
+                    &bridge_base_url,
+                    "GET",
+                    &format!("/v1/templates/{template_id}"),
+                    None,
+                ) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            println!("error: {}", bridge_error_message(&response));
+                            continue;
+                        }
+                        let template = response
+                            .json
+                            .get("template")
+                            .cloned()
+                            .unwrap_or(serde_json::Value::Null);
+                        let workflow_template = response
+                            .json
+                            .get("defaults")
+                            .and_then(|value| value.get("workflow_template"))
+                            .and_then(|value| value.as_str())
+                            .unwrap_or("-");
+                        println!(
+                            "template_id={} execution_kind={} name={} workflow_template={}",
+                            template
+                                .get("id")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                            template
+                                .get("execution_kind")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                            template
+                                .get("name")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                            workflow_template
+                        );
+                    }
+                    Err(err) => println!("error: {err}"),
+                }
+            }
+            Command::TemplateDryRun {
+                template_id,
+                inputs,
+            } => {
+                match load_json_input_file(&inputs).and_then(|body| {
+                    bridge_request(
+                        &bridge_base_url,
+                        "POST",
+                        &format!("/v1/templates/{template_id}/dry-run"),
+                        Some(&body),
+                    )
+                }) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            println!("error: {}", bridge_error_message(&response));
+                            continue;
+                        }
+                        print_template_compilation_summary(&response.json);
+                    }
+                    Err(err) => println!("error: {err}"),
+                }
+            }
+            Command::TemplateExecute {
+                template_id,
+                inputs,
+            } => {
+                match load_json_input_file(&inputs).and_then(|body| {
+                    bridge_request(
+                        &bridge_base_url,
+                        "POST",
+                        &format!("/v1/templates/{template_id}/execute"),
+                        Some(&body),
+                    )
+                }) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            println!("error: {}", bridge_error_message(&response));
+                            continue;
+                        }
+                        println!(
+                            "execution_id={} template_id={} execution_kind={} status={} goal={}",
+                            response
+                                .json
+                                .get("execution_id")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                            response
+                                .json
+                                .get("template")
+                                .and_then(|value| value.get("id"))
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                            response
+                                .json
+                                .get("template")
+                                .and_then(|value| value.get("execution_kind"))
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                            response
+                                .json
+                                .get("status")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("unknown"),
+                            response
+                                .json
+                                .get("goal")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                        );
+                    }
+                    Err(err) => println!("error: {err}"),
+                }
+            }
+            Command::BatchDryRun { spec, alias } => {
+                let path = if alias == "yolo" {
+                    "/v1/yolo/dry-run"
+                } else {
+                    "/v1/batch/dry-run"
+                };
+                match load_execution_spec_file(&spec).and_then(|spec_text| {
+                    bridge_request(&bridge_base_url, "POST", path, Some(&spec_text))
+                }) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            println!("error: {}", bridge_error_message(&response));
+                            continue;
+                        }
+                        print_batch_compilation_summary(&response.json);
+                    }
+                    Err(err) => println!("error: {err}"),
+                }
+            }
+            Command::BatchRun { spec, alias } => {
+                let path = if alias == "yolo" {
+                    "/v1/yolo/run"
+                } else {
+                    "/v1/batch/run"
+                };
+                match load_execution_spec_file(&spec).and_then(|spec_text| {
+                    bridge_request(&bridge_base_url, "POST", path, Some(&spec_text))
+                }) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            println!("error: {}", bridge_error_message(&response));
+                            continue;
+                        }
+                        print_batch_run_summary(&response.json);
+                    }
+                    Err(err) => println!("error: {err}"),
+                }
+            }
+            Command::TeamDryRun { spec } => {
+                match load_execution_spec_file(&spec).and_then(|spec_text| {
+                    bridge_request(
+                        &bridge_base_url,
+                        "POST",
+                        "/v1/teams/dry-run",
+                        Some(&spec_text),
+                    )
+                }) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            println!("error: {}", bridge_error_message(&response));
+                            continue;
+                        }
+                        print_batch_compilation_summary(&response.json);
+                    }
+                    Err(err) => println!("error: {err}"),
+                }
+            }
+            Command::TeamRun { spec } => {
+                match load_execution_spec_file(&spec).and_then(|spec_text| {
+                    bridge_request(&bridge_base_url, "POST", "/v1/teams/run", Some(&spec_text))
+                }) {
+                    Ok(response) => {
+                        if response.status >= 400 {
+                            println!("error: {}", bridge_error_message(&response));
+                            continue;
+                        }
+                        println!(
+                            "kind={} execution_id={} compiled_primitive={} status={} goal={}",
+                            response
+                                .json
+                                .get("kind")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                            response
+                                .json
+                                .get("execution_id")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                            response
+                                .json
+                                .get("compiled_primitive")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                            response
+                                .json
+                                .get("status")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("unknown"),
+                            response
+                                .json
+                                .get("goal")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("-"),
+                        );
+                    }
+                    Err(err) => println!("error: {err}"),
+                }
+            }
         }
 
         if let Err(e) = save_session(&session_file, &session) {
@@ -2083,6 +3131,78 @@ mod tests {
     }
 
     #[test]
+    fn parses_template_list() {
+        let command = parse_cli_args(["template", "list"]).unwrap();
+        assert_eq!(command, CliCommand::Template(TemplateCommand::List));
+    }
+
+    #[test]
+    fn parses_template_get() {
+        let command = parse_cli_args(["template", "get", "single-agent-basic"]).unwrap();
+        assert_eq!(
+            command,
+            CliCommand::Template(TemplateCommand::Get {
+                template_id: "single-agent-basic".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_template_dry_run_with_inputs_file() {
+        let command =
+            parse_cli_args(["template", "dry-run", "single-agent-basic", "inputs.json"]).unwrap();
+        assert_eq!(
+            command,
+            CliCommand::Template(TemplateCommand::DryRun {
+                template_id: "single-agent-basic".to_string(),
+                inputs: Some("inputs.json".to_string()),
+                stdin: false,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_template_execute_from_stdin() {
+        let command =
+            parse_cli_args(["template", "execute", "warm-agent-basic", "--stdin"]).unwrap();
+        assert_eq!(
+            command,
+            CliCommand::Template(TemplateCommand::Execute {
+                template_id: "warm-agent-basic".to_string(),
+                inputs: None,
+                stdin: true,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_batch_run_alias() {
+        let command =
+            parse_cli_args(["yolo", "run", "examples/batch/background_repo_work.yaml"]).unwrap();
+        assert_eq!(
+            command,
+            CliCommand::Batch(BatchCommand::Run {
+                spec: Some("examples/batch/background_repo_work.yaml".to_string()),
+                stdin: false,
+                alias: "yolo".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_team_run() {
+        let command =
+            parse_cli_args(["team", "run", "examples/team/rust_article_team.yaml"]).unwrap();
+        assert_eq!(
+            command,
+            CliCommand::Team(TeamCommand::Run {
+                spec: Some("examples/team/rust_article_team.yaml".to_string()),
+                stdin: false,
+            })
+        );
+    }
+
+    #[test]
     fn rejects_extra_execution_watch_args() {
         let err = parse_cli_args(["execution", "watch", "exec-1", "extra"]).unwrap_err();
         assert!(err.contains("usage: voidctl execution watch <execution_id>"));
@@ -2091,6 +3211,19 @@ mod tests {
     #[test]
     fn rejects_extra_execution_submit_stdin_args() {
         let err = parse_cli_args(["execution", "submit", "--stdin", "extra"]).unwrap_err();
+        assert!(err.contains("unexpected extra argument"));
+    }
+
+    #[test]
+    fn rejects_extra_template_execute_stdin_args() {
+        let err = parse_cli_args([
+            "template",
+            "execute",
+            "warm-agent-basic",
+            "--stdin",
+            "extra",
+        ])
+        .unwrap_err();
         assert!(err.contains("unexpected extra argument"));
     }
 
@@ -2107,6 +3240,29 @@ mod tests {
     }
 
     #[test]
+    fn completes_template_subcommands() {
+        let completions = template_subcommand_candidates();
+        assert!(completions.contains(&"list"));
+        assert!(completions.contains(&"get"));
+        assert!(completions.contains(&"dry-run"));
+        assert!(completions.contains(&"execute"));
+    }
+
+    #[test]
+    fn completes_batch_subcommands() {
+        let completions = batch_subcommand_candidates();
+        assert!(completions.contains(&"dry-run"));
+        assert!(completions.contains(&"run"));
+    }
+
+    #[test]
+    fn completes_team_subcommands() {
+        let completions = team_subcommand_candidates();
+        assert!(completions.contains(&"dry-run"));
+        assert!(completions.contains(&"run"));
+    }
+
+    #[test]
     fn top_level_help_mentions_execution_commands() {
         let help = top_level_help_text();
         assert!(help.contains("voidctl execution submit <spec-path>"));
@@ -2116,6 +3272,20 @@ mod tests {
         assert!(help.contains("voidctl execution events <execution-id>"));
         assert!(help.contains("voidctl execution result <execution-id>"));
         assert!(help.contains("voidctl execution runtime <execution-id> [candidate-id]"));
+        assert!(help.contains("voidctl template list"));
+        assert!(help.contains("voidctl template get <template-id>"));
+        assert!(
+            help.contains("voidctl template dry-run <template-id> [<inputs-json-path> | --stdin]")
+        );
+        assert!(
+            help.contains("voidctl template execute <template-id> [<inputs-json-path> | --stdin]")
+        );
+        assert!(help.contains("voidctl batch dry-run <spec-path>"));
+        assert!(help.contains("voidctl batch run --stdin"));
+        assert!(help.contains("voidctl yolo dry-run <spec-path>"));
+        assert!(help.contains("voidctl yolo run --stdin"));
+        assert!(help.contains("voidctl team dry-run <spec-path>"));
+        assert!(help.contains("voidctl team run --stdin"));
     }
 
     #[test]

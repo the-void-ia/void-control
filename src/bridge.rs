@@ -15,6 +15,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 #[cfg(feature = "serde")]
+use crate::batch;
+#[cfg(feature = "serde")]
 use crate::contract::{ExecutionPolicy, RunState, StartRequest};
 #[cfg(feature = "serde")]
 use crate::orchestration::{
@@ -26,6 +28,10 @@ use crate::orchestration::{
 };
 #[cfg(feature = "serde")]
 use crate::runtime::{MockRuntime, VoidBoxRuntimeClient};
+#[cfg(feature = "serde")]
+use crate::team;
+#[cfg(feature = "serde")]
+use crate::templates;
 
 #[cfg(feature = "serde")]
 #[derive(Debug, Serialize)]
@@ -204,6 +210,12 @@ struct LaunchResponse {
     attempt_id: u32,
     state: String,
     file: String,
+}
+
+#[cfg(feature = "serde")]
+#[derive(Debug, Deserialize)]
+struct TemplateRequestBody {
+    inputs: Value,
 }
 
 #[cfg(feature = "serde")]
@@ -411,6 +423,54 @@ fn handle_bridge_request(
         return handle_execution_dry_run(body);
     }
 
+    if method == "POST" && (path == "/v1/batch/dry-run" || path == "/v1/yolo/dry-run") {
+        return handle_batch_dry_run(body);
+    }
+
+    if method == "POST" && path == "/v1/teams/dry-run" {
+        return handle_team_dry_run(body);
+    }
+
+    if method == "POST" && path == "/v1/teams/run" {
+        return handle_team_run(body, config);
+    }
+
+    if method == "GET" && path.starts_with("/v1/team-runs/") {
+        return handle_team_get(path, config);
+    }
+
+    if method == "POST" && (path == "/v1/batch/run" || path == "/v1/yolo/run") {
+        return handle_batch_run(body, config);
+    }
+
+    if method == "GET" && path.starts_with("/v1/batch-runs/") {
+        return handle_batch_get(path, config);
+    }
+
+    if method == "GET" && path.starts_with("/v1/yolo-runs/") {
+        return handle_batch_get(path, config);
+    }
+
+    if method == "GET" && path == "/v1/templates" {
+        return handle_template_list();
+    }
+
+    if method == "GET"
+        && path.starts_with("/v1/templates/")
+        && !path.ends_with("/dry-run")
+        && !path.ends_with("/execute")
+    {
+        return handle_template_get(path);
+    }
+
+    if method == "POST" && path.starts_with("/v1/templates/") && path.ends_with("/dry-run") {
+        return handle_template_dry_run(path, body);
+    }
+
+    if method == "POST" && path.starts_with("/v1/templates/") && path.ends_with("/execute") {
+        return handle_template_execute(path, body, config);
+    }
+
     if method == "POST" && path == "/v1/executions" {
         return handle_execution_create(body, config, client.is_some());
     }
@@ -482,6 +542,516 @@ fn handle_execution_dry_run(body: &str) -> JsonHttpResponse {
         }
     };
 
+    respond_with_execution_dry_run(spec, temp_root)
+}
+
+#[cfg(feature = "serde")]
+fn handle_execution_create(
+    body: &str,
+    config: &BridgeConfig,
+    _use_live_runtime: bool,
+) -> JsonHttpResponse {
+    let spec = match parse_submitted_execution_spec(body, &config.spec_dir) {
+        Ok(spec) => spec,
+        Err(err) => {
+            return json_response(
+                400,
+                &ApiError {
+                    code: "INVALID_SPEC",
+                    message: err,
+                    retryable: false,
+                },
+            )
+        }
+    };
+
+    let store = FsExecutionStore::new(config.execution_dir.clone());
+    let execution_id = format!("exec-{}", now_ms());
+    submit_execution_spec(&store, &execution_id, &spec)
+}
+
+#[cfg(feature = "serde")]
+fn handle_batch_dry_run(body: &str) -> JsonHttpResponse {
+    let spec = match parse_submitted_batch_spec(body) {
+        Ok(spec) => spec,
+        Err(response) => return response,
+    };
+    let execution = match batch::compile_batch_spec(&spec) {
+        Ok(execution) => execution,
+        Err(err) => {
+            return json_response(
+                400,
+                &ApiError {
+                    code: "INVALID_BATCH",
+                    message: err.to_string(),
+                    retryable: false,
+                },
+            )
+        }
+    };
+
+    json_response(
+        200,
+        &json!({
+            "kind": "batch",
+            "compiled_primitive": "swarm",
+            "compiled": compiled_execution_summary(&execution)
+        }),
+    )
+}
+
+#[cfg(feature = "serde")]
+fn handle_team_dry_run(body: &str) -> JsonHttpResponse {
+    let spec = match parse_submitted_team_spec(body) {
+        Ok(spec) => spec,
+        Err(response) => return response,
+    };
+    let execution = match team::compile_team_spec(&spec) {
+        Ok(execution) => execution,
+        Err(err) => {
+            return json_response(
+                400,
+                &ApiError {
+                    code: "INVALID_TEAM",
+                    message: err.to_string(),
+                    retryable: false,
+                },
+            )
+        }
+    };
+
+    json_response(
+        200,
+        &json!({
+            "kind": "team",
+            "compiled_primitive": execution.mode,
+            "compiled": compiled_execution_summary(&execution)
+        }),
+    )
+}
+
+#[cfg(feature = "serde")]
+fn handle_team_run(body: &str, config: &BridgeConfig) -> JsonHttpResponse {
+    let spec = match parse_submitted_team_spec(body) {
+        Ok(spec) => spec,
+        Err(response) => return response,
+    };
+    let execution_spec = match team::compile_team_spec(&spec) {
+        Ok(execution) => execution,
+        Err(err) => {
+            return json_response(
+                400,
+                &ApiError {
+                    code: "INVALID_TEAM",
+                    message: err.to_string(),
+                    retryable: false,
+                },
+            )
+        }
+    };
+
+    let store = FsExecutionStore::new(config.execution_dir.clone());
+    let execution_id = format!("exec-{}", now_ms());
+    match ExecutionService::<MockRuntime>::submit_execution(&store, &execution_id, &execution_spec)
+    {
+        Ok(execution) => json_response(
+            200,
+            &json!({
+                "kind": "team",
+                "execution_id": execution.execution_id,
+                "compiled_primitive": execution_spec.mode,
+                "status": execution.status,
+                "goal": execution.goal
+            }),
+        ),
+        Err(err) => json_response(
+            500,
+            &ApiError {
+                code: "INTERNAL_ERROR",
+                message: err.to_string(),
+                retryable: true,
+            },
+        ),
+    }
+}
+
+#[cfg(feature = "serde")]
+fn handle_team_get(path: &str, config: &BridgeConfig) -> JsonHttpResponse {
+    let Some(execution_id) = path.strip_prefix("/v1/team-runs/") else {
+        return json_response(
+            404,
+            &ApiError {
+                code: "NOT_FOUND",
+                message: format!("no route for GET {path}"),
+                retryable: false,
+            },
+        );
+    };
+
+    let execution_path = format!("/v1/executions/{execution_id}");
+    let response = handle_execution_get(&execution_path, config);
+    let Ok(mut value) = serde_json::from_slice::<Value>(&response.body) else {
+        return response;
+    };
+    if response.status == 200 {
+        let Some(object) = value.as_object_mut() else {
+            return response;
+        };
+        object.insert("kind".to_string(), Value::String("team".to_string()));
+        object.insert(
+            "run_id".to_string(),
+            Value::String(execution_id.to_string()),
+        );
+    }
+    json_response(response.status, &value)
+}
+
+#[cfg(feature = "serde")]
+fn handle_batch_run(body: &str, config: &BridgeConfig) -> JsonHttpResponse {
+    let spec = match parse_submitted_batch_spec(body) {
+        Ok(spec) => spec,
+        Err(response) => return response,
+    };
+    let execution_spec = match batch::compile_batch_spec(&spec) {
+        Ok(execution) => execution,
+        Err(err) => {
+            return json_response(
+                400,
+                &ApiError {
+                    code: "INVALID_BATCH",
+                    message: err.to_string(),
+                    retryable: false,
+                },
+            )
+        }
+    };
+
+    let store = FsExecutionStore::new(config.execution_dir.clone());
+    let execution_id = format!("exec-{}", now_ms());
+    match ExecutionService::<MockRuntime>::submit_execution(&store, &execution_id, &execution_spec)
+    {
+        Ok(execution) => json_response(
+            200,
+            &json!({
+                "kind": "batch",
+                "run_id": execution.execution_id,
+                "execution_id": execution.execution_id,
+                "compiled_primitive": "swarm",
+                "status": execution.status,
+                "goal": execution.goal
+            }),
+        ),
+        Err(err) => json_response(
+            500,
+            &ApiError {
+                code: "INTERNAL_ERROR",
+                message: err.to_string(),
+                retryable: true,
+            },
+        ),
+    }
+}
+
+#[cfg(feature = "serde")]
+fn handle_batch_get(path: &str, config: &BridgeConfig) -> JsonHttpResponse {
+    let execution_path = if let Some(execution_id) = path.strip_prefix("/v1/batch-runs/") {
+        format!("/v1/executions/{execution_id}")
+    } else if let Some(execution_id) = path.strip_prefix("/v1/yolo-runs/") {
+        format!("/v1/executions/{execution_id}")
+    } else {
+        String::new()
+    };
+    if execution_path.is_empty() {
+        return json_response(
+            404,
+            &ApiError {
+                code: "NOT_FOUND",
+                message: format!("no route for GET {path}"),
+                retryable: false,
+            },
+        );
+    }
+
+    let response = handle_execution_get(&execution_path, config);
+    let Ok(mut value) = serde_json::from_slice::<Value>(&response.body) else {
+        return response;
+    };
+    if response.status == 200 {
+        let Some(object) = value.as_object_mut() else {
+            return response;
+        };
+        let execution_id = object
+            .get("execution")
+            .and_then(|execution| execution.get("execution_id"))
+            .cloned()
+            .unwrap_or(Value::Null);
+        object.insert("kind".to_string(), Value::String("batch".to_string()));
+        object.insert("run_id".to_string(), execution_id);
+    }
+    json_response(response.status, &value)
+}
+
+#[cfg(feature = "serde")]
+fn parse_submitted_batch_spec(body: &str) -> Result<batch::BatchSpec, JsonHttpResponse> {
+    let trimmed = body.trim_start();
+    let parsed = if trimmed.starts_with('{') || trimmed.starts_with('[') {
+        batch::parse_batch_json(body)
+    } else {
+        batch::parse_batch_yaml(body)
+    };
+    parsed.map_err(|err| {
+        json_response(
+            400,
+            &ApiError {
+                code: "INVALID_BATCH",
+                message: err.to_string(),
+                retryable: false,
+            },
+        )
+    })
+}
+
+#[cfg(feature = "serde")]
+fn parse_submitted_team_spec(body: &str) -> Result<team::TeamSpec, JsonHttpResponse> {
+    let trimmed = body.trim_start();
+    let parsed = if trimmed.starts_with('{') || trimmed.starts_with('[') {
+        team::parse_team_json(body)
+    } else {
+        team::parse_team_yaml(body)
+    };
+    parsed.map_err(|err| {
+        json_response(
+            400,
+            &ApiError {
+                code: "INVALID_TEAM",
+                message: err.to_string(),
+                retryable: false,
+            },
+        )
+    })
+}
+
+#[cfg(feature = "serde")]
+fn handle_template_list() -> JsonHttpResponse {
+    match templates::list_templates() {
+        Ok(list) => json_response(200, &json!({ "templates": list })),
+        Err(err) => json_response(
+            500,
+            &ApiError {
+                code: "INTERNAL_ERROR",
+                message: err.to_string(),
+                retryable: true,
+            },
+        ),
+    }
+}
+
+#[cfg(feature = "serde")]
+fn handle_template_get(path: &str) -> JsonHttpResponse {
+    let Some(template_id) = path.strip_prefix("/v1/templates/") else {
+        return json_response(
+            404,
+            &ApiError {
+                code: "NOT_FOUND",
+                message: format!("no route for GET {path}"),
+                retryable: false,
+            },
+        );
+    };
+
+    match templates::load_template(template_id) {
+        Ok(template) => json_response(
+            200,
+            &json!({
+                "template": template.template,
+                "inputs": template.inputs,
+                "defaults": {
+                    "workflow_template": template.defaults.workflow_template
+                },
+                "compile": {
+                    "bindings": template.compile.bindings
+                }
+            }),
+        ),
+        Err(err) if err.to_string().contains("No such file or directory") => json_response(
+            404,
+            &ApiError {
+                code: "NOT_FOUND",
+                message: format!("template '{}' not found", template_id),
+                retryable: false,
+            },
+        ),
+        Err(err) => json_response(
+            400,
+            &ApiError {
+                code: "INVALID_TEMPLATE",
+                message: err.to_string(),
+                retryable: false,
+            },
+        ),
+    }
+}
+
+#[cfg(feature = "serde")]
+fn handle_template_dry_run(path: &str, body: &str) -> JsonHttpResponse {
+    let Some(template_id) = path
+        .strip_prefix("/v1/templates/")
+        .and_then(|rest| rest.strip_suffix("/dry-run"))
+    else {
+        return json_response(
+            404,
+            &ApiError {
+                code: "NOT_FOUND",
+                message: format!("no route for POST {path}"),
+                retryable: false,
+            },
+        );
+    };
+
+    let compiled = match compile_template_request(template_id, body) {
+        Ok(compiled) => compiled,
+        Err(response) => return response,
+    };
+
+    json_response(
+        200,
+        &json!({
+            "template": {
+                "id": compiled.template.id,
+                "execution_kind": compiled.template.execution_kind
+            },
+            "inputs": compiled.normalized_inputs,
+            "compiled": compiled_execution_summary(&compiled.execution_spec)
+        }),
+    )
+}
+
+#[cfg(feature = "serde")]
+fn handle_template_execute(path: &str, body: &str, config: &BridgeConfig) -> JsonHttpResponse {
+    let Some(template_id) = path
+        .strip_prefix("/v1/templates/")
+        .and_then(|rest| rest.strip_suffix("/execute"))
+    else {
+        return json_response(
+            404,
+            &ApiError {
+                code: "NOT_FOUND",
+                message: format!("no route for POST {path}"),
+                retryable: false,
+            },
+        );
+    };
+
+    let compiled = match compile_template_request(template_id, body) {
+        Ok(compiled) => compiled,
+        Err(response) => return response,
+    };
+
+    let execution_id = format!("exec-{}", now_ms());
+    let store = FsExecutionStore::new(config.execution_dir.clone());
+    match ExecutionService::<MockRuntime>::submit_execution(
+        &store,
+        &execution_id,
+        &compiled.execution_spec,
+    ) {
+        Ok(execution) => json_response(
+            200,
+            &json!({
+                "execution_id": execution.execution_id,
+                "template": {
+                    "id": compiled.template.id,
+                    "execution_kind": compiled.template.execution_kind
+                },
+                "status": execution.status,
+                "goal": execution.goal
+            }),
+        ),
+        Err(err) => json_response(
+            500,
+            &ApiError {
+                code: "INTERNAL_ERROR",
+                message: err.to_string(),
+                retryable: true,
+            },
+        ),
+    }
+}
+
+#[cfg(feature = "serde")]
+fn compile_template_request(
+    template_id: &str,
+    body: &str,
+) -> Result<templates::CompiledTemplate, JsonHttpResponse> {
+    let template = templates::load_template(template_id).map_err(|err| {
+        if err.to_string().contains("No such file or directory") {
+            json_response(
+                404,
+                &ApiError {
+                    code: "NOT_FOUND",
+                    message: format!("template '{}' not found", template_id),
+                    retryable: false,
+                },
+            )
+        } else {
+            json_response(
+                400,
+                &ApiError {
+                    code: "INVALID_TEMPLATE",
+                    message: err.to_string(),
+                    retryable: false,
+                },
+            )
+        }
+    })?;
+    let request: TemplateRequestBody = serde_json::from_str(body).map_err(|err| {
+        json_response(
+            400,
+            &ApiError {
+                code: "INVALID_TEMPLATE_REQUEST",
+                message: format!("invalid template request body: {err}"),
+                retryable: false,
+            },
+        )
+    })?;
+    templates::compile_template(&template, &request.inputs).map_err(|err| {
+        json_response(
+            400,
+            &ApiError {
+                code: "INVALID_TEMPLATE_INPUTS",
+                message: err.to_string(),
+                retryable: false,
+            },
+        )
+    })
+}
+
+#[cfg(feature = "serde")]
+fn compiled_execution_summary(spec: &ExecutionSpec) -> Value {
+    let candidate_overrides: Vec<_> = spec
+        .variation
+        .explicit
+        .iter()
+        .map(|proposal| proposal.overrides.clone())
+        .collect();
+    let overrides = spec
+        .variation
+        .explicit
+        .first()
+        .map(|proposal| proposal.overrides.clone())
+        .unwrap_or_default();
+    json!({
+        "goal": spec.goal,
+        "workflow_template": spec.workflow.template,
+        "mode": spec.mode,
+        "variation_source": spec.variation.source,
+        "candidates_per_iteration": spec.variation.candidates_per_iteration,
+        "candidate_overrides": candidate_overrides,
+        "overrides": overrides
+    })
+}
+
+#[cfg(feature = "serde")]
+fn respond_with_execution_dry_run(spec: ExecutionSpec, temp_root: PathBuf) -> JsonHttpResponse {
     let service = ExecutionService::new(
         GlobalConfig {
             max_concurrent_child_runs: 20,
@@ -507,28 +1077,12 @@ fn handle_execution_dry_run(body: &str) -> JsonHttpResponse {
 }
 
 #[cfg(feature = "serde")]
-fn handle_execution_create(
-    body: &str,
-    config: &BridgeConfig,
-    _use_live_runtime: bool,
+fn submit_execution_spec(
+    store: &FsExecutionStore,
+    execution_id: &str,
+    spec: &ExecutionSpec,
 ) -> JsonHttpResponse {
-    let spec = match parse_submitted_execution_spec(body, &config.spec_dir) {
-        Ok(spec) => spec,
-        Err(err) => {
-            return json_response(
-                400,
-                &ApiError {
-                    code: "INVALID_SPEC",
-                    message: err,
-                    retryable: false,
-                },
-            )
-        }
-    };
-
-    let store = FsExecutionStore::new(config.execution_dir.clone());
-    let execution_id = format!("exec-{}", now_ms());
-    match ExecutionService::<MockRuntime>::submit_execution(&store, &execution_id, &spec) {
+    match ExecutionService::<MockRuntime>::submit_execution(store, execution_id, spec) {
         Ok(execution) => json_response(200, &execution),
         Err(err) => json_response(
             500,

@@ -1,0 +1,93 @@
+api_version: v1
+kind: control_template
+
+template:
+  id: benchmark-runner-python
+  name: Benchmark Runner Python
+  execution_kind: execution
+  description: Compare multiple Python benchmark candidates in one swarm execution.
+
+inputs:
+  goal:
+    type: string
+    required: true
+    description: High-level benchmark goal shown in the execution record.
+  provider:
+    type: enum
+    required: false
+    default: claude
+    values: [claude, codex]
+    description: LLM provider override for every benchmark candidate.
+  snapshot:
+    type: string
+    required: false
+    description: Optional void-box snapshot id restored into every candidate run.
+
+defaults:
+  workflow_template: examples/runtime-templates/transform_optimizer_agent.yaml
+  execution_spec:
+    mode: swarm
+    goal: Compare benchmark candidates
+    workflow:
+      template: ""
+    policy:
+      budget:
+        max_iterations: 1
+        max_child_runs: 3
+        max_wall_clock_secs: 1800
+        max_cost_usd_millis: null
+      concurrency:
+        max_concurrent_candidates: 3
+      convergence:
+        strategy: threshold
+        min_score: 0.82
+        max_iterations_without_improvement: 0
+      max_candidate_failures_per_iteration: 3
+      missing_output_policy: mark_failed
+      iteration_failure_policy: continue
+    evaluation:
+      scoring_type: weighted_metrics
+      weights:
+        latency_p99_ms: -0.50
+        error_rate: -0.35
+        cpu_pct: -0.15
+      pass_threshold: 0.82
+      ranking: highest_score
+      tie_breaking: latency_p99_ms
+    variation:
+      source: explicit
+      candidates_per_iteration: 3
+      selection: null
+      parameter_space: {}
+      explicit:
+        - overrides:
+            sandbox.env.TRANSFORM_STRATEGY: baseline
+            sandbox.env.TRANSFORM_PARALLELISM: "2"
+            sandbox.env.TRANSFORM_ROLE: latency-baseline
+        - overrides:
+            sandbox.env.TRANSFORM_STRATEGY: cache-aware
+            sandbox.env.TRANSFORM_CACHE_MODE: hot-path
+            sandbox.env.TRANSFORM_ROLE: cache-locality
+        - overrides:
+            sandbox.env.TRANSFORM_STRATEGY: high-throughput
+            sandbox.env.TRANSFORM_PARALLELISM: "8"
+            sandbox.env.TRANSFORM_ROLE: max-throughput
+    swarm: true
+    supervision: null
+
+compile:
+  bindings:
+    - input: goal
+      target: execution_spec.goal
+    - input: provider
+      target: variation.explicit[0].overrides.llm.provider
+    - input: provider
+      target: variation.explicit[1].overrides.llm.provider
+    - input: provider
+      target: variation.explicit[2].overrides.llm.provider
+    - input: snapshot
+      target: variation.explicit[0].overrides.snapshot
+    - input: snapshot
+      target: variation.explicit[1].overrides.snapshot
+    - input: snapshot
+      target: variation.explicit[2].overrides.snapshot
